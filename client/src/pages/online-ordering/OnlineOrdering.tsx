@@ -800,6 +800,30 @@ export default function OnlineOrdering() {
           </div>
         </div>
       )}
+
+      {/* Mobile Sticky Bottom Cart Bar */}
+      {cart.length > 0 && !checkoutOpen && (
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-xl border-t border-orange-500/20 p-3.5 shadow-2xl safe-area-pb animate-in slide-in-from-bottom duration-200">
+          <div className="flex items-center justify-between gap-3 max-w-lg mx-auto">
+            <div>
+              <div className="text-[11px] font-semibold text-gray-400">
+                {totalItems} {totalItems === 1 ? 'dish' : 'dishes'} in cart
+              </div>
+              <div className="text-base font-serif font-bold text-orange-400">
+                {money(subtotal, currency)}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setCheckoutOpen(true)}
+              className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-5 py-3 text-xs font-bold text-white shadow-lg shadow-orange-500/30 transition active:scale-95 hover:from-orange-600 hover:to-amber-600"
+            >
+              <span>View Order & Checkout</span>
+              <ArrowRight size={15} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

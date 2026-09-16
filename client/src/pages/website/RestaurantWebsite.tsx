@@ -545,35 +545,31 @@ export default function RestaurantWebsite() {
                 {restaurant?.name || 'Fine Dining & Craft'}
               </div>
 
-              <h1 className="font-serif text-5xl font-bold leading-[1.05] tracking-tight sm:text-7xl lg:text-8xl text-center">
+              <h1 className="font-serif text-4xl font-bold leading-[1.1] tracking-tight sm:text-6xl md:text-7xl lg:text-8xl text-center">
                 An experience worth{' '}
                 <ShinyText text="savouring." className="font-serif italic font-bold" />
               </h1>
 
-              <p className="mt-6 max-w-2xl text-base leading-relaxed text-gray-300 sm:text-lg text-center mx-auto">
+              <p className="mt-5 max-w-2xl text-sm leading-relaxed text-gray-300 sm:text-base md:text-lg text-center mx-auto px-2">
                 {restaurant?.description ||
                   'Thoughtfully prepared artisanal dishes, warm hospitality, and an unforgettable table experience — crafted fresh with passionate precision.'}
               </p>
 
-              {/* Action Buttons with React Bits Magnet */}
-              <div className="mt-9 flex flex-wrap items-center justify-center gap-4">
-                <Magnet padding={30} magnetStrength={0.25}>
-                  <Link
-                    to="/order-online"
-                    className="inline-flex items-center rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 px-7 py-4 text-sm font-bold text-white shadow-xl shadow-orange-500/30 transition hover:from-orange-600 hover:to-amber-600"
-                  >
-                    Order Online <ArrowRight size={18} className="ml-2" />
-                  </Link>
-                </Magnet>
+              {/* Action Buttons */}
+              <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3.5 w-full sm:w-auto px-4">
+                <Link
+                  to="/order-online"
+                  className="w-full sm:w-auto inline-flex items-center justify-center rounded-2xl bg-gradient-to-r from-orange-500 to-amber-500 px-7 py-3.5 text-sm font-bold text-white shadow-xl shadow-orange-500/30 transition hover:from-orange-600 hover:to-amber-600 active:scale-95"
+                >
+                  Order Online <ArrowRight size={18} className="ml-2" />
+                </Link>
 
-                <Magnet padding={30} magnetStrength={0.25}>
-                  <button
-                    onClick={() => setReservationOpen(true)}
-                    className="inline-flex items-center rounded-2xl border border-white/20 bg-white/10 px-7 py-4 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/20 hover:border-orange-400"
-                  >
-                    <Calendar size={18} className="mr-2 text-orange-400" /> Book a Table
-                  </button>
-                </Magnet>
+                <button
+                  onClick={() => setReservationOpen(true)}
+                  className="w-full sm:w-auto inline-flex items-center justify-center rounded-2xl border border-white/20 bg-white/10 px-7 py-3.5 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/20 hover:border-orange-400 active:scale-95"
+                >
+                  <Calendar size={18} className="mr-2 text-orange-400" /> Book a Table
+                </button>
 
                 <a
                   href="#menu"
@@ -1385,7 +1381,7 @@ export default function RestaurantWebsite() {
         restaurantId={restaurant?.id || ''}
       />
 
-      {/* ======================= REACT BITS FLOATING DOCK ======================= */}
+      {/* ======================= REACT BITS FLOATING DOCK (Desktop) ======================= */}
       <Dock
         className="hidden md:flex"
         items={[
@@ -1441,6 +1437,57 @@ export default function RestaurantWebsite() {
           },
         ]}
       />
+
+      {/* ======================= MOBILE BOTTOM QUICK ACTION BAR ======================= */}
+      <nav aria-label="Mobile Navigation" className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-xl border-t border-orange-500/20 px-2 py-2 flex items-center justify-around text-center shadow-2xl safe-area-pb">
+        <button
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          className="flex flex-col items-center gap-1 p-1.5 text-gray-400 hover:text-orange-400 active:text-orange-500 transition"
+        >
+          <HomeIcon size={18} />
+          <span className="text-[10px] font-semibold">Home</span>
+        </button>
+
+        <button
+          onClick={() => document.getElementById('menu')?.scrollIntoView({ behavior: 'smooth' })}
+          className="flex flex-col items-center gap-1 p-1.5 text-gray-400 hover:text-orange-400 active:text-orange-500 transition"
+        >
+          <Utensils size={18} />
+          <span className="text-[10px] font-semibold">Menu</span>
+        </button>
+
+        <button
+          onClick={() => setReservationOpen(true)}
+          className="flex flex-col items-center gap-1 p-1.5 text-orange-400 font-bold active:scale-95 transition"
+        >
+          <div className="h-9 w-9 -mt-4 rounded-full bg-gradient-to-tr from-orange-500 to-amber-500 flex items-center justify-center text-white shadow-lg shadow-orange-500/40">
+            <Calendar size={18} />
+          </div>
+          <span className="text-[10px] text-orange-400">Book Table</span>
+        </button>
+
+        <button
+          onClick={() => navigate('/order-online')}
+          className="flex flex-col items-center gap-1 p-1.5 text-gray-400 hover:text-orange-400 active:text-orange-500 transition"
+        >
+          <ShoppingBag size={18} />
+          <span className="text-[10px] font-semibold">Order</span>
+        </button>
+
+        <button
+          onClick={() => {
+            if (isStaffAuth) navigate('/dashboard');
+            else if (isCustomerAuth) navigate('/account');
+            else setCustomerAuthOpen(true);
+          }}
+          className="flex flex-col items-center gap-1 p-1.5 text-gray-400 hover:text-orange-400 active:text-orange-500 transition"
+        >
+          <User size={18} />
+          <span className="text-[10px] font-semibold">
+            {isStaffAuth ? 'Portal' : isCustomerAuth ? 'Profile' : 'Sign In'}
+          </span>
+        </button>
+      </nav>
     </div>
   );
 }
