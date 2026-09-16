@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import {
   Moon,
@@ -21,7 +21,9 @@ import {
   Smartphone,
   Home,
   User,
-  Calendar
+  Calendar,
+  RefreshCw,
+  MapPin,
 } from 'lucide-react';
 import { publicOrderingApi } from '../../services/api';
 import ReservationModal from '../website/components/ReservationModal';
@@ -33,9 +35,10 @@ import {
   SpotlightCard,
   ShinyText,
   Magnet,
-  CountUp
+  CountUp,
 } from '../../components/react-bits';
 
+type Branch = { id: string; name: string; code: string; address?: string; city?: string; phone?: string };
 type Restaurant = {
   id: string;
   name: string;
@@ -46,7 +49,6 @@ type Restaurant = {
   currency?: string;
   branches: Branch[];
 };
-type Branch = { id: string; name: string; code: string; address?: string; city?: string; phone?: string };
 type Category = { id: string; name: string };
 type MenuItem = {
   id: string;
@@ -61,6 +63,22 @@ type CartLine = MenuItem & { quantity: number };
 
 const money = (value: number, currency = 'KES') =>
   new Intl.NumberFormat('en-KE', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
+
+const SUPABASE_PUBLIC_BASE = 'https://czqznpcgyhcntlpsecla.supabase.co/storage/v1/object/public/menu-images';
+const supabaseImage = (filename: string) => `${SUPABASE_PUBLIC_BASE}/${encodeURIComponent(filename)}`;
+const SUPABASE_MENU_FILENAMES: Record<string, string> = {
+  'Samosa': 'Samosa.jpg',
+  'Chicken Wings': 'Chicken Wings.jpg',
+  'Grilled Chicken': 'Grilled Chicken.jpg',
+  'Beef Steak': 'Beef Steak.jpg',
+  'Chicken Burger': 'Chicken Burger.jpg',
+  'Beef Burger': 'Beef Burger.jpg',
+  'Coke': 'Coke.jpg',
+  'Fresh Passion Juice': 'Passion Juice.jpg',
+  'Chocolate Cake': 'Chocolate Cake.jpg',
+};
+const menuImage = (item?: Pick<MenuItem, 'name' | 'image'> | null) =>
+  item?.image || (item?.name && SUPABASE_MENU_FILENAMES[item.name] ? supabaseImage(SUPABASE_MENU_FILENAMES[item.name]) : '');
 
 export default function OnlineOrdering() {
   const navigate = useNavigate();
@@ -116,21 +134,31 @@ export default function OnlineOrdering() {
     localStorage.setItem('rms-theme', darkMode ? 'dark' : 'light');
   }, [darkMode]);
 
-  useEffect(() => {
-    publicOrderingApi
-      .getRestaurants()
-      .then((res) => {
-        const data = res.data.data?.restaurants || [];
-        setRestaurants(data);
-        const first = data[0];
-        if (first) {
-          setRestaurantId(first.id);
-          setBranchId(first.branches?.[0]?.id || '');
-        } else setError('Online ordering is not available yet.');
-      })
-      .catch((err) => setError(err.response?.data?.message || 'Unable to load restaurants.'))
-      .finally(() => setLoading(false));
+  const loadRestaurants = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await publicOrderingApi.getRestaurants();
+      const data = res.data.data?.restaurants || [];
+      setRestaurants(data);
+      const first = data[0];
+      if (first) {
+        setRestaurantId(first.id);
+        setBranchId(first.branches?.[0]?.id || '');
+      } else {
+        setError('Online ordering is not available yet.');
+      }
+    } catch (err: any) {
+      console.warn('Online ordering restaurant load error:', err);
+      setError(err.response?.data?.message || 'Unable to load restaurants. Please check your connection.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadRestaurants();
+  }, [loadRestaurants]);
 
   useEffect(() => {
     const selected = restaurants.find((r) => r.id === restaurantId) || null;
@@ -138,31 +166,41 @@ export default function OnlineOrdering() {
     if (selected && !selected.branches.some((b) => b.id === branchId)) {
       setBranchId(selected.branches[0]?.id || '');
     }
-  }, [restaurantId, restaurants]);
+  }, [restaurantId, restaurants, branchId]);
 
-  useEffect(() => {
-    setBranch(restaurant?.branches.find((b) => b.id === branchId) || null);
+  const loadMenu = useCallback(async () => {
     if (!restaurantId || !branchId) return;
     setMenuLoading(true);
     setError('');
-    publicOrderingApi
-      .getMenu({ restaurantId, branchId })
-      .then((res) => {
-        setCategories(res.data.data?.categories || []);
-        setItems(res.data.data?.items || []);
-        if (res.data.data?.restaurant) {
-          setRestaurant((current) => (current ? { ...current, ...res.data.data.restaurant } : current));
-        }
-      })
-      .catch((err) => setError(err.response?.data?.message || 'Unable to load this menu.'))
-      .finally(() => setMenuLoading(false));
+    try {
+      const res = await publicOrderingApi.getMenu({ restaurantId, branchId });
+      setCategories(res.data.data?.categories || []);
+      setItems(res.data.data?.items || []);
+      if (res.data.data?.restaurant) {
+        setRestaurant((current) => (current ? { ...current, ...res.data.data.restaurant } : current));
+      }
+    } catch (err: any) {
+      console.warn('Online ordering menu load error:', err);
+      setError(err.response?.data?.message || 'Unable to load the selected branch menu.');
+    } finally {
+      setMenuLoading(false);
+    }
   }, [restaurantId, branchId]);
+
+  useEffect(() => {
+    setBranch(restaurant?.branches.find((b) => b.id === branchId) || null);
+    loadMenu();
+  }, [restaurant, branchId, loadMenu]);
 
   useEffect(() => {
     if (!pendingItemId || !items.length) return;
     const item = items.find((candidate) => candidate.id === pendingItemId);
-    if (item) { addItem(item); setPendingItemId(null); navigate('/order-online', { replace: true }); }
-  }, [items, pendingItemId]);
+    if (item) {
+      addItem(item);
+      setPendingItemId(null);
+      navigate('/order-online', { replace: true });
+    }
+  }, [items, pendingItemId, navigate]);
 
   const filteredItems = useMemo(
     () =>
@@ -209,7 +247,7 @@ export default function OnlineOrdering() {
       setCheckoutOpen(false);
       navigate(`/online-order/${data.trackingToken}`);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Unable to place your order.');
+      setError(err.response?.data?.message || 'Unable to place your order. Please try again.');
     } finally {
       setSubmitting(false);
     }
