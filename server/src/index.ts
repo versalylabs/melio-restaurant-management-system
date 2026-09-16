@@ -54,7 +54,7 @@ app.use((req, res, next) => {
 app.use(sanitizeInputs);
 
 // 5. Enhanced Health Check Endpoint
-app.get('/health', async (_req, res) => {
+app.get(['/health', '/api/health'], async (_req, res) => {
   const start = Date.now();
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -79,6 +79,7 @@ app.get('/health', async (_req, res) => {
 });
 
 app.use('/api', routes);
+app.use('/', routes);
 
 // In production the API can serve the built React website too, allowing the
 // complete restaurant platform to be deployed as a single Node service.
