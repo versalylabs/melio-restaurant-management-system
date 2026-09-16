@@ -1,0 +1,12 @@
+import { Router } from 'express';
+import { getRolesController, createRoleController, updateRoleController, deleteRoleController, getPermissionCatalogController } from '../controllers/roleController';
+import { authenticate, authorize } from '../middleware/auth';
+import { safeRouter } from '../utils/safeRouter';
+const router = safeRouter();
+router.use(authenticate);
+router.get('/permissions', authorize('OWNER', 'ADMIN'), getPermissionCatalogController);
+router.get('/', authorize('OWNER', 'ADMIN'), getRolesController);
+router.post('/', authorize('OWNER', 'ADMIN'), createRoleController);
+router.put('/:id', authorize('OWNER', 'ADMIN'), updateRoleController);
+router.delete('/:id', authorize('OWNER', 'ADMIN'), deleteRoleController);
+export default router;

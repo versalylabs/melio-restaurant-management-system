@@ -1,0 +1,10 @@
+import { Router } from 'express';
+import { authenticate, authorize, AuthRequest } from '../middleware/auth';
+import { getWebsiteAdmin, updateWebsiteSettings, createGalleryItem, updateGalleryItem, deleteGalleryItem, createTestimonial, updateTestimonial, deleteTestimonial, updateBranchWebsiteDetails, getPublicWebsite } from '../services/websiteService';
+import { Request, Response } from 'express';
+import { safeRouter } from '../utils/safeRouter';
+export const adminWebsiteRouter=safeRouter();
+adminWebsiteRouter.use(authenticate);
+adminWebsiteRouter.use((req:AuthRequest,res:Response,next)=>authorize('OWNER','ADMIN','MANAGER')(req,res,next));
+adminWebsiteRouter.get('/',getWebsiteAdmin);adminWebsiteRouter.put('/settings',updateWebsiteSettings);adminWebsiteRouter.post('/gallery',createGalleryItem);adminWebsiteRouter.put('/gallery/:id',updateGalleryItem);adminWebsiteRouter.delete('/gallery/:id',deleteGalleryItem);adminWebsiteRouter.post('/testimonials',createTestimonial);adminWebsiteRouter.put('/testimonials/:id',updateTestimonial);adminWebsiteRouter.delete('/testimonials/:id',deleteTestimonial);adminWebsiteRouter.put('/branches/:id',updateBranchWebsiteDetails);
+export const publicWebsiteController=(req:Request,res:Response)=>getPublicWebsite(req,res);

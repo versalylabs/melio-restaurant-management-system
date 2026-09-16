@@ -1,0 +1,13 @@
+import { Router } from 'express';
+import { authenticate, authorize } from '../middleware/auth';
+import { getReservationsController, getReservationController, createReservationController, updateReservationController, updateReservationStatusController, deleteReservationController } from '../controllers/reservationController';
+import { safeRouter } from '../utils/safeRouter';
+const router = safeRouter();
+router.use(authenticate);
+router.get('/', getReservationsController);
+router.get('/:id', getReservationController);
+router.post('/', authorize('OWNER','ADMIN','MANAGER','CASHIER','WAITER'), createReservationController);
+router.put('/:id', authorize('OWNER','ADMIN','MANAGER','CASHIER','WAITER'), updateReservationController);
+router.patch('/:id/status', authorize('OWNER','ADMIN','MANAGER','CASHIER','WAITER'), updateReservationStatusController);
+router.delete('/:id', authorize('OWNER','ADMIN','MANAGER'), deleteReservationController);
+export default router;

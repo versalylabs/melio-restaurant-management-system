@@ -1,0 +1,94 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  html, body, #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+  }
+}
+
+
+@layer base {
+  body {
+    @apply bg-[#faf9f7] text-slate-800 antialiased;
+  }
+
+  .dark body {
+    @apply bg-[#0d0d11] text-gray-100;
+  }
+
+  button, input, select, textarea {
+    font: inherit;
+  }
+}
+
+@layer base {
+  /* Shared controls: one visual language across forms and operational screens with zero specificity conflict */
+  :where(select), select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23f97316' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.75' d='M6 8l4 4 4-4'/%3e%3c/svg%3e") !important;
+    background-position: right 0.75rem center !important;
+    background-repeat: no-repeat !important;
+    background-size: 1.15em 1.15em !important;
+    padding-right: 2.75rem !important;
+    @apply rounded-xl border border-orange-100 bg-white px-3.5 py-2 text-sm text-slate-700 shadow-sm outline-none transition hover:border-orange-200 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 dark:border-gray-700 dark:bg-[#111116] dark:text-gray-100 dark:focus:border-orange-500 dark:focus:ring-orange-500/15;
+  }
+  :where(input:not([type='checkbox']):not([type='radio']), textarea) {
+    @apply rounded-xl border border-orange-100 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100 dark:border-gray-700 dark:bg-[#111116] dark:focus:border-orange-500 dark:focus:ring-orange-500/15;
+  }
+  :where(input[type='checkbox']) { @apply h-4 w-4 rounded border-orange-200 text-orange-500 focus:ring-orange-300; }
+}
+
+@layer components {
+  /* Shared warm restaurant-system surface language. */
+  .rms-page {
+    @apply min-h-full bg-[#faf9f7] px-5 py-5 md:px-7 md:py-6 dark:bg-[#0d0d11];
+  }
+
+  .rms-surface {
+    @apply rounded-2xl border border-orange-100/80 bg-white shadow-sm dark:border-gray-800 dark:bg-[#111116];
+  }
+
+  .rms-section-title {
+    @apply text-sm font-semibold text-gray-900 dark:text-white;
+  }
+
+  .rms-btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition; }
+  .rms-btn-secondary { @apply border border-orange-200 bg-white text-slate-700 shadow-sm hover:bg-orange-50 dark:border-gray-700 dark:bg-[#111116] dark:text-gray-100 dark:hover:bg-[#1a1a20]; }
+  .rms-control { @apply rounded-xl border border-orange-100 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm outline-none transition hover:border-orange-200 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 dark:border-gray-700 dark:bg-[#111116] dark:text-gray-100 dark:focus:border-orange-500 dark:focus:ring-orange-500/15; }
+  .rms-icon-btn { @apply inline-flex items-center justify-center rounded-xl border border-orange-100 bg-white p-2 text-slate-600 shadow-sm transition hover:bg-orange-50 hover:text-orange-600 dark:border-gray-700 dark:bg-[#111116] dark:text-gray-300 dark:hover:bg-[#1a1a20]; }
+}
+
+
+/* Melio dark-mode form controls: keep native dropdowns readable and consistent. */
+@layer base {
+  .dark select, .dark select option { background-color: #111116; color: #f3f4f6; }
+  .dark select option:checked { background-color: #2a211d; color: #ffffff; }
+  .dark select option:hover { background-color: #241c18; color: #ffffff; }
+  .dark input, .dark textarea { background-color: #111116; color: #f3f4f6; }
+}
+
+/* Native dropdowns inherit the same warm/charcoal control language on Windows and Edge. */
+select { color-scheme: light; }
+.dark select { color-scheme: dark; }
+.dark select option { background: #111116; color: #f3f4f6; }
+select option { background: #ffffff; color: #1f2937; }

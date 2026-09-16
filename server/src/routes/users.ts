@@ -1,0 +1,13 @@
+import { Router } from 'express';
+import { getUsersController, createUserController, updateUserController, deleteUserController, changeOwnPasswordController, resetUserPasswordController } from '../controllers/userController';
+import { authenticate, authorize } from '../middleware/auth';
+import { safeRouter } from '../utils/safeRouter';
+const router = safeRouter();
+router.use(authenticate);
+router.get('/', authorize('OWNER', 'ADMIN', 'MANAGER'), getUsersController);
+router.post('/', authorize('OWNER', 'ADMIN'), createUserController);
+router.put('/:id', authorize('OWNER', 'ADMIN'), updateUserController);
+router.delete('/:id', authorize('OWNER', 'ADMIN'), deleteUserController);
+router.post('/me/change-password', changeOwnPasswordController);
+router.post('/:id/reset-password', authorize('OWNER', 'ADMIN'), resetUserPasswordController);
+export default router;

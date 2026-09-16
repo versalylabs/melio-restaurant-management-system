@@ -1,0 +1,11 @@
+import { Router } from 'express';
+import { authenticate, authorize } from '../middleware/auth';
+import { getExpenses, createExpense, updateExpense, deleteExpense, setExpenseStatus } from '../services/expenseService';
+import { safeRouter } from '../utils/safeRouter';
+const router=safeRouter(); router.use(authenticate);
+router.get('/', authorize('OWNER','ADMIN','MANAGER'), getExpenses);
+router.post('/', authorize('OWNER','ADMIN','MANAGER'), createExpense);
+router.put('/:id', authorize('OWNER','ADMIN','MANAGER'), updateExpense);
+router.delete('/:id', authorize('OWNER','ADMIN','MANAGER'), deleteExpense);
+router.patch('/:id/status', authorize('OWNER','ADMIN','MANAGER'), setExpenseStatus);
+export default router;

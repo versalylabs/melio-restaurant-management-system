@@ -1,0 +1,2 @@
+import { getPromotions,getActivePromotions,createPromotion,updatePromotion,deletePromotion } from '../services/promotionService';
+export const getPromotionsController=getPromotions; export const getActivePromotionsController=getActivePromotions; export const createPromotionController=createPromotion; export const updatePromotionController=updatePromotion; export const deletePromotionController=deletePromotion;

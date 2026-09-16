@@ -1,0 +1,39 @@
+{
+  "name": "melio-restaurant-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-ready Restaurant Management System",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "start": "cd server && npm start",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "cd server && npm run build",
+    "build:client": "cd client && npm run build",
+    "db:generate": "cd server && npx prisma generate",
+    "db:migrate": "cd server && npx prisma migrate dev",
+    "db:push": "cd server && npx prisma db push",
+    "db:seed": "cd server && npx prisma db seed",
+    "db:studio": "cd server && npx prisma studio",
+    "db:reset": "cd server && npx prisma migrate reset --force",
+    "db:use:postgres": "node server/scripts/db-switch.js postgres",
+    "db:use:sqlite": "node server/scripts/db-switch.js sqlite",
+    "setup": "npm install && npm run db:generate && npm run db:migrate && npm run db:seed",
+    "test": "cd server && npm test",
+    "lint": "npm run lint:server && npm run lint:client",
+    "lint:server": "cd server && npm run lint",
+    "lint:client": "cd client && npm run lint",
+    "db:local-reset": "node server/scripts/reset-local-db.js && cd server && npx prisma generate && npx prisma db push --force-reset && npx prisma db seed"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0"
+  }
+}

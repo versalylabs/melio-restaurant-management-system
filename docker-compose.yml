@@ -1,0 +1,101 @@
+services:
+  # ----------------------------------------------------
+  # 1. PostgreSQL Database Service
+  # ----------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: rms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rms_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rms_secure_pass_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-restaurant_management_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rms_admin} -d ${POSTGRES_DB:-restaurant_management_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rms-network
+
+  # ----------------------------------------------------
+  # 2. Redis Caching & PubSub Service
+  # ----------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: rms-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - rms-network
+
+  # ----------------------------------------------------
+  # 3. Backend API Service
+  # ----------------------------------------------------
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: rms-backend-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-rms_admin}:${POSTGRES_PASSWORD:-rms_secure_pass_2026}@postgres:5432/${POSTGRES_DB:-restaurant_management_db}?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-please-change-this-jwt-secret-in-production-min-32-chars}
+      JWT_EXPIRES_IN: 7d
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://localhost:80,http://localhost:5173}
+      MPESA_ENVIRONMENT: ${MPESA_ENVIRONMENT:-sandbox}
+      MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}
+      MPESA_CONSUMER_SECRET: ${MPESA_CONSUMER_SECRET:-}
+      MPESA_PASSKEY: ${MPESA_PASSKEY:-}
+      MPESA_SHORTCODE: ${MPESA_SHORTCODE:-174379}
+    ports:
+      - "5000:5000"
+    networks:
+      - rms-network
+
+  # ----------------------------------------------------
+  # 4. Frontend Client Service (Nginx)
+  # ----------------------------------------------------
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: rms-frontend-client
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "80:80"
+    networks:
+      - rms-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  rms-network:
+    driver: bridge
