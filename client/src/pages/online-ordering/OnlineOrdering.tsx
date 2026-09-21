@@ -168,12 +168,18 @@ export default function OnlineOrdering() {
     }
   }, [restaurantId, restaurants, branchId]);
 
-  const loadMenu = useCallback(async () => {
-    if (!restaurantId || !branchId) return;
+  useEffect(() => {
+    setBranch(restaurant?.branches.find((b) => b.id === branchId) || null);
+  }, [restaurant, branchId]);
+
+  const loadMenu = useCallback(async (rId?: string, bId?: string) => {
+    const targetRestaurantId = rId || restaurantId;
+    const targetBranchId = bId || branchId;
+    if (!targetRestaurantId || !targetBranchId) return;
     setMenuLoading(true);
     setError('');
     try {
-      const res = await publicOrderingApi.getMenu({ restaurantId, branchId });
+      const res = await publicOrderingApi.getMenu({ restaurantId: targetRestaurantId, branchId: targetBranchId });
       setCategories(res.data.data?.categories || []);
       setItems(res.data.data?.items || []);
       if (res.data.data?.restaurant) {
@@ -188,9 +194,10 @@ export default function OnlineOrdering() {
   }, [restaurantId, branchId]);
 
   useEffect(() => {
-    setBranch(restaurant?.branches.find((b) => b.id === branchId) || null);
-    loadMenu();
-  }, [restaurant, branchId, loadMenu]);
+    if (restaurantId && branchId) {
+      loadMenu(restaurantId, branchId);
+    }
+  }, [restaurantId, branchId, loadMenu]);
 
   useEffect(() => {
     if (!pendingItemId || !items.length) return;
