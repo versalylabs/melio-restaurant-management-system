@@ -73,16 +73,21 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
   };
 
   return (
-    <div className="flex h-screen bg-[#faf9f7] dark:bg-[#0d0d11] text-gray-900 dark:text-gray-100 overflow-hidden">
+    <div className="relative flex h-screen bg-[#faf9f7] dark:bg-[#0b0b0f] text-gray-900 dark:text-gray-100 overflow-hidden">
+      {/* Liquid Glass Background Ambient Glows */}
+      <div className="pointer-events-none fixed -top-40 -right-40 h-96 w-96 rounded-full bg-orange-500/10 dark:bg-orange-500/5 blur-[140px] z-0" />
+      <div className="pointer-events-none fixed top-1/2 -left-40 h-96 w-96 rounded-full bg-amber-500/10 dark:bg-amber-500/5 blur-[140px] z-0" />
+      <div className="pointer-events-none fixed -bottom-40 right-1/4 h-96 w-96 rounded-full bg-orange-600/10 dark:bg-rose-500/5 blur-[140px] z-0" />
+
       {/* Desktop Stationary Sidebar */}
-      <aside className="hidden lg:block w-60 bg-white/95 dark:bg-[#111116] border-r border-orange-100 dark:border-white/10 flex-shrink-0 overflow-hidden">
+      <aside className="relative z-10 hidden lg:block w-64 bg-white/80 dark:bg-[#0e0e13]/85 backdrop-blur-2xl border-r border-orange-500/10 dark:border-white/10 flex-shrink-0 overflow-hidden shadow-sm">
         <Sidebar />
       </aside>
 
       {/* Mobile Drawer Sidebar */}
       {mobileSidebarOpen && (
-        <div className="fixed inset-0 z-50 flex lg:hidden bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="relative w-64 max-w-[80vw] h-full bg-white dark:bg-[#111116] border-r border-orange-100 dark:border-white/10 shadow-2xl flex flex-col">
+        <div className="fixed inset-0 z-50 flex lg:hidden bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="relative w-64 max-w-[80vw] h-full bg-white/95 dark:bg-[#111116]/95 backdrop-blur-2xl border-r border-orange-500/10 dark:border-white/10 shadow-2xl flex flex-col">
             <button
               onClick={() => setMobileSidebarOpen(false)}
               className="absolute top-4 right-4 p-1.5 rounded-lg text-gray-400 hover:text-white bg-white/5"
@@ -97,8 +102,11 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
         </div>
       )}
 
-      <main className="flex-1 flex flex-col overflow-hidden">
-        <header className="min-h-[4.25rem] bg-white/95 dark:bg-[#111116] border-b border-orange-100 dark:border-white/10 flex items-center justify-between px-3.5 sm:px-5 flex-shrink-0 py-3 gap-2">
+      <main className="relative z-10 flex-1 flex flex-col overflow-hidden">
+        <header className="min-h-[4.25rem] bg-white/75 dark:bg-[#0e0e13]/80 backdrop-blur-xl border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between px-3.5 sm:px-5 flex-shrink-0 py-3 gap-2">
+          {/* Top edge sheen reflection */}
+          <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-orange-400/30 dark:via-white/15 to-transparent pointer-events-none" />
+
           <div className="flex items-center gap-2 sm:gap-3">
             <button
               onClick={() => setMobileSidebarOpen(true)}

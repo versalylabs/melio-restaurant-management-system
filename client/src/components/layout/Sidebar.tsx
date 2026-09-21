@@ -80,11 +80,11 @@ export default function Sidebar() {
       const isOpen = openGroups[item.title] ?? (item.children?.some((child) => location.pathname === child.href) || false);
       return (
         <div key={item.title} className="mb-1">
-          <button type="button" onClick={() => setOpenGroups((current) => ({ ...current, [item.title]: !isOpen }))} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-400 transition hover:bg-orange-50 dark:text-gray-500 dark:hover:bg-zinc-900">
-            <Icon className="w-4 h-4" />
+          <button type="button" onClick={() => setOpenGroups((current) => ({ ...current, [item.title]: !isOpen }))} className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-400 transition hover:bg-orange-500/10 hover:text-orange-600 dark:hover:bg-white/5 dark:hover:text-gray-200">
+            <Icon className="w-4 h-4 text-orange-500/80" />
             <span className="flex-1 text-left">{item.title}</span><ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
           </button>
-          {isOpen && <div className="ml-3 space-y-0.5">
+          {isOpen && <div className="ml-2 pl-2 border-l border-orange-500/15 dark:border-white/10 space-y-1 my-1">
             {item.children.map((child) => (
               <NavLink
                 key={child.href}
@@ -93,18 +93,18 @@ export default function Sidebar() {
                   if (child.disabled) event.preventDefault();
                 }}
                 className={({ isActive }) =>
-                  `flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
+                  `flex items-center justify-between px-3 py-2 text-xs sm:text-sm rounded-xl transition-all duration-200 ${
                     isActive
-                      ? 'bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 font-medium'
+                      ? 'bg-gradient-to-r from-orange-500/15 to-amber-500/10 text-orange-600 dark:text-orange-400 font-semibold shadow-sm border border-orange-500/20 dark:border-orange-500/30'
                       : child.disabled
                       ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
-                      : 'text-gray-600 dark:text-gray-400 hover:bg-orange-50 dark:hover:bg-zinc-900 hover:text-gray-900 dark:hover:text-gray-200'
+                      : 'text-gray-600 dark:text-gray-400 hover:bg-orange-500/10 dark:hover:bg-white/5 hover:text-orange-600 dark:hover:text-gray-200'
                   }`
                 }
               >
                 {child.title}
                 {child.disabled && (
-                  <span className="text-xs text-gray-300 dark:text-gray-600">Soon</span>
+                  <span className="text-[10px] text-gray-400 dark:text-gray-600 uppercase tracking-widest font-bold">Soon</span>
                 )}
               </NavLink>
             ))}
@@ -118,24 +118,24 @@ export default function Sidebar() {
         key={item.href}
         to={item.href!}
         className={({ isActive }) =>
-          `flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+          `flex items-center gap-3 px-3 py-2.5 text-xs sm:text-sm font-medium rounded-xl transition-all duration-200 ${
             isActive
-              ? 'bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400'
-              : 'text-gray-600 dark:text-gray-400 hover:bg-orange-50 dark:hover:bg-zinc-900 hover:text-gray-900 dark:hover:text-gray-200'
+              ? 'bg-gradient-to-r from-orange-500/15 to-amber-500/10 text-orange-600 dark:text-orange-400 font-semibold shadow-sm border border-orange-500/20 dark:border-orange-500/30'
+              : 'text-gray-600 dark:text-gray-400 hover:bg-orange-500/10 dark:hover:bg-white/5 hover:text-orange-600 dark:hover:text-gray-200'
           }`
         }
       >
-        <Icon className="w-5 h-5" />
+        <Icon className="w-4 h-4 text-orange-500" />
         {item.title}
       </NavLink>
     );
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-white/40 dark:bg-black/20 backdrop-blur-xl">
       {/* Logo / Brand */}
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-orange-100 dark:border-white/10">
-        <div className="w-8 h-8 bg-orange-600 rounded-lg flex items-center justify-center flex-shrink-0">
+      <div className="relative flex items-center gap-3 px-5 py-4 border-b border-orange-500/10 dark:border-white/10">
+        <div className="w-8 h-8 bg-gradient-to-tr from-orange-600 to-amber-500 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm shadow-orange-500/20">
           <UtensilsCrossed className="w-4 h-4 text-white" />
         </div>
         <div className="min-w-0">
@@ -144,28 +144,28 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
+      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
         {visibleNavigation.map((item) => renderNavItem(item))}
       </nav>
 
       {/* User footer */}
-      <div className="border-t border-orange-100 dark:border-gray-800 p-4">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-8 h-8 bg-orange-100 dark:bg-orange-900/50 rounded-full flex items-center justify-center flex-shrink-0">
-            <span className="text-xs font-semibold text-orange-600 dark:text-orange-400">
+      <div className="border-t border-orange-500/10 dark:border-white/10 p-3.5 m-2 rounded-2xl bg-white/60 dark:bg-white/[0.03] border backdrop-blur-md shadow-sm">
+        <div className="flex items-center gap-3 mb-2.5">
+          <div className="w-8 h-8 bg-gradient-to-br from-orange-500/20 to-amber-500/20 border border-orange-500/30 rounded-xl flex items-center justify-center flex-shrink-0">
+            <span className="text-xs font-bold text-orange-600 dark:text-orange-400">
               {user?.firstName?.[0]}{user?.lastName?.[0]}
             </span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+            <p className="text-xs font-semibold text-gray-900 dark:text-gray-100 truncate">
               {user?.firstName} {user?.lastName}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{user?.roleName}</p>
+            <p className="text-[10px] uppercase font-bold tracking-wider text-orange-500 truncate">{user?.roleName}</p>
           </div>
         </div>
         <button
           onClick={logout}
-          className="w-full text-left px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors"
+          className="w-full text-center px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-500/10 rounded-xl transition-colors"
         >
           Sign out
         </button>

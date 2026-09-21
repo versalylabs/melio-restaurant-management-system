@@ -3,6 +3,7 @@ import { ArrowUpRight, CalendarDays, ChefHat, ClipboardList, CreditCard, LayoutG
 import { dashboardApi } from '../../services/api';
 import type { DashboardMetrics } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
+import { LiquidGlass } from '../../components/react-bits';
 
 const money = (value: number) => `KSh ${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -139,69 +140,71 @@ export default function Dashboard() {
   const maxOrderType = Math.max(...orderTypes.map((x) => x.count), 1);
 
   const cards = [
-    { label: 'Total Sales', value: money(data?.todaySales || 0), detail: 'Completed today', icon: CircleDollarSign, tone: 'orange' },
-    { label: 'Total Orders', value: data?.todayOrders || 0, detail: `${data?.pendingOrders || 0} active now`, icon: ClipboardList, tone: 'slate' },
-    { label: 'Customers', value: data?.totalCustomers || 0, detail: 'Registered customers', icon: Users, tone: 'orange' },
-    { label: 'Avg. Order Value', value: money(data?.averageOrderValue || 0), detail: 'Completed orders', icon: CreditCard, tone: 'slate' },
+    { label: 'Total Sales', value: money(data?.todaySales || 0), detail: 'Completed today', icon: CircleDollarSign, glow: 'orange' as const },
+    { label: 'Total Orders', value: data?.todayOrders || 0, detail: `${data?.pendingOrders || 0} active now`, icon: ClipboardList, glow: 'amber' as const },
+    { label: 'Customers', value: data?.totalCustomers || 0, detail: 'Registered customers', icon: Users, glow: 'orange' as const },
+    { label: 'Avg. Order Value', value: money(data?.averageOrderValue || 0), detail: 'Completed orders', icon: CreditCard, glow: 'neutral' as const },
   ];
 
   return (
-    <div className="min-h-full bg-[#faf9f7] dark:bg-[#0d0d11] px-5 py-5 md:px-7 md:py-6">
+    <div className="min-h-full bg-[#faf9f7] dark:bg-[#0b0b0f] px-5 py-5 md:px-7 md:py-6">
       <div className="mx-auto max-w-[1600px] space-y-5">
-        <section className="flex flex-col gap-4 rounded-2xl border border-orange-100 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-gray-800 dark:bg-[#111116]/70 lg:flex-row lg:items-center lg:justify-between">
-          <div>
+        <section className="relative flex flex-col gap-4 rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card lg:flex-row lg:items-center lg:justify-between">
+          <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
+          <div className="relative z-10">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-orange-500"><LayoutGrid className="h-3.5 w-3.5" /> Restaurant overview</div>
             <h1 className="mt-2 text-2xl font-bold tracking-tight text-gray-900 dark:text-white">Hello, {user?.firstName || 'there'} <span className="inline-block">👋</span></h1>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Here is what is happening across your restaurant today.</p>
           </div>
-          <div className="flex items-center gap-3 self-start lg:self-auto">
-            <div className="hidden rounded-xl border border-gray-100 bg-gray-50 px-4 py-2 text-right dark:border-gray-800 dark:bg-[#111116]/60 sm:block">
+          <div className="relative z-10 flex items-center gap-3 self-start lg:self-auto">
+            <div className="hidden rounded-xl border border-orange-500/10 bg-white/60 px-4 py-2 text-right dark:border-white/10 dark:bg-white/[0.03] backdrop-blur-md sm:block">
               <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Today</div>
               <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</div>
             </div>
-            <button onClick={fetchMetrics} className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-orange-600">
+            <button onClick={fetchMetrics} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition hover:from-orange-600 hover:to-amber-600">
               <RefreshCw className="h-4 w-4" /> Refresh
             </button>
           </div>
         </section>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {cards.map(({ label, value, detail, icon: Icon, tone }) => (
-            <div key={label} className="group relative overflow-hidden rounded-2xl border border-gray-100 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-gray-800 dark:bg-[#111116]">
-              <div className="absolute right-0 top-0 h-20 w-20 rounded-bl-[70px] bg-orange-50/80 dark:bg-orange-500/5" />
-              <div className="relative flex items-start justify-between">
-                <div className={`rounded-xl p-2.5 ${tone === 'orange' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600 dark:bg-[#111116] dark:text-gray-300'}`}><Icon className="h-5 w-5" /></div>
+          {cards.map(({ label, value, detail, icon: Icon, glow }) => (
+            <LiquidGlass key={label} glowColor={glow} blur="xl" className="p-5">
+              <div className="flex items-start justify-between">
+                <div className="rounded-xl p-2.5 bg-gradient-to-br from-orange-500 to-amber-500 text-white shadow-sm shadow-orange-500/30"><Icon className="h-5 w-5" /></div>
                 <ArrowUpRight className="h-4 w-4 text-gray-300 transition group-hover:text-orange-500" />
               </div>
-              <div className="relative mt-6">
+              <div className="mt-6">
                 <p className="text-xs font-medium text-gray-500 dark:text-gray-400">{label}</p>
                 <p className="mt-1 text-2xl font-bold tracking-tight text-gray-900 dark:text-white">{value}</p>
                 <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">{detail}</p>
               </div>
-            </div>
+            </LiquidGlass>
           ))}
         </section>
 
         <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-          <div className="xl:col-span-8 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#111116]">
-            <div className="mb-3 flex items-center justify-between">
+          <div className="xl:col-span-8 relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
+            <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
+            <div className="relative z-10 mb-3 flex items-center justify-between">
               <div><h2 className="font-semibold text-gray-900 dark:text-white">Sales performance</h2><p className="text-xs text-gray-500 dark:text-gray-400">Completed sales over the last 7 days</p></div>
-              <div className="inline-flex items-center gap-1.5 rounded-lg bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-600 dark:bg-orange-500/10 dark:text-orange-300"><CalendarDays className="h-3.5 w-3.5" /> This week</div>
+              <div className="inline-flex items-center gap-1.5 rounded-xl border border-orange-500/20 bg-orange-50/80 px-3 py-1.5 text-xs font-semibold text-orange-600 dark:bg-orange-500/10 dark:text-orange-300"><CalendarDays className="h-3.5 w-3.5" /> This week</div>
             </div>
-            <TrendChart points={metrics?.salesTrend || []} />
+            <div className="relative z-10"><TrendChart points={metrics?.salesTrend || []} /></div>
           </div>
 
-          <div className="xl:col-span-4 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#111116]">
-            <div className="flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Order flow</h2><p className="text-xs text-gray-500 dark:text-gray-400">Orders by type this week</p></div><ShoppingBag className="h-5 w-5 text-orange-500" /></div>
-            <div className="mt-6 space-y-5">
+          <div className="xl:col-span-4 relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
+            <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
+            <div className="relative z-10 flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Order flow</h2><p className="text-xs text-gray-500 dark:text-gray-400">Orders by type this week</p></div><ShoppingBag className="h-5 w-5 text-orange-500" /></div>
+            <div className="relative z-10 mt-6 space-y-5">
               {orderTypes.length ? orderTypes.map((row) => (
                 <div key={row.type}>
                   <div className="mb-2 flex justify-between text-xs"><span className="font-medium text-gray-700 dark:text-gray-300">{row.type.replace(/_/g, ' ')}</span><span className="text-gray-400">{row.count} orders</span></div>
-                  <div className="h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-[#111116]"><div className="h-full rounded-full bg-orange-500" style={{ width: `${Math.max((row.count / maxOrderType) * 100, 8)}%` }} /></div>
+                  <div className="h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-orange-500 to-amber-500" style={{ width: `${Math.max((row.count / maxOrderType) * 100, 8)}%` }} /></div>
                 </div>
               )) : <div className="py-12 text-center text-sm text-gray-400">No orders in this period yet.</div>}
             </div>
-            <div className="mt-7 grid grid-cols-3 gap-2 border-t border-gray-100 pt-4 dark:border-gray-800">
+            <div className="relative z-10 mt-7 grid grid-cols-3 gap-2 border-t border-orange-500/10 pt-4 dark:border-white/10">
               <div><p className="text-[10px] uppercase tracking-wider text-gray-400">Available tables</p><p className="mt-1 text-lg font-bold text-gray-900 dark:text-white">{data?.availableTables || 0}</p></div>
               <div><p className="text-[10px] uppercase tracking-wider text-gray-400">Occupied</p><p className="mt-1 text-lg font-bold text-gray-900 dark:text-white">{data?.occupiedTables || 0}</p></div>
               <div><p className="text-[10px] uppercase tracking-wider text-gray-400">Reserved</p><p className="mt-1 text-lg font-bold text-gray-900 dark:text-white">{data?.reservedTables || 0}</p></div>
@@ -210,20 +213,22 @@ export default function Dashboard() {
         </section>
 
         <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
-          <div className="xl:col-span-7 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#111116]">
-            <div className="flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Recent orders</h2><p className="text-xs text-gray-500 dark:text-gray-400">The latest activity from your POS and kitchen flow</p></div><a href="/orders" className="text-xs font-semibold text-orange-600 hover:text-orange-700">View all</a></div>
-            <div className="mt-4 overflow-x-auto">
+          <div className="xl:col-span-7 relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
+            <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
+            <div className="relative z-10 flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Recent orders</h2><p className="text-xs text-gray-500 dark:text-gray-400">The latest activity from your POS and kitchen flow</p></div><a href="/orders" className="text-xs font-semibold text-orange-600 hover:text-orange-700">View all</a></div>
+            <div className="relative z-10 mt-4 overflow-x-auto">
               <table className="w-full min-w-[620px] text-left text-sm">
-                <thead className="text-[10px] uppercase tracking-wider text-gray-400"><tr className="border-b border-gray-100 dark:border-gray-800"><th className="pb-3 font-medium">Order</th><th className="pb-3 font-medium">Items</th><th className="pb-3 font-medium">Type</th><th className="pb-3 font-medium">Amount</th><th className="pb-3 text-right font-medium">Status</th></tr></thead>
-                <tbody>{(metrics?.recentOrders || []).map((order) => <tr key={order.id} className="border-b border-gray-50 last:border-0 dark:border-gray-800/70"><td className="py-4"><div className="font-semibold text-gray-800 dark:text-gray-200">{order.orderNumber}</div><div className="mt-0.5 text-xs text-gray-400">{order.customerName || 'Walk-in customer'}</div></td><td className="py-4 text-xs text-gray-500 dark:text-gray-400">{order.items.map((i) => `${i.quantity}× ${i.itemNameSnapshot}`).join(', ') || '—'}</td><td className="py-4 text-xs text-gray-500 dark:text-gray-400">{order.orderType.replace(/_/g, ' ')}</td><td className="py-4 font-semibold text-gray-800 dark:text-gray-200">{money(order.totalAmount)}</td><td className="py-4 text-right"><span className={`rounded-md px-2 py-1 text-[10px] font-semibold ${statusClass(order.status)}`}>{order.status}</span></td></tr>)}</tbody>
+                <thead className="text-[10px] uppercase tracking-wider text-gray-400"><tr className="border-b border-orange-500/10 dark:border-white/10"><th className="pb-3 font-medium">Order</th><th className="pb-3 font-medium">Items</th><th className="pb-3 font-medium">Type</th><th className="pb-3 font-medium">Amount</th><th className="pb-3 text-right font-medium">Status</th></tr></thead>
+                <tbody>{(metrics?.recentOrders || []).map((order) => <tr key={order.id} className="border-b border-orange-500/5 last:border-0 dark:border-white/5"><td className="py-4"><div className="font-semibold text-gray-800 dark:text-gray-200">{order.orderNumber}</div><div className="mt-0.5 text-xs text-gray-400">{order.customerName || 'Walk-in customer'}</div></td><td className="py-4 text-xs text-gray-500 dark:text-gray-400">{order.items.map((i) => `${i.quantity}× ${i.itemNameSnapshot}`).join(', ') || '—'}</td><td className="py-4 text-xs text-gray-500 dark:text-gray-400">{order.orderType.replace(/_/g, ' ')}</td><td className="py-4 font-semibold text-gray-800 dark:text-gray-200">{money(order.totalAmount)}</td><td className="py-4 text-right"><span className={`rounded-md px-2 py-1 text-[10px] font-semibold ${statusClass(order.status)}`}>{order.status}</span></td></tr>)}</tbody>
               </table>
               {!metrics?.recentOrders?.length && <div className="py-12 text-center text-sm text-gray-400">No recent orders yet.</div>}
             </div>
           </div>
 
-          <div className="xl:col-span-5 rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#111116]">
-            <div className="flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Trending menu</h2><p className="text-xs text-gray-500 dark:text-gray-400">Best-performing items this week</p></div><ChefHat className="h-5 w-5 text-orange-500" /></div>
-            <div className="mt-4 space-y-3">{(metrics?.topMenuItems || []).map((item, index) => <div key={item.id} className="flex items-center gap-3 rounded-xl border border-gray-100 p-3 transition hover:border-orange-200 dark:border-gray-800 dark:hover:border-orange-500/30"><div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-orange-50 text-xs font-bold text-orange-500 dark:bg-orange-500/10">{item.image ? <img src={item.image} alt="" className="h-full w-full object-cover" /> : `#${index + 1}`}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-gray-800 dark:text-gray-200">{item.name}</p><p className="text-xs text-gray-400">{item.quantity} sold</p></div><p className="text-sm font-semibold text-orange-600">{money(item.price)}</p></div>)}</div>
+          <div className="xl:col-span-5 relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
+            <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
+            <div className="relative z-10 flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Trending menu</h2><p className="text-xs text-gray-500 dark:text-gray-400">Best-performing items this week</p></div><ChefHat className="h-5 w-5 text-orange-500" /></div>
+            <div className="relative z-10 mt-4 space-y-3">{(metrics?.topMenuItems || []).map((item, index) => <div key={item.id} className="flex items-center gap-3 rounded-2xl border border-orange-500/10 bg-white/50 p-3 transition hover:border-orange-500/30 hover:bg-orange-500/5 dark:border-white/10 dark:bg-white/[0.02] dark:hover:border-white/20"><div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-orange-50 text-xs font-bold text-orange-500 dark:bg-orange-500/10">{item.image ? <img src={item.image} alt="" className="h-full w-full object-cover" /> : `#${index + 1}`}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-gray-800 dark:text-gray-200">{item.name}</p><p className="text-xs text-gray-400">{item.quantity} sold</p></div><p className="text-sm font-semibold text-orange-600 dark:text-orange-400">{money(item.price)}</p></div>)}</div>
             {!metrics?.topMenuItems?.length && <div className="py-10 text-center text-sm text-gray-400">Complete some orders to see menu trends.</div>}
           </div>
         </section>
@@ -244,20 +249,23 @@ export default function Dashboard() {
             const pulse = (metrics?.salesTrend || []).slice(-7);
             const maxPulse = Math.max(...pulse.map((point) => point.orders), 1);
             return <>
-              <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#111116]">
-                <div className="flex items-center gap-3"><div className="rounded-xl bg-orange-50 p-2.5 text-orange-500 dark:bg-orange-500/10"><UtensilsCrossed className="h-5 w-5" /></div><div><p className="text-xs text-gray-500">Table status</p><p className="text-lg font-bold text-gray-900 dark:text-white">{data?.totalTables || 0} tables</p></div></div>
-                <div className="mt-4 flex items-center gap-4"><DonutChart segments={tableSegments} centerValue={`${data?.totalTables || 0}`} centerLabel="Total tables" /><Legend segments={tableSegments} /></div>
+              <div className="relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
+                <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
+                <div className="relative z-10 flex items-center gap-3"><div className="rounded-xl bg-orange-50 p-2.5 text-orange-500 dark:bg-orange-500/10"><UtensilsCrossed className="h-5 w-5" /></div><div><p className="text-xs text-gray-500">Table status</p><p className="text-lg font-bold text-gray-900 dark:text-white">{data?.totalTables || 0} tables</p></div></div>
+                <div className="relative z-10 mt-4 flex items-center gap-4"><DonutChart segments={tableSegments} centerValue={`${data?.totalTables || 0}`} centerLabel="Total tables" /><Legend segments={tableSegments} /></div>
               </div>
 
-              <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#111116]">
-                <div className="flex items-center gap-3"><div className="rounded-xl bg-orange-50 p-2.5 text-orange-500 dark:bg-orange-500/10"><Package className="h-5 w-5" /></div><div><p className="text-xs text-gray-500">Menu availability</p><p className="text-lg font-bold text-gray-900 dark:text-white">{data?.activeMenuItems || 0} ready to sell</p></div></div>
-                <div className="mt-4 flex items-center gap-5"><DonutChart segments={menuSegments} centerValue={`${data?.totalMenuItems || 0}`} centerLabel="Menu items" /><div className="flex-1"><Legend segments={menuSegments} /><div className="mt-4 rounded-xl bg-orange-50/70 px-3 py-2.5 text-xs text-orange-700 dark:bg-orange-500/10 dark:text-orange-300"><span className="font-semibold">Menu health:</span> {data?.totalMenuItems ? Math.round(((data?.activeMenuItems || 0) / data.totalMenuItems) * 100) : 0}% of items are available.</div></div></div>
+              <div className="relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
+                <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
+                <div className="relative z-10 flex items-center gap-3"><div className="rounded-xl bg-orange-50 p-2.5 text-orange-500 dark:bg-orange-500/10"><Package className="h-5 w-5" /></div><div><p className="text-xs text-gray-500">Menu availability</p><p className="text-lg font-bold text-gray-900 dark:text-white">{data?.activeMenuItems || 0} ready to sell</p></div></div>
+                <div className="relative z-10 mt-4 flex items-center gap-5"><DonutChart segments={menuSegments} centerValue={`${data?.totalMenuItems || 0}`} centerLabel="Menu items" /><div className="flex-1"><Legend segments={menuSegments} /><div className="mt-4 rounded-xl bg-orange-50/70 px-3 py-2.5 text-xs text-orange-700 dark:bg-orange-500/10 dark:text-orange-300"><span className="font-semibold">Menu health:</span> {data?.totalMenuItems ? Math.round(((data?.activeMenuItems || 0) / data.totalMenuItems) * 100) : 0}% of items are available.</div></div></div>
               </div>
 
-              <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#111116]">
-                <div className="flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Service pulse</h2><p className="text-xs text-gray-500 dark:text-gray-400">A quick read on restaurant activity</p></div><Clock3 className="h-5 w-5 text-orange-500" /></div>
-                <div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-xl border border-orange-100 bg-orange-50/60 p-3 dark:border-orange-500/10 dark:bg-orange-500/5"><p className="text-[10px] font-semibold uppercase tracking-wider text-orange-500">Active orders</p><p className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">{data?.pendingOrders || 0}</p><p className="mt-1 text-[10px] text-gray-400">Currently in flow</p></div><div className="rounded-xl border border-gray-100 bg-gray-50/70 p-3 dark:border-gray-800 dark:bg-[#111116]/40"><p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Low stock</p><p className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">{data?.lowStock || 0}</p><p className="mt-1 text-[10px] text-gray-400">Items to review</p></div></div>
-                <div className="mt-5"><div className="mb-2 flex items-center justify-between"><p className="text-xs font-medium text-gray-700 dark:text-gray-300">Order activity</p><span className="text-[10px] text-gray-400">Last 7 days</span></div><div className="flex h-20 items-end gap-2">{pulse.map((point) => <div key={point.date} className="flex flex-1 flex-col items-center gap-1.5"><div className="flex h-14 w-full items-end rounded-lg bg-orange-50 px-1 dark:bg-orange-500/5"><div className="w-full rounded-md bg-orange-500/85" style={{ height: `${Math.max((point.orders / maxPulse) * 100, point.orders ? 12 : 0)}%` }} /></div><span className="text-[9px] text-gray-400">{new Date(`${point.date}T00:00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })}</span></div>)}</div></div>
+              <div className="relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
+                <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
+                <div className="relative z-10 flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Service pulse</h2><p className="text-xs text-gray-500 dark:text-gray-400">A quick read on restaurant activity</p></div><Clock3 className="h-5 w-5 text-orange-500" /></div>
+                <div className="relative z-10 mt-5 grid grid-cols-2 gap-3"><div className="rounded-xl border border-orange-100 bg-orange-50/60 p-3 dark:border-orange-500/10 dark:bg-orange-500/5"><p className="text-[10px] font-semibold uppercase tracking-wider text-orange-500">Active orders</p><p className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">{data?.pendingOrders || 0}</p><p className="mt-1 text-[10px] text-gray-400">Currently in flow</p></div><div className="rounded-xl border border-orange-500/10 bg-white/40 p-3 dark:border-white/10 dark:bg-white/[0.02]"><p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Low stock</p><p className="mt-1 text-2xl font-bold text-gray-900 dark:text-white">{data?.lowStock || 0}</p><p className="mt-1 text-[10px] text-gray-400">Items to review</p></div></div>
+                <div className="relative z-10 mt-5"><div className="mb-2 flex items-center justify-between"><p className="text-xs font-medium text-gray-700 dark:text-gray-300">Order activity</p><span className="text-[10px] text-gray-400">Last 7 days</span></div><div className="flex h-20 items-end gap-2">{pulse.map((point) => <div key={point.date} className="flex flex-1 flex-col items-center gap-1.5"><div className="flex h-14 w-full items-end rounded-lg bg-orange-50 px-1 dark:bg-orange-500/5"><div className="w-full rounded-md bg-orange-500/85" style={{ height: `${Math.max((point.orders / maxPulse) * 100, point.orders ? 12 : 0)}%` }} /></div><span className="text-[9px] text-gray-400">{new Date(`${point.date}T00:00:00`).toLocaleDateString(undefined, { weekday: 'narrow' })}</span></div>)}</div></div>
               </div>
             </>;
           })()}
