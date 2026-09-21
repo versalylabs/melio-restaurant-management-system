@@ -279,52 +279,58 @@ export default function POS() {
   const selectedCat = categories.find((c) => c.id === selectedCategory);
 
   return (
-    <div className="h-[calc(100vh-4rem)] flex flex-col bg-[#faf9f7] dark:bg-[#111116]">
-      <div className="p-4 border-b border-orange-100 dark:border-gray-700 flex items-center justify-between bg-white dark:bg-[#111116]">
+    <div className="h-[calc(100vh-4.25rem)] flex flex-col bg-[#faf9f7] dark:bg-[#0b0b0f]">
+      {/* Top Header Toolbar */}
+      <div className="relative px-5 py-3.5 border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between bg-white/75 dark:bg-[#0e0e13]/80 backdrop-blur-xl flex-shrink-0">
+        <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-orange-400/30 dark:via-white/15 to-transparent pointer-events-none" />
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Point of Sale</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Branch: {activeBranchName || user?.branchName || 'Not assigned'}</p>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Point of Sale</h1>
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Branch: <span className="font-semibold text-orange-600 dark:text-orange-400">{activeBranchName || user?.branchName || 'Not assigned'}</span></p>
         </div>
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setShowOrderTypeModal(true)} className="gap-2">
-            <ShoppingCart className="w-4 h-4" />
-            {orderType.replace('_', ' ')}
-            {selectedTable && ` - ${selectedTable.tableNumber}`}
-          </Button>
+          <button
+            onClick={() => setShowOrderTypeModal(true)}
+            className="inline-flex items-center gap-2 rounded-xl border border-orange-500/20 bg-white/80 dark:bg-[#121218]/80 backdrop-blur-md px-3.5 py-2 text-xs sm:text-sm font-semibold text-gray-800 dark:text-gray-100 shadow-sm hover:border-orange-500/40 hover:bg-orange-50/80 dark:hover:bg-white/5 transition-all liquid-glass-card"
+          >
+            <ShoppingCart className="w-4 h-4 text-orange-500" />
+            <span>{orderType.replace('_', ' ')}</span>
+            {selectedTable && <span className="rounded-md bg-orange-500/15 px-1.5 py-0.5 text-xs text-orange-600 dark:text-orange-300 font-bold">{selectedTable.tableNumber}</span>}
+          </button>
         </div>
       </div>
 
       {error && (
-        <div className="mx-4 mt-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm">
+        <div className="mx-4 mt-4 bg-red-500/10 border border-red-500/20 backdrop-blur-md text-red-600 dark:text-red-400 px-4 py-3 rounded-2xl text-sm shadow-sm">
           {error}
         </div>
       )}
 
       <div className="min-h-0 flex-1 flex overflow-hidden">
         {/* Left menu panel */}
-        <div className="min-w-0 min-h-0 flex-1 flex flex-col overflow-hidden bg-[#faf9f7] dark:bg-[#111116]">
-          <div className="p-4 border-b border-orange-100 dark:border-gray-700 flex gap-4 bg-white dark:bg-[#111116]/50">
+        <div className="min-w-0 min-h-0 flex-1 flex flex-col overflow-hidden">
+          {/* Search & Categories Toolbar */}
+          <div className="p-3.5 sm:p-4 border-b border-orange-500/10 dark:border-white/10 flex gap-3 bg-white/60 dark:bg-[#0e0e13]/60 backdrop-blur-md flex-shrink-0">
             <div className="relative flex-1">
-              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-orange-500/70 pointer-events-none" />
               <input
                 type="text"
-                placeholder="Search menu..."
+                placeholder="Search menu items by name..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="flex h-10 w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="flex h-10 w-full rounded-xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 backdrop-blur-md text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 pl-10 pr-4 py-2 text-sm shadow-sm outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-500/15"
               />
             </div>
           </div>
 
-          <div className="p-4 border-b border-orange-100 dark:border-gray-700 flex gap-2 overflow-x-auto bg-white dark:bg-[#111116]/50">
+          <div className="p-3.5 sm:p-4 border-b border-orange-500/10 dark:border-white/10 flex gap-2 overflow-x-auto bg-white/40 dark:bg-[#0e0e13]/40 backdrop-blur-md flex-shrink-0">
             {categories.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
-                className={`px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors ${
+                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap transition-all duration-200 ${
                   selectedCategory === cat.id
-                    ? 'bg-orange-600 text-white dark:bg-orange-600 dark:text-white'
-                    : 'bg-gray-100 dark:bg-[#111116] text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-[#1a1a20]'
+                    ? 'bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-md shadow-orange-500/20'
+                    : 'border border-orange-500/10 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 text-gray-700 dark:text-gray-300 hover:bg-orange-50 dark:hover:bg-white/5 hover:border-orange-500/30'
                 }`}
               >
                 {cat.name}
@@ -332,32 +338,46 @@ export default function POS() {
             ))}
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4">
+          {/* Menu Items Liquid Glass Grid */}
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6">
             {selectedCat && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                 {getFilteredItems().map((item) => (
                   <button
                     key={item.id}
                     onClick={() => handleAddItem(item)}
-                    className="bg-white dark:bg-[#111116] border border-orange-100 dark:border-gray-700 rounded-lg p-4 text-left hover:border-orange-400 dark:hover:border-orange-500 hover:shadow-md transition-all"
+                    className="group relative overflow-hidden rounded-2xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/85 backdrop-blur-xl p-3.5 text-left shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card hover:-translate-y-1 hover:border-orange-500/40 dark:hover:border-orange-500/40 hover:shadow-lg transition-all duration-300"
                   >
-                    <div className="aspect-square bg-gray-100 dark:bg-[#111116] rounded-md mb-3 flex items-center justify-center">
-                      {item.image ? (
-                        <img src={item.image} alt={item.name} className="w-full h-full object-cover rounded-md" />
-                      ) : (
-                        <span className="text-3xl">🍽️</span>
-                      )}
+                    {/* Top Specular Glare Sheen */}
+                    <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/50 dark:via-white/20 to-transparent pointer-events-none" />
+
+                    {/* Prismatic Corner Glow */}
+                    <div className="absolute -top-10 -right-10 h-24 w-24 rounded-full bg-orange-500/10 dark:bg-orange-500/5 blur-xl pointer-events-none group-hover:scale-150 transition-transform duration-500" />
+
+                    <div className="relative z-10 flex flex-col h-full">
+                      <div className="aspect-square bg-gradient-to-br from-orange-500/5 to-amber-500/5 dark:bg-white/5 border border-orange-500/10 dark:border-white/5 rounded-xl mb-3 flex items-center justify-center overflow-hidden">
+                        {item.image ? (
+                          <img src={item.image} alt={item.name} className="w-full h-full object-cover rounded-xl transition-transform duration-300 group-hover:scale-105" />
+                        ) : (
+                          <span className="text-3xl drop-shadow-sm">🍽️</span>
+                        )}
+                      </div>
+                      <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-sm truncate tracking-tight">{item.name}</h3>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed flex-1">{item.description || 'Freshly prepared specialty'}</p>
+                      <div className="mt-3 flex items-center justify-between pt-2 border-t border-orange-500/10 dark:border-white/5">
+                        <span className="text-sm font-bold bg-gradient-to-r from-orange-600 to-amber-600 dark:from-orange-400 dark:to-amber-400 bg-clip-text text-transparent">
+                          KES {(item.sellingPrice ?? 0).toLocaleString()}
+                        </span>
+                        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-orange-500/10 text-orange-500 dark:bg-orange-500/20 group-hover:bg-orange-500 group-hover:text-white transition-colors">
+                          <Plus className="h-3.5 w-3.5" />
+                        </span>
+                      </div>
                     </div>
-                    <h3 className="font-medium text-gray-900 dark:text-gray-100 text-sm truncate">{item.name}</h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">{item.description}</p>
-                    <p className="text-sm font-bold text-orange-600 dark:text-orange-400 mt-2">
-                      KES {(item.sellingPrice ?? 0).toLocaleString()}
-                    </p>
                   </button>
                 ))}
                 {getFilteredItems().length === 0 && (
-                  <div className="col-span-full text-center py-8 text-gray-500 dark:text-gray-400">
-                    No items found in this category
+                  <div className="col-span-full text-center py-16 text-gray-500 dark:text-gray-400">
+                    <p className="text-sm">No items found in this category</p>
                   </div>
                 )}
               </div>
@@ -365,31 +385,45 @@ export default function POS() {
           </div>
         </div>
 
-        {/* Right cart panel */}
-        <div className="min-h-0 w-[min(100%,28rem)] shrink-0 border-l border-orange-100 dark:border-gray-700 flex flex-col bg-white dark:bg-[#111116]">
-          <div className="p-4 border-b border-orange-100 dark:border-gray-700">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Current Order</h2>
-            {selectedTable && (
-              <div className="flex items-center gap-2 mt-1 text-sm text-gray-600 dark:text-gray-400">
-                <TableIcon className="w-4 h-4" />
-                Table {selectedTable.tableNumber}
-              </div>
+        {/* Right cart & order panel */}
+        <div className="min-h-0 w-[min(100%,28rem)] shrink-0 border-l border-orange-500/10 dark:border-white/10 flex flex-col bg-white/80 dark:bg-[#0e0e13]/85 backdrop-blur-2xl shadow-xl">
+          <div className="p-4 border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">Current Order</h2>
+              {selectedTable && (
+                <div className="flex items-center gap-1.5 mt-1 text-xs font-semibold text-orange-600 dark:text-orange-400">
+                  <TableIcon className="w-3.5 h-3.5" />
+                  Table {selectedTable.tableNumber}
+                </div>
+              )}
+            </div>
+            {cart.length > 0 && (
+              <span className="rounded-full bg-orange-500/10 border border-orange-500/20 px-2.5 py-0.5 text-xs font-bold text-orange-600 dark:text-orange-400">
+                {cart.reduce((sum, item) => sum + item.quantity, 0)} items
+              </span>
             )}
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4 space-y-3">
             {cart.length === 0 ? (
-              <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">No items in order</p>
+              <div className="flex flex-col items-center justify-center h-full text-center py-12">
+                <div className="h-12 w-12 rounded-2xl bg-orange-500/10 flex items-center justify-center text-orange-500 mb-3">
+                  <ShoppingCart className="h-6 w-6" />
+                </div>
+                <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">Your order cart is empty</p>
+                <p className="text-xs text-gray-400 mt-1">Select items from the menu to add to this order</p>
+              </div>
             ) : (
               cart.map((item, index) => (
-                <div key={item.id} className="bg-[#faf9f7] dark:bg-[#111116]/70 rounded-lg p-3">
+                <div key={item.id} className="relative overflow-hidden rounded-2xl border border-orange-500/10 dark:border-white/5 bg-white/60 dark:bg-white/[0.03] backdrop-blur-md p-3.5 shadow-sm liquid-glass-card transition-all">
+                  <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-orange-400/30 dark:via-white/10 to-transparent pointer-events-none" />
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                      <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">{item.itemNameSnapshot}</h4>
+                      <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{item.itemNameSnapshot}</h4>
                       {item.modifiers.length > 0 && (
-                        <div className="mt-1 space-y-1">
+                        <div className="mt-1 space-y-0.5">
                           {item.modifiers.map((mod, i) => (
-                            <div key={i} className="text-xs text-gray-600 dark:text-gray-400">
+                            <div key={i} className="text-xs text-orange-600 dark:text-orange-400 font-medium">
                               + {mod.optionNameSnapshot} (+KES {mod.priceAdjustment})
                             </div>
                           ))}
@@ -398,31 +432,32 @@ export default function POS() {
                       {item.notes && (
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 italic">Note: {item.notes}</p>
                       )}
-                      <div className="flex items-center gap-2 mt-2">
+                      <div className="flex items-center gap-2 mt-2.5">
                         <button
                           onClick={() => updateCartQuantity(index, -1)}
-                          className="w-6 h-6 rounded-full bg-gray-200 dark:bg-[#111116] flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-[#1a1a20] transition-colors"
+                          className="w-6 h-6 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-orange-500 hover:text-white dark:hover:bg-orange-500 transition-colors"
                         >
                           <Minus className="w-3 h-3" />
                         </button>
-                        <span className="text-sm font-medium w-8 text-center text-gray-900 dark:text-gray-100">{item.quantity}</span>
+                        <span className="text-sm font-bold w-7 text-center text-gray-900 dark:text-gray-100">{item.quantity}</span>
                         <button
                           onClick={() => updateCartQuantity(index, 1)}
-                          className="w-6 h-6 rounded-full bg-gray-200 dark:bg-[#111116] flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-[#1a1a20] transition-colors"
+                          className="w-6 h-6 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-orange-500 hover:text-white dark:hover:bg-orange-500 transition-colors"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                    <div className="text-right pl-2">
+                      <p className="text-sm font-bold text-gray-900 dark:text-gray-100">
                         KES {((item.unitPrice + item.modifiers.reduce((s, m) => s + m.priceAdjustment, 0)) * item.quantity).toLocaleString()}
                       </p>
                       <button
                         onClick={() => removeFromCart(index)}
-                        className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 mt-1 transition-colors"
+                        className="text-red-400 hover:text-red-600 dark:hover:text-red-300 mt-1.5 p-1 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                        title="Remove item"
                       >
-                        <X className="w-4 h-4" />
+                        <X className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
@@ -433,44 +468,44 @@ export default function POS() {
 
           {cart.length > 0 && (
             <>
-            <div className="shrink-0 border-t border-orange-100 dark:border-gray-700 p-3 space-y-2">
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Customer (optional)</label>
+            <div className="shrink-0 border-t border-orange-500/10 dark:border-white/10 p-3 space-y-1.5 bg-white/40 dark:bg-white/[0.02]">
+              <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">Customer (optional)</label>
               <select
                 value={selectedCustomerId}
                 onChange={(e) => { setSelectedCustomerId(e.target.value); const c = customers.find((x) => x.id === e.target.value); setCustomerName(c?.name || ''); }}
-                className="w-full rounded-md border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm bg-white dark:bg-[#111116] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="w-full rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-2 text-xs sm:text-sm bg-white/80 dark:bg-[#121218]/80 text-gray-900 dark:text-gray-100 outline-none focus:ring-2 focus:ring-orange-500"
               >
                 <option value="">Walk-in customer</option>
                 {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` — ${c.phone}` : ''}</option>)}
               </select>
             </div>
 
-            <div className="shrink-0 max-h-[38%] overflow-y-auto border-t border-orange-100 bg-white dark:border-gray-700 dark:bg-[#111116] p-4 space-y-3">
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Discount / Promotion</label>
-                <select value={selectedPromotionId} onChange={e=>{setSelectedPromotionId(e.target.value);if(e.target.value)setManualDiscount(0)}} className="w-full rounded-md border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm bg-white dark:bg-[#111116] text-gray-900 dark:text-gray-100">
+            <div className="shrink-0 max-h-[42%] overflow-y-auto border-t border-orange-500/10 bg-white/80 dark:border-white/10 dark:bg-[#121218]/90 p-4 space-y-3 backdrop-blur-xl">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">Discount / Promotion</label>
+                <select value={selectedPromotionId} onChange={e=>{setSelectedPromotionId(e.target.value);if(e.target.value)setManualDiscount(0)}} className="w-full rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-2 text-xs sm:text-sm bg-white/80 dark:bg-[#121218]/80 text-gray-900 dark:text-gray-100">
                   <option value="">No promotion</option>{promotions.map(p=><option key={p.id} value={p.id}>{p.name} — {p.discountType==='PERCENTAGE'?`${p.value}%`:`KES ${p.value}`}{p.customerId?' — Customer offer':''}</option>)}
                 </select>
-                {!selectedPromotionId && <div className="grid grid-cols-2 gap-2"><select value={manualDiscountType} onChange={e=>setManualDiscountType(e.target.value as any)} className="rounded-md border px-2 py-2 text-sm bg-white dark:bg-[#111116]"><option value="FIXED">Fixed</option><option value="PERCENTAGE">Percent</option></select><input type="number" min="0" value={manualDiscount||''} onChange={e=>setManualDiscount(Number(e.target.value))} placeholder="0" className="rounded-md border px-3 py-2 text-sm bg-white dark:bg-[#111116]"/></div>}
+                {!selectedPromotionId && <div className="grid grid-cols-2 gap-2"><select value={manualDiscountType} onChange={e=>setManualDiscountType(e.target.value as any)} className="rounded-xl border border-orange-500/15 dark:border-white/10 px-2 py-1.5 text-xs bg-white dark:bg-[#121218]"><option value="FIXED">Fixed (KES)</option><option value="PERCENTAGE">Percent (%)</option></select><input type="number" min="0" value={manualDiscount||''} onChange={e=>setManualDiscount(Number(e.target.value))} placeholder="0" className="rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-1.5 text-xs bg-white dark:bg-[#121218]"/></div>}
               </div>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                <div className="flex justify-between"><span className="text-gray-600 dark:text-gray-400">Subtotal</span><span className="font-medium text-gray-900 dark:text-gray-100">KES {getPreviewTotals().subtotal.toLocaleString()}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-gray-600 dark:text-gray-400">Discount</span><span className="text-green-600 dark:text-green-400">- KES {getPreviewTotals().discount.toLocaleString()}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-gray-600 dark:text-gray-400">Tax</span><span className="text-gray-900 dark:text-gray-100">KES {getPreviewTotals().tax.toLocaleString()}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-gray-600 dark:text-gray-400">Service Charge</span><span className="text-gray-900 dark:text-gray-100">KES {getPreviewTotals().service.toLocaleString()}</span></div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Subtotal</span><span className="font-semibold text-gray-900 dark:text-gray-100">KES {getPreviewTotals().subtotal.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Discount</span><span className="font-semibold text-green-600 dark:text-green-400">- KES {getPreviewTotals().discount.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Tax</span><span className="font-semibold text-gray-900 dark:text-gray-100">KES {getPreviewTotals().tax.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Service</span><span className="font-semibold text-gray-900 dark:text-gray-100">KES {getPreviewTotals().service.toLocaleString()}</span></div>
               </div>
-              <div className="mt-2 flex justify-between rounded-lg bg-orange-50 px-3 py-2 text-lg font-bold text-gray-900 dark:bg-orange-500/10 dark:text-gray-100">
-                <span>Total</span><span>KES {getPreviewTotals().total.toLocaleString()}</span>
+              <div className="flex justify-between items-center rounded-xl border border-orange-500/20 bg-gradient-to-r from-orange-500/15 to-amber-500/15 px-3.5 py-2.5 text-base font-bold text-gray-900 dark:text-gray-100 liquid-glass-card">
+                <span>Total Amount</span><span className="text-lg text-orange-600 dark:text-orange-400">KES {getPreviewTotals().total.toLocaleString()}</span>
               </div>
-              <div className="flex gap-2">
-                <Button variant="secondary" onClick={handleHoldOrder} disabled={submitting} className="flex-1">
+              <div className="flex gap-2 pt-1">
+                <Button variant="secondary" onClick={handleHoldOrder} disabled={submitting} className="flex-1 rounded-xl">
                   Hold
                 </Button>
-                <Button variant="secondary" onClick={() => { setCart([]); setSelectedTable(null); }}>
+                <Button variant="secondary" onClick={() => { setCart([]); setSelectedTable(null); }} className="rounded-xl">
                   Clear
                 </Button>
               </div>
-              <Button onClick={handleSubmitOrder} disabled={submitting} className="w-full">
+              <Button onClick={handleSubmitOrder} disabled={submitting} className="w-full rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 shadow-md shadow-orange-500/20">
                 {submitting ? 'Processing...' : 'Submit Order'}
               </Button>
             </div>
@@ -482,10 +517,10 @@ export default function POS() {
       {showModifierModal && selectedMenuItem && (
         <Modal title={selectedMenuItem.name} onClose={() => { setShowModifierModal(false); setSelectedMenuItem(null); }}>
           <div className="space-y-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">KES {(selectedMenuItem.sellingPrice ?? 0).toLocaleString()}</p>
+            <p className="text-sm font-bold text-orange-600 dark:text-orange-400">KES {(selectedMenuItem.sellingPrice ?? 0).toLocaleString()}</p>
             {selectedMenuItem.modifierGroups.map((group) => (
               <div key={group.id}>
-                <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">
                   {group.name}
                   {group.isRequired && <span className="text-red-500 dark:text-red-400 ml-1">*</span>}
                 </h4>
@@ -495,13 +530,13 @@ export default function POS() {
                     return (
                       <label
                         key={option.id}
-                        className={`flex items-center justify-between p-3 border rounded-md cursor-pointer transition-colors ${
+                        className={`relative overflow-hidden flex items-center justify-between p-3.5 border rounded-2xl cursor-pointer transition-all liquid-glass-card ${
                           isSelected
-                            ? 'border-orange-500 bg-orange-50 dark:border-orange-500 dark:bg-orange-900/30'
-                            : 'border-orange-100 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-[#1a1a20]/30'
+                            ? 'border-orange-500 bg-gradient-to-r from-orange-500/15 to-amber-500/10 dark:border-orange-500 dark:bg-orange-950/30'
+                            : 'border-orange-500/15 dark:border-white/10 bg-white/70 dark:bg-[#121218]/70 hover:border-orange-400 dark:hover:border-white/20'
                         }`}
                       >
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2.5">
                           <input
                             type={group.selectionType === 'SINGLE' ? 'radio' : 'checkbox'}
                             name={group.id}
@@ -525,10 +560,10 @@ export default function POS() {
                               }
                             }}
                           />
-                          <span className="text-sm text-gray-900 dark:text-gray-100">{option.name}</span>
+                          <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{option.name}</span>
                         </div>
                         {option.priceAdjustment > 0 && (
-                          <span className="text-sm text-gray-600 dark:text-gray-400">+KES {option.priceAdjustment}</span>
+                          <span className="text-xs font-bold text-orange-600 dark:text-orange-400">+KES {option.priceAdjustment}</span>
                         )}
                       </label>
                     );
@@ -537,18 +572,18 @@ export default function POS() {
               </div>
             ))}
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Special Instructions</label>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Special Instructions</label>
               <textarea
                 value={itemNotes}
                 onChange={(e) => setItemNotes(e.target.value)}
-                className="flex w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] dark:text-gray-100 dark:placeholder-gray-500 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="flex w-full rounded-xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 dark:text-gray-100 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-500"
                 rows={2}
                 placeholder="Any special requests..."
               />
             </div>
-            <div className="flex justify-end gap-3">
-              <Button variant="secondary" onClick={() => { setShowModifierModal(false); setSelectedMenuItem(null); }}>Cancel</Button>
-              <Button onClick={() => selectedMenuItem && addToCart(selectedMenuItem, selectedModifiers, itemNotes)}>Add to Order</Button>
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="secondary" onClick={() => { setShowModifierModal(false); setSelectedMenuItem(null); }} className="rounded-xl">Cancel</Button>
+              <Button onClick={() => selectedMenuItem && addToCart(selectedMenuItem, selectedModifiers, itemNotes)} className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-500">Add to Order</Button>
             </div>
           </div>
         </Modal>
@@ -563,19 +598,19 @@ export default function POS() {
                   key={table.id}
                   onClick={() => { setSelectedTable(table); setShowTableModal(false); }}
                   disabled={!table.selectable}
-                  className={`p-4 border rounded-lg text-left transition-colors ${
+                  className={`relative overflow-hidden p-4 border rounded-2xl text-left transition-all liquid-glass-card ${
                     selectedTable?.id === table.id
-                      ? 'border-orange-500 bg-orange-50 dark:border-orange-500 dark:bg-orange-900/30'
+                      ? 'border-orange-500 bg-gradient-to-br from-orange-500/20 to-amber-500/10 dark:border-orange-500 dark:bg-orange-950/30 shadow-md shadow-orange-500/10'
                       : table.selectable
-                      ? 'border-orange-100 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-[#1a1a20]/30'
-                      : 'border-gray-100 dark:border-gray-800 bg-[#faf9f7] dark:bg-[#111116]/50 opacity-50 cursor-not-allowed'
+                      ? 'border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 hover:border-orange-400 dark:hover:border-orange-500 hover:-translate-y-0.5'
+                      : 'border-gray-200/50 dark:border-white/5 bg-gray-50/50 dark:bg-white/[0.02] opacity-50 cursor-not-allowed'
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="font-medium text-gray-900 dark:text-gray-100">{table.tableNumber}</p>
+                      <p className="font-bold text-gray-900 dark:text-gray-100">Table {table.tableNumber}</p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">{table.capacity} seats</p>
-                      <p className="text-xs text-gray-400 dark:text-gray-500">{table.sectionName}</p>
+                      <p className="text-xs text-orange-500/80 dark:text-orange-400/80 font-medium">{table.sectionName}</p>
                     </div>
                     <Badge variant={table.status === 'AVAILABLE' ? 'success' : table.status === 'OCCUPIED' ? 'danger' : 'warning'}>
                       {table.status}
@@ -585,26 +620,26 @@ export default function POS() {
               ))}
             </div>
             <div className="flex justify-end">
-              <Button variant="secondary" onClick={() => setShowTableModal(false)}>Cancel</Button>
+              <Button variant="secondary" onClick={() => setShowTableModal(false)} className="rounded-xl">Cancel</Button>
             </div>
           </div>
         </Modal>
       )}
 
       {showOrderTypeModal && (
-        <Modal title="Order Type" onClose={() => setShowOrderTypeModal(false)}>
+        <Modal title="Select Order Type" onClose={() => setShowOrderTypeModal(false)}>
           <div className="space-y-3">
             {ORDER_TYPES.map((type) => (
               <button
                 key={type.value}
                 onClick={() => { setOrderType(type.value); setShowOrderTypeModal(false); if (type.value !== 'DINE_IN') setSelectedTable(null); }}
-                className={`w-full p-4 border rounded-lg text-left transition-colors ${
+                className={`relative overflow-hidden w-full p-4 border rounded-2xl text-left transition-all liquid-glass-card ${
                   orderType === type.value
-                    ? 'border-orange-500 bg-orange-50 dark:border-orange-500 dark:bg-orange-900/30'
-                    : 'border-orange-100 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 dark:hover:bg-[#1a1a20]/30'
+                    ? 'border-orange-500 bg-gradient-to-br from-orange-500/20 to-amber-500/10 dark:border-orange-500 dark:bg-orange-950/30 shadow-md shadow-orange-500/10'
+                    : 'border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 hover:border-orange-400 dark:hover:border-orange-500 hover:-translate-y-0.5'
                 }`}
               >
-                <p className="font-medium text-gray-900 dark:text-gray-100">{type.label}</p>
+                <p className="font-bold text-gray-900 dark:text-gray-100">{type.label}</p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">{type.requiresTable ? 'Requires table selection' : 'No table required'}</p>
               </button>
             ))}
