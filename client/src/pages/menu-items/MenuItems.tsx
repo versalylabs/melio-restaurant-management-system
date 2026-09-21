@@ -141,7 +141,7 @@ export default function MenuItems() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to deactivate this menu item?')) return;
+    if (!confirm('Are you sure you want to permanently delete this menu item?')) return;
     try {
       await menuItemApi.deleteMenuItem(id);
       fetchItems();

@@ -299,7 +299,19 @@ export const deleteMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
     return sendError(res, 'Menu item not found', undefined, 404);
   }
 
-  await prisma.menuItem.update({ where: { id }, data: { status: 'INACTIVE' } });
+  // Clear any optional foreign keys that might reference this menu item
+  await prisma.websiteSettings.updateMany({
+    where: { featuredMenuItemId: id },
+    data: { featuredMenuItemId: null },
+  });
+
+  await prisma.promotion.updateMany({
+    where: { menuItemId: id },
+    data: { menuItemId: null },
+  });
+
+  // Permanently delete the menu item and its cascaded relations
+  await prisma.menuItem.delete({ where: { id } });
 
   await createAuditLog(
     restaurantId,
@@ -307,10 +319,10 @@ export const deleteMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
     'DELETE',
     'MenuItem',
     id,
-    `Deactivated menu item ${existing.name}`
+    `Permanently deleted menu item ${existing.name}`
   );
 
-  return sendResponse(res, true, 'Menu item deactivated successfully');
+  return sendResponse(res, true, 'Menu item permanently deleted successfully');
 };
 
 export const duplicateMenuItem = async (req: AuthRequest, res: ExpressResponse) => {
