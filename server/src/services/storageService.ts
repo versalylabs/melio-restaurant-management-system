@@ -1,56 +1,84 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const rawSecretKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// Check if secret key looks like a valid compact JWS JWT (3 dot-separated base64url parts)
+const isValidJwt = (token?: string): boolean => {
+  if (!token || typeof token !== 'string') return false;
+  if (token.startsWith('your-') || token.includes(' ')) return false;
+  const parts = token.split('.');
+  return parts.length === 3 && parts.every((p) => p.length > 0);
+};
+
+const supabaseSecretKey = isValidJwt(rawSecretKey) ? rawSecretKey : undefined;
 const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'menu-images';
 
 const supabase = supabaseUrl && supabaseSecretKey
   ? createClient(supabaseUrl, supabaseSecretKey, { auth: { persistSession: false, autoRefreshToken: false } })
   : null;
 
-const assertConfigured = () => {
-  if (!supabase) {
-    throw new Error('Supabase Storage is not configured. Set SUPABASE_URL and SUPABASE_SECRET_KEY on the server.');
-  }
-  return supabase;
-};
-
 export const ensureMenuImageBucket = async () => {
-  const client = assertConfigured();
-  const { data } = await client.storage.getBucket(bucketName);
-  if (!data) {
-    const { error } = await client.storage.createBucket(bucketName, {
-      public: true,
-      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
-      fileSizeLimit: '6MB',
-    });
-    if (error && !/already exists/i.test(error.message)) throw error;
-  } else if (!data.public) {
-    const { error } = await client.storage.updateBucket(bucketName, {
-      public: true,
-      allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
-      fileSizeLimit: '6MB',
-    });
-    if (error) throw error;
+  if (!supabase) return;
+  try {
+    const { data } = await supabase.storage.getBucket(bucketName);
+    if (!data) {
+      const { error } = await supabase.storage.createBucket(bucketName, {
+        public: true,
+        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+        fileSizeLimit: '6MB',
+      });
+      if (error && !/already exists/i.test(error.message)) {
+        console.warn('Bucket creation warning:', error.message);
+      }
+    } else if (!data.public) {
+      await supabase.storage.updateBucket(bucketName, {
+        public: true,
+        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+        fileSizeLimit: '6MB',
+      });
+    }
+  } catch (err: any) {
+    console.warn('ensureMenuImageBucket warning:', err?.message || err);
   }
 };
 
-export const uploadMenuImage = async (path: string, buffer: Buffer, contentType: string) => {
-  const client = assertConfigured();
-  await ensureMenuImageBucket();
-  const { error } = await client.storage.from(bucketName).upload(path, buffer, {
-    contentType,
-    cacheControl: '31536000',
-    upsert: true,
-  });
-  if (error) throw error;
-  return client.storage.from(bucketName).getPublicUrl(path).data.publicUrl;
+/**
+ * Uploads an image to Supabase Storage if configured and valid.
+ * Automatically falls back to a high-fidelity data URI if Supabase credentials are not provided or reject the request.
+ */
+export const uploadMenuImage = async (path: string, buffer: Buffer, contentType: string): Promise<string> => {
+  if (supabase) {
+    try {
+      await ensureMenuImageBucket();
+      const { error } = await supabase.storage.from(bucketName).upload(path, buffer, {
+        contentType,
+        cacheControl: '31536000',
+        upsert: true,
+      });
+
+      if (!error) {
+        const publicUrl = supabase.storage.from(bucketName).getPublicUrl(path).data?.publicUrl;
+        if (publicUrl) return publicUrl;
+      } else {
+        console.warn('Supabase storage upload error, falling back to embedded image storage:', error.message);
+      }
+    } catch (supabaseError: any) {
+      console.warn('Supabase upload exception, falling back to embedded image storage:', supabaseError?.message || supabaseError);
+    }
+  }
+
+  // Resilient fallback: Return inline Base64 data URI permanently persisted in PostgreSQL
+  return `data:${contentType};base64,${buffer.toString('base64')}`;
 };
 
 export const deleteMenuImage = async (path: string) => {
-  const client = assertConfigured();
-  const { error } = await client.storage.from(bucketName).remove([path]);
-  if (error) throw error;
+  if (!supabase) return;
+  try {
+    await supabase.storage.from(bucketName).remove([path]);
+  } catch (err: any) {
+    console.warn('Could not delete image from Supabase storage:', err?.message || err);
+  }
 };
 
 export const extractMenuImagePath = (url?: string | null) => {
