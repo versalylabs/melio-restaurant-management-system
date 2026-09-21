@@ -69,7 +69,7 @@ export default function MenuPreview() {
                           <h3 className="text-lg font-semibold text-gray-900">{item.name}</h3>
                           {item.sku && <p className="text-xs text-gray-500 mt-1">SKU: {item.sku}</p>}
                         </div>
-                        <span className="text-lg font-bold text-gray-900">KSh {item.sellingPrice.toLocaleString()}</span>
+                        <span className="text-lg font-bold text-gray-900">KSh {(item.sellingPrice ?? 0).toLocaleString()}</span>
                       </div>
                       {item.description && (
                         <p className="text-sm text-gray-600 mt-2 line-clamp-2">{item.description}</p>

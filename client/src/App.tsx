@@ -1,41 +1,52 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import AppShell from './components/layout/AppShell';
-import Login from './pages/auth/Login';
-import Dashboard from './pages/dashboard/Dashboard';
-import Settings from './pages/settings/Settings';
-import Users from './pages/users/Users';
-import Roles from './pages/roles/Roles';
-import AuditLog from './pages/audit-log/AuditLog';
-import MenuItems from './pages/menu-items/MenuItems';
-import Categories from './pages/categories/Categories';
-import MenuPreview from './pages/menu-preview/MenuPreview';
-import FloorPlan from './pages/tables/FloorPlan';
-import Sections from './pages/sections/Sections';
-import TableCombinations from './pages/table-combinations/TableCombinations';
-import POS from './pages/pos/POS';
-import Orders from './pages/orders/Orders';
-import KitchenDisplay from './pages/kitchen/KitchenDisplay';
-import Inventory from './pages/inventory/Inventory';
-import Setup from './pages/auth/Setup';
-import Customers from './pages/customers/Customers';
-import CustomerDetails from './pages/customers/CustomerDetails';
-import Loyalty from './pages/customers/Loyalty';
-import Payments from './pages/payments/Payments';
-import Reports from './pages/reports/Reports';
-import Reservations from './pages/reservations/Reservations';
-import Branches from './pages/branches/Branches';
-import Promotions from './pages/promotions/Promotions';
-import OnlineOrdering from './pages/online-ordering/OnlineOrdering';
-import RestaurantWebsite from './pages/website/RestaurantWebsite';
-import OnlineOrderTracking from './pages/online-ordering/OnlineOrderTracking';
-import Notifications from './pages/notifications/Notifications';
-import Analytics from './pages/analytics/Analytics';
-import Shifts from './pages/shifts/Shifts';
-import Expenses from './pages/expenses/Expenses';
-import CustomerAccount from './pages/customer-portal/CustomerAccount';
-import WebsiteManagement from './pages/website/WebsiteManagement';
+
+// Code-split pages with React.lazy for blazingly fast initial load and snappy route transitions
+const Login = lazy(() => import('./pages/auth/Login'));
+const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'));
+const Settings = lazy(() => import('./pages/settings/Settings'));
+const Users = lazy(() => import('./pages/users/Users'));
+const Roles = lazy(() => import('./pages/roles/Roles'));
+const AuditLog = lazy(() => import('./pages/audit-log/AuditLog'));
+const MenuItems = lazy(() => import('./pages/menu-items/MenuItems'));
+const Categories = lazy(() => import('./pages/categories/Categories'));
+const MenuPreview = lazy(() => import('./pages/menu-preview/MenuPreview'));
+const FloorPlan = lazy(() => import('./pages/tables/FloorPlan'));
+const Sections = lazy(() => import('./pages/sections/Sections'));
+const TableCombinations = lazy(() => import('./pages/table-combinations/TableCombinations'));
+const POS = lazy(() => import('./pages/pos/POS'));
+const Orders = lazy(() => import('./pages/orders/Orders'));
+const KitchenDisplay = lazy(() => import('./pages/kitchen/KitchenDisplay'));
+const Inventory = lazy(() => import('./pages/inventory/Inventory'));
+const Setup = lazy(() => import('./pages/auth/Setup'));
+const Customers = lazy(() => import('./pages/customers/Customers'));
+const CustomerDetails = lazy(() => import('./pages/customers/CustomerDetails'));
+const Loyalty = lazy(() => import('./pages/customers/Loyalty'));
+const Payments = lazy(() => import('./pages/payments/Payments'));
+const Reports = lazy(() => import('./pages/reports/Reports'));
+const Reservations = lazy(() => import('./pages/reservations/Reservations'));
+const Branches = lazy(() => import('./pages/branches/Branches'));
+const Promotions = lazy(() => import('./pages/promotions/Promotions'));
+const OnlineOrdering = lazy(() => import('./pages/online-ordering/OnlineOrdering'));
+const RestaurantWebsite = lazy(() => import('./pages/website/RestaurantWebsite'));
+const OnlineOrderTracking = lazy(() => import('./pages/online-ordering/OnlineOrderTracking'));
+const Notifications = lazy(() => import('./pages/notifications/Notifications'));
+const Analytics = lazy(() => import('./pages/analytics/Analytics'));
+const Shifts = lazy(() => import('./pages/shifts/Shifts'));
+const Expenses = lazy(() => import('./pages/expenses/Expenses'));
+const CustomerAccount = lazy(() => import('./pages/customer-portal/CustomerAccount'));
+const WebsiteManagement = lazy(() => import('./pages/website/WebsiteManagement'));
+
+const PageLoader = () => (
+  <div className="min-h-screen flex items-center justify-center bg-[#faf9f7] dark:bg-[#0d0d11]">
+    <div className="flex flex-col items-center gap-3">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
+      <span className="text-xs font-medium uppercase tracking-widest text-gray-400">Loading...</span>
+    </div>
+  </div>
+);
 
 const permissionForPath = (path: string) => {
   if (path === '/users' || path === '/staff') return 'users.view';
@@ -111,134 +122,136 @@ function App() {
   }
 
   return (
-    <Routes>
-      <Route path="/order-online" element={<OnlineOrdering />} />
-      <Route path="/online-order/:trackingToken" element={<OnlineOrderTracking />} />
-      <Route path="/account" element={<CustomerAccount />} />
-      <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
-      <Route path="/setup" element={<Setup />} />
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <Dashboard />
+    <Suspense fallback={<PageLoader />}>
+      <Routes>
+        <Route path="/order-online" element={<OnlineOrdering />} />
+        <Route path="/online-order/:trackingToken" element={<OnlineOrderTracking />} />
+        <Route path="/account" element={<CustomerAccount />} />
+        <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/setup" element={<Setup />} />
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
+              <Settings />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/users"
+          element={
+            <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
+              <Users />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/roles"
+          element={
+            <ProtectedRoute allowedRoles={['OWNER', 'ADMIN']}>
+              <Roles />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/audit-log"
+          element={
+            <ProtectedRoute allowedRoles={['OWNER', 'ADMIN']}>
+              <AuditLog />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="/pos" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER']}>
+            <POS />
           </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/settings"
-        element={
+        } />
+        <Route path="/orders" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER']}>
+            <Orders />
+          </ProtectedRoute>
+        } />
+        <Route path="/tables" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER']}>
+            <FloorPlan />
+          </ProtectedRoute>
+        } />
+        <Route path="/sections" element={
           <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-            <Settings />
+            <Sections />
           </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/users"
-        element={
+        } />
+        <Route path="/table-combinations" element={
           <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-            <Users />
+            <TableCombinations />
           </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/roles"
-        element={
-          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN']}>
-            <Roles />
+        } />
+        <Route path="/kitchen" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'CHEF']}>
+            <KitchenDisplay />
           </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/audit-log"
-        element={
-          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN']}>
-            <AuditLog />
+        } />
+        <Route path="/reservations" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER','WAITER']}><Reservations /></ProtectedRoute>} />
+        <Route path="/branches" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Branches /></ProtectedRoute>} />
+        <Route path="/promotions" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Promotions /></ProtectedRoute>} />
+        <Route path="/menu-items" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
+            <MenuItems />
           </ProtectedRoute>
-        }
-      />
-      <Route path="/pos" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER']}>
-          <POS />
-        </ProtectedRoute>
-      } />
-      <Route path="/orders" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER']}>
-          <Orders />
-        </ProtectedRoute>
-      } />
-      <Route path="/tables" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER']}>
-          <FloorPlan />
-        </ProtectedRoute>
-      } />
-      <Route path="/sections" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-          <Sections />
-        </ProtectedRoute>
-      } />
-      <Route path="/table-combinations" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-          <TableCombinations />
-        </ProtectedRoute>
-      } />
-      <Route path="/kitchen" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'CHEF']}>
-          <KitchenDisplay />
-        </ProtectedRoute>
-      } />
-      <Route path="/reservations" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER','WAITER']}><Reservations /></ProtectedRoute>} />
-      <Route path="/branches" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Branches /></ProtectedRoute>} />
-      <Route path="/promotions" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Promotions /></ProtectedRoute>} />
-      <Route path="/menu-items" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-          <MenuItems />
-        </ProtectedRoute>
-      } />
-      <Route path="/categories" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-          <Categories />
-        </ProtectedRoute>
-      } />
-      <Route path="/menu-preview" element={<MenuPreview />} />
-      <Route path="/website-management" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-          <WebsiteManagement />
-        </ProtectedRoute>
-      } />
-      <Route path="/website_management" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-          <WebsiteManagement />
-        </ProtectedRoute>
-      } />
-      <Route path="/inventory" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER', 'CHEF']}>
-          <Inventory />
-        </ProtectedRoute>
-      } />
-      <Route path="/suppliers" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER']}>
-          <Inventory />
-        </ProtectedRoute>
-      } />
-      <Route path="/purchases" element={
-        <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER']}>
-          <Inventory />
-        </ProtectedRoute>
-      } />
-      <Route path="/customers" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER','WAITER']}><Customers /></ProtectedRoute>} />
-      <Route path="/customers/:id" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER','WAITER']}><CustomerDetails /></ProtectedRoute>} />
-      <Route path="/loyalty" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER','WAITER']}><Loyalty /></ProtectedRoute>} />
-      <Route path="/staff" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Users /></ProtectedRoute>} />
-      <Route path="/shifts" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER']}><Shifts /></ProtectedRoute>} />
-      <Route path="/analytics" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Analytics /></ProtectedRoute>} />
-      <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
-      <Route path="/payments" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER']}><Payments /></ProtectedRoute>} />
-      <Route path="/expenses" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Expenses /></ProtectedRoute>} />
-      <Route path="/reports" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><ReportsErrorBoundary><Reports /></ReportsErrorBoundary></ProtectedRoute>} />
-      {/* Public landing page: visiting localhost:5173 always opens the Melio website. */}
-      <Route path="/" element={<RestaurantWebsite />} />
-    </Routes>
+        } />
+        <Route path="/categories" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
+            <Categories />
+          </ProtectedRoute>
+        } />
+        <Route path="/menu-preview" element={<MenuPreview />} />
+        <Route path="/website-management" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
+            <WebsiteManagement />
+          </ProtectedRoute>
+        } />
+        <Route path="/website_management" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
+            <WebsiteManagement />
+          </ProtectedRoute>
+        } />
+        <Route path="/inventory" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER', 'CHEF']}>
+            <Inventory />
+          </ProtectedRoute>
+        } />
+        <Route path="/suppliers" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER']}>
+            <Inventory />
+          </ProtectedRoute>
+        } />
+        <Route path="/purchases" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER']}>
+            <Inventory />
+          </ProtectedRoute>
+        } />
+        <Route path="/customers" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER','WAITER']}><Customers /></ProtectedRoute>} />
+        <Route path="/customers/:id" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER','WAITER']}><CustomerDetails /></ProtectedRoute>} />
+        <Route path="/loyalty" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER','WAITER']}><Loyalty /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Users /></ProtectedRoute>} />
+        <Route path="/shifts" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER']}><Shifts /></ProtectedRoute>} />
+        <Route path="/analytics" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Analytics /></ProtectedRoute>} />
+        <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
+        <Route path="/payments" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','CASHIER']}><Payments /></ProtectedRoute>} />
+        <Route path="/expenses" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><Expenses /></ProtectedRoute>} />
+        <Route path="/reports" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><ReportsErrorBoundary><Reports /></ReportsErrorBoundary></ProtectedRoute>} />
+        {/* Public landing page: visiting localhost:5173 always opens the Melio website. */}
+        <Route path="/" element={<RestaurantWebsite />} />
+      </Routes>
+    </Suspense>
   );
 }
 

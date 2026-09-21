@@ -51,7 +51,7 @@ export function CountUp({
   return (
     <span ref={ref} className={`tabular-nums ${className}`}>
       {prefix}
-      {value.toLocaleString(undefined, {
+      {(value ?? 0).toLocaleString(undefined, {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals,
       })}

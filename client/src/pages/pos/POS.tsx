@@ -351,7 +351,7 @@ export default function POS() {
                     <h3 className="font-medium text-gray-900 dark:text-gray-100 text-sm truncate">{item.name}</h3>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">{item.description}</p>
                     <p className="text-sm font-bold text-orange-600 dark:text-orange-400 mt-2">
-                      KES {item.sellingPrice.toLocaleString()}
+                      KES {(item.sellingPrice ?? 0).toLocaleString()}
                     </p>
                   </button>
                 ))}
@@ -482,7 +482,7 @@ export default function POS() {
       {showModifierModal && selectedMenuItem && (
         <Modal title={selectedMenuItem.name} onClose={() => { setShowModifierModal(false); setSelectedMenuItem(null); }}>
           <div className="space-y-4">
-            <p className="text-sm text-gray-600 dark:text-gray-400">KES {selectedMenuItem.sellingPrice.toLocaleString()}</p>
+            <p className="text-sm text-gray-600 dark:text-gray-400">KES {(selectedMenuItem.sellingPrice ?? 0).toLocaleString()}</p>
             {selectedMenuItem.modifierGroups.map((group) => (
               <div key={group.id}>
                 <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">

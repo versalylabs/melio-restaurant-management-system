@@ -75,10 +75,10 @@ export default function Orders() {
       const sale = data.sale;
       const receipt = data.receipt;
       const rows = sale.items.map((i: any) => `<tr><td>${i.quantity}x ${i.itemNameSnapshot}</td><td style="text-align:right">KES ${(i.subtotal || 0).toLocaleString()}</td></tr>`).join('');
-      const payments = sale.payments.map((p: any) => `<div>${p.method}: KES ${p.amount.toLocaleString()}</div>`).join('');
+      const payments = sale.payments.map((p: any) => `<div>${p.method}: KES ${(p.amount || 0).toLocaleString()}</div>`).join('');
       const w = window.open('', '_blank', 'width=420,height=700');
       if (!w) return;
-      w.document.write(`<html><head><title>${receipt.receiptNumber}</title><style>body{font-family:Arial;padding:24px;max-width:380px;margin:auto}table{width:100%;border-collapse:collapse}td{padding:6px 0}.total{font-size:18px;font-weight:700;border-top:1px solid #ccc;padding-top:10px}</style></head><body><h2 style="text-align:center">${sale.branch.name}</h2><p style="text-align:center">Receipt ${receipt.receiptNumber}<br>Order ${sale.orderNumber}<br>${new Date(receipt.issuedAt).toLocaleString()}</p><table>${rows}</table><p class="total">Total: KES ${sale.totalAmount.toLocaleString()}</p><p>${payments}</p><p style="text-align:center">Thank you for dining with us.</p><script>window.print();</script></body></html>`);
+      w.document.write(`<html><head><title>${receipt.receiptNumber}</title><style>body{font-family:Arial;padding:24px;max-width:380px;margin:auto}table{width:100%;border-collapse:collapse}td{padding:6px 0}.total{font-size:18px;font-weight:700;border-top:1px solid #ccc;padding-top:10px}</style></head><body><h2 style="text-align:center">${sale.branch.name}</h2><p style="text-align:center">Receipt ${receipt.receiptNumber}<br>Order ${sale.orderNumber}<br>${new Date(receipt.issuedAt).toLocaleString()}</p><table>${rows}</table><p class="total">Total: KES ${(sale.totalAmount || 0).toLocaleString()}</p><p>${payments}</p><p style="text-align:center">Thank you for dining with us.</p><script>window.print();</script></body></html>`);
       w.document.close();
     } catch (err: any) { setError(err.response?.data?.message || 'Failed to generate receipt'); }
   };
@@ -210,7 +210,7 @@ export default function Orders() {
                     </Badge>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
-                    KES {order.totalAmount.toLocaleString()}
+                    KES {(order.totalAmount ?? 0).toLocaleString()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
@@ -344,25 +344,25 @@ export default function Orders() {
             <div className="border-t border-orange-100 dark:border-gray-700 pt-4 space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600 dark:text-gray-400">Subtotal</span>
-                <span className="font-medium text-gray-900 dark:text-gray-100">KES {selectedOrder.subtotal.toLocaleString()}</span>
+                <span className="font-medium text-gray-900 dark:text-gray-100">KES {(selectedOrder.subtotal ?? 0).toLocaleString()}</span>
               </div>
               {selectedOrder.discountAmount > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600 dark:text-gray-400">Discount{selectedOrder.discountReason ? ` (${selectedOrder.discountReason})` : ''}</span>
-                  <span className="font-medium text-red-600 dark:text-red-400">-KES {selectedOrder.discountAmount.toLocaleString()}</span>
+                  <span className="font-medium text-red-600 dark:text-red-400">-KES {(selectedOrder.discountAmount ?? 0).toLocaleString()}</span>
                 </div>
               )}
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600 dark:text-gray-400">Tax</span>
-                <span className="font-medium text-gray-900 dark:text-gray-100">KES {selectedOrder.taxAmount.toLocaleString()}</span>
+                <span className="font-medium text-gray-900 dark:text-gray-100">KES {(selectedOrder.taxAmount ?? 0).toLocaleString()}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600 dark:text-gray-400">Service Charge</span>
-                <span className="font-medium text-gray-900 dark:text-gray-100">KES {selectedOrder.serviceChargeAmount.toLocaleString()}</span>
+                <span className="font-medium text-gray-900 dark:text-gray-100">KES {(selectedOrder.serviceChargeAmount ?? 0).toLocaleString()}</span>
               </div>
               <div className="flex justify-between text-lg font-bold text-gray-900 dark:text-gray-100">
                 <span>Total</span>
-                <span>KES {selectedOrder.totalAmount.toLocaleString()}</span>
+                <span>KES {(selectedOrder.totalAmount ?? 0).toLocaleString()}</span>
               </div>
             </div>
 

@@ -474,7 +474,7 @@ function IngredientsTab() {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{item.categoryName || '-'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{item.unit}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">KSh {item.costPerUnit.toLocaleString()}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">KSh {(item.costPerUnit ?? 0).toLocaleString()}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{item.reorderLevel}</td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <Badge variant={item.status === 'ACTIVE' ? 'success' : 'warning'}>{item.status}</Badge>
