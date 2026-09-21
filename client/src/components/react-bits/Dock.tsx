@@ -33,7 +33,7 @@ export function Dock({
       initial={{ y: 50, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.5, ease: 'easeOut' }}
-      className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 rounded-full border border-orange-500/20 bg-zinc-950/80 px-4 py-2.5 shadow-2xl shadow-black/80 backdrop-blur-xl ${className}`}
+      className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-40 items-center gap-2.5 rounded-full border border-orange-500/20 bg-zinc-950/80 px-4 py-2.5 shadow-2xl shadow-black/80 backdrop-blur-xl ${className || 'flex'}`}
       aria-label="Floating Quick Navigation"
     >
       {items.map((item, idx) => (

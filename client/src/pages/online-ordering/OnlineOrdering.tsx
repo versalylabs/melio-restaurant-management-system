@@ -265,10 +265,10 @@ export default function OnlineOrdering() {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9f7] text-slate-800 dark:bg-[#0d0d11] dark:text-gray-100 antialiased pb-28 md:pb-24 selection:bg-orange-500 selection:text-white">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#faf9f7] text-slate-800 dark:bg-[#0d0d11] dark:text-gray-100 antialiased pb-28 md:pb-24 selection:bg-orange-500 selection:text-white">
       {/* Top Header */}
-      <header className="sticky top-0 z-30 border-b border-orange-500/15 bg-black/75 backdrop-blur-xl text-white shadow-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-3.5 py-3 sm:px-6">
+      <header className="sticky top-0 z-30 w-full max-w-full border-b border-orange-500/15 bg-black/75 backdrop-blur-xl text-white shadow-md">
+        <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-3.5 py-3 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5 sm:gap-3 group shrink-0">
             <div className="grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl bg-orange-500 text-white shadow-lg shadow-orange-500/25 group-hover:scale-105 transition">
               <UtensilsCrossed size={18} className="sm:size-5" />
@@ -364,7 +364,7 @@ export default function OnlineOrdering() {
 
         {/* Mobile Branch Selector Strip (if multi-branch) */}
         {restaurant && restaurant.branches.length > 1 && (
-          <div className="md:hidden px-3.5 pb-2.5 flex items-center gap-2 overflow-x-auto scrollbar-none">
+          <div className="md:hidden w-full max-w-full min-w-0 px-3.5 pb-2.5 flex items-center gap-2 overflow-x-auto scrollbar-none">
             <span className="text-[10px] uppercase font-bold text-orange-400 shrink-0">Branch:</span>
             {restaurant.branches.map((b) => (
               <button
@@ -384,16 +384,16 @@ export default function OnlineOrdering() {
       </header>
 
       {/* Main Order Layout */}
-      <main className="mx-auto grid max-w-7xl gap-6 sm:gap-8 px-3.5 py-4 sm:px-6 sm:py-8 lg:grid-cols-[1fr_360px]">
-        <section className="space-y-4 sm:space-y-6 min-w-0">
+      <main className="mx-auto w-full max-w-7xl gap-6 sm:gap-8 px-3.5 py-4 sm:px-6 sm:py-8 lg:grid lg:grid-cols-[1fr_360px] min-w-0">
+        <section className="w-full max-w-full min-w-0 space-y-4 sm:space-y-6">
           {/* Top Hero Banner with SpotlightCard */}
-          <SpotlightCard className="p-4 sm:p-7 bg-zinc-950 border-orange-500/20 text-white shadow-2xl rounded-2xl sm:rounded-3xl">
-            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center relative z-10">
-              <div>
+          <SpotlightCard className="w-full max-w-full min-w-0 p-4 sm:p-7 bg-zinc-950 border-orange-500/20 text-white shadow-2xl rounded-2xl sm:rounded-3xl">
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center relative z-10 w-full min-w-0">
+              <div className="min-w-0">
                 <div className="inline-flex items-center gap-1.5 text-[11px] sm:text-xs font-bold uppercase tracking-widest text-orange-400 mb-1">
                   <Sparkles size={13} /> Fresh Kitchen Selection
                 </div>
-                <h1 className="font-serif text-2xl sm:text-4xl font-bold tracking-tight">
+                <h1 className="font-serif text-2xl sm:text-4xl font-bold tracking-tight break-words">
                   What are you craving today?
                 </h1>
                 <p className="mt-1 text-xs text-gray-400 max-w-md hidden sm:block">
@@ -402,7 +402,7 @@ export default function OnlineOrdering() {
               </div>
 
               {/* Search input */}
-              <div className="relative w-full md:max-w-xs">
+              <div className="relative w-full md:max-w-xs min-w-0">
                 <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 <input
                   value={search}
@@ -423,22 +423,22 @@ export default function OnlineOrdering() {
             </div>
 
             {/* Quick Micro Badges on Mobile / Full Glass on Desktop */}
-            <div className="mt-4 pt-4 border-t border-white/10">
+            <div className="mt-4 pt-4 border-t border-white/10 w-full min-w-0">
               {/* Mobile Quick Row */}
-              <div className="sm:hidden flex items-center justify-between text-[11px] text-gray-300 font-medium px-1">
-                <span className="flex items-center gap-1 text-orange-400">
+              <div className="sm:hidden flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-gray-300 font-medium">
+                <span className="inline-flex items-center gap-1 text-orange-400">
                   <Clock3 size={13} /> ~20-35 mins
                 </span>
-                <span className="flex items-center gap-1 text-amber-400">
+                <span className="inline-flex items-center gap-1 text-amber-400">
                   <Truck size={13} /> Express Delivery
                 </span>
-                <span className="flex items-center gap-1 text-emerald-400">
+                <span className="inline-flex items-center gap-1 text-emerald-400">
                   <Sparkles size={13} /> Rewards
                 </span>
               </div>
 
               {/* Desktop 3-column Glass Badges */}
-              <div className="hidden sm:grid grid-cols-3 gap-3">
+              <div className="hidden sm:grid grid-cols-3 gap-3 w-full">
                 <GlassIcon
                   icon={<Clock3 size={18} />}
                   label="Express Kitchen"
@@ -464,7 +464,7 @@ export default function OnlineOrdering() {
             </div>
 
             {/* Category Pills Bar (Edge-to-edge scrollable on mobile) */}
-            <div className="mt-4 sm:mt-6 -mx-4 px-4 sm:mx-0 sm:px-0 flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+            <div className="mt-4 sm:mt-6 w-full max-w-full min-w-0 flex gap-2 overflow-x-auto pb-1 scrollbar-none">
               <button
                 onClick={() => setActiveCategory('ALL')}
                 className={`whitespace-nowrap rounded-xl px-3.5 py-2 text-xs font-bold uppercase tracking-wider transition shrink-0 ${
@@ -492,7 +492,7 @@ export default function OnlineOrdering() {
           </SpotlightCard>
 
           {error && (
-            <div className="flex items-center justify-between gap-2 rounded-2xl border border-red-500/40 bg-red-950/60 p-4 text-xs text-red-200">
+            <div className="flex items-center justify-between gap-2 rounded-2xl border border-red-500/40 bg-red-950/60 p-4 text-xs text-red-200 w-full min-w-0">
               <div className="flex items-center gap-2">
                 <AlertCircle size={18} className="text-red-400 shrink-0" />
                 <span>{error}</span>
@@ -508,23 +508,23 @@ export default function OnlineOrdering() {
 
           {/* Menu Items Grid with Responsive Cards */}
           {menuLoading ? (
-            <div className="py-20 text-center text-gray-400 flex flex-col items-center justify-center gap-3">
+            <div className="py-20 text-center text-gray-400 flex flex-col items-center justify-center gap-3 w-full">
               <div className="h-8 w-8 animate-spin rounded-full border-3 border-orange-500 border-t-transparent" />
               <span className="text-xs uppercase tracking-widest font-sans">Refreshing Branch Menu...</span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 xl:grid-cols-3 w-full min-w-0">
               {filteredItems.map((item) => {
                 const inCart = cart.find((line) => line.id === item.id);
                 const resolvedImage = menuImage(item);
                 return (
                   <SpotlightCard
                     key={item.id}
-                    className="group flex flex-col justify-between overflow-hidden rounded-2xl sm:rounded-3xl border border-orange-500/10 bg-white shadow-sm dark:bg-zinc-900/80 dark:border-white/5 transition hover:-translate-y-1 hover:shadow-xl"
+                    className="w-full max-w-full min-w-0 group flex flex-col justify-between overflow-hidden rounded-2xl sm:rounded-3xl border border-orange-500/10 bg-white shadow-sm dark:bg-zinc-900/80 dark:border-white/5 transition hover:-translate-y-1 hover:shadow-xl"
                   >
-                    <div>
+                    <div className="w-full min-w-0">
                       {/* Image Container */}
-                      <div className="relative h-44 sm:h-48 overflow-hidden bg-zinc-950">
+                      <div className="relative h-44 sm:h-48 w-full overflow-hidden bg-zinc-950">
                         {resolvedImage ? (
                           <img
                             src={resolvedImage}
@@ -543,21 +543,21 @@ export default function OnlineOrdering() {
                       </div>
 
                       {/* Content */}
-                      <div className="p-4 sm:p-5">
-                        <h2 className="font-serif text-base sm:text-lg font-bold text-slate-950 dark:text-white group-hover:text-orange-500 transition line-clamp-1">
+                      <div className="p-4 sm:p-5 w-full min-w-0">
+                        <h2 className="font-serif text-base sm:text-lg font-bold text-slate-950 dark:text-white group-hover:text-orange-500 transition line-clamp-1 break-words">
                           {item.name}
                         </h2>
-                        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500 dark:text-gray-400">
+                        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500 dark:text-gray-400 break-words">
                           {item.description || 'Artisanal recipe prepared fresh using premium local ingredients.'}
                         </p>
                       </div>
                     </div>
 
                     {/* Footer Actions with Touch Targets */}
-                    <div className="flex items-center justify-between border-t border-slate-100 p-4 pt-3 dark:border-white/5">
+                    <div className="flex items-center justify-between border-t border-slate-100 p-4 pt-3 dark:border-white/5 w-full min-w-0">
                       <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 dark:text-gray-400">
-                        <Clock3 size={13} className="text-orange-500" />
-                        {item.preparationTime ? `${item.preparationTime} mins` : 'Freshly made'}
+                        <Clock3 size={13} className="text-orange-500 shrink-0" />
+                        <span>{item.preparationTime ? `${item.preparationTime} mins` : 'Freshly made'}</span>
                       </span>
 
                       {inCart ? (
@@ -599,7 +599,7 @@ export default function OnlineOrdering() {
           )}
 
           {!filteredItems.length && !menuLoading && (
-            <div className="py-16 text-center text-gray-400">
+            <div className="py-16 text-center text-gray-400 w-full">
               <p className="text-sm">No dishes found matching "{search}".</p>
               <button
                 onClick={() => { setSearch(''); setActiveCategory('ALL'); }}

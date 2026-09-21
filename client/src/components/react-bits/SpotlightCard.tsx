@@ -39,7 +39,7 @@ export function SpotlightCard({
       onMouseLeave={handleMouseLeave}
       whileHover={{ y: -3 }}
       transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-      className={`relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-b from-white/[0.08] to-white/[0.02] backdrop-blur-xl transition-all duration-300 ${className}`}
+      className={`relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-b from-white/[0.08] to-white/[0.02] backdrop-blur-xl transition-all duration-300 w-full min-w-0 ${className}`}
       {...(props as any)}
     >
       {/* Dynamic Cursor Spotlight Radial Mask */}
