@@ -37,7 +37,6 @@ const navigation: NavItem[] = [
     { title: 'Orders', href: '/orders', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
     { title: 'Tables', href: '/tables', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
     { title: 'Sections', href: '/sections', roles: ['OWNER','ADMIN','MANAGER'] },
-    { title: 'Table Combinations', href: '/table-combinations', roles: ['OWNER','ADMIN','MANAGER'] },
     { title: 'Kitchen', href: '/kitchen', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF'] },
     { title: 'Reservations', href: '/reservations', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
     { title: 'Branches', href: '/branches', roles: ['OWNER','ADMIN','MANAGER'] },
@@ -66,7 +65,7 @@ const navigation: NavItem[] = [
   ]},
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Operations: true });
@@ -90,7 +89,11 @@ export default function Sidebar() {
                 key={child.href}
                 to={child.disabled ? '#' : child.href}
                 onClick={(event) => {
-                  if (child.disabled) event.preventDefault();
+                  if (child.disabled) {
+                    event.preventDefault();
+                    return;
+                  }
+                  onNavigate?.();
                 }}
                 className={({ isActive }) =>
                   `flex items-center justify-between px-3 py-2 text-xs sm:text-sm rounded-xl transition-all duration-200 ${
@@ -117,6 +120,7 @@ export default function Sidebar() {
       <NavLink
         key={item.href}
         to={item.href!}
+        onClick={() => onNavigate?.()}
         className={({ isActive }) =>
           `flex items-center gap-3 px-3 py-2.5 text-xs sm:text-sm font-medium rounded-xl transition-all duration-200 ${
             isActive

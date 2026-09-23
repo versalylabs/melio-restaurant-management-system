@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Clock, Play, CheckCircle, AlertTriangle, Printer, Flag, WifiOff } from 'lucide-react';
-import { kitchenApi } from '../../services/api';
-import { getActiveBranchId } from '../../utils/branch';
+import { Clock, Play, CheckCircle, AlertTriangle, Printer, Flag, WifiOff, RefreshCw } from 'lucide-react';
+import { kitchenApi, branchApi } from '../../services/api';
+import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
 import type { KitchenTicket, KitchenStation } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
@@ -27,32 +27,56 @@ const priorityRank: Record<string, number> = { URGENT: 0, HIGH: 1, NORMAL: 2, LO
 
 export default function KitchenDisplay() {
   const { user } = useAuth();
-  const activeBranchId = getActiveBranchId(user);
+  const [activeBranchId, setActiveBranchId] = useState(() => getActiveBranchId(user));
+  const [branchName, setBranchName] = useState('');
   const [tickets, setTickets] = useState<KitchenTicket[]>([]);
   const [stations, setStations] = useState<KitchenStation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [selectedStation, setSelectedStation] = useState('');
   const [selectedTicket, setSelectedTicket] = useState<KitchenTicket | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (isManualRefresh = false) => {
+    if (isManualRefresh) setRefreshing(true);
     try {
-      const [ticketsRes, stationsRes] = await Promise.all([kitchenApi.getTickets(activeBranchId ? { branchId: activeBranchId } : undefined), kitchenApi.getStations(activeBranchId ? { branchId: activeBranchId } : undefined)]);
-      if (ticketsRes.data.success) setTickets(ticketsRes.data.data?.tickets || []);
-      if (stationsRes.data.success) {
-        const next = stationsRes.data.data?.stations || [];
-        setStations(next);
-        if (!selectedStation && next.length) setSelectedStation('');
+      const branchId = getActiveBranchId(user);
+      setActiveBranchId(branchId);
+      const [ticketsRes, stationsRes, branchRes] = await Promise.allSettled([
+        kitchenApi.getTickets(branchId ? { branchId } : undefined),
+        kitchenApi.getStations(branchId ? { branchId } : undefined),
+        branchApi.getBranches(),
+      ]);
+
+      if (ticketsRes.status === 'fulfilled' && ticketsRes.value.data?.success) {
+        setTickets(ticketsRes.value.data.data?.tickets || []);
+      } else if (ticketsRes.status === 'rejected') {
+        console.error('Failed to load tickets', ticketsRes.reason);
       }
+
+      if (stationsRes.status === 'fulfilled' && stationsRes.value.data?.success) {
+        const next = stationsRes.value.data.data?.stations || [];
+        setStations(next);
+      } else {
+        setStations([]);
+      }
+
+      if (branchRes.status === 'fulfilled' && branchRes.value.data?.success) {
+        const list = branchRes.value.data.data?.branches || [];
+        const match = list.find((b: any) => b.id === branchId);
+        setBranchName(match?.name || user?.branchName || 'Active branch');
+      }
+
       setError('');
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load kitchen data');
     } finally {
       setLoading(false);
+      if (isManualRefresh) setRefreshing(false);
     }
-  }, [activeBranchId, selectedStation]);
+  }, [user]);
 
   // Real-time Event Subscription
   const { isConnected, subscribe } = useRealtimeEvents({
@@ -85,8 +109,12 @@ export default function KitchenDisplay() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchData, 20000);
+    const unsubBranch = listenForBranchChanges(() => fetchData());
+    return () => {
+      clearInterval(interval);
+      unsubBranch();
+    };
   }, [fetchData]);
 
   const filteredTickets = tickets
@@ -127,7 +155,7 @@ export default function KitchenDisplay() {
     popup.document.close();
   };
 
-  if (loading) return <div className="flex items-center justify-center h-full"><div className="text-gray-500 dark:text-gray-400">Loading kitchen display...</div></div>;
+  if (loading && !refreshing) return <div className="flex items-center justify-center h-full"><div className="text-gray-500 dark:text-gray-400">Loading kitchen display...</div></div>;
 
   const stationName = stations.find(s => s.id === selectedStation)?.name || 'All Stations';
   const columns = [
@@ -152,14 +180,21 @@ export default function KitchenDisplay() {
             </span>
           )}
         </div>
-        <p className="text-sm text-gray-500 dark:text-gray-400">Branch: {user?.branchName || 'Not assigned'} • {stationName} • {filteredTickets.length} active tickets</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">Branch: <span className="font-semibold text-orange-600 dark:text-orange-400">{branchName || user?.branchName || 'Not assigned'}</span> • {stationName} • {filteredTickets.length} active tickets</p>
       </div>
-      <div className="flex gap-2">
-        <select value={selectedStation} onChange={e => setSelectedStation(e.target.value)} className="flex h-10 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111116] dark:text-gray-100">
+      <div className="flex items-center gap-2.5">
+        <select value={selectedStation} onChange={e => setSelectedStation(e.target.value)} className="flex h-10 rounded-xl border border-orange-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-[#111116] dark:text-gray-100">
           <option value="">All Stations</option>
           {stations.map(s => <option key={s.id} value={s.id}>{s.name}{s.branchName ? ` — ${s.branchName}` : ''}</option>)}
         </select>
-        <Button variant="secondary" onClick={fetchData} size="sm">Refresh</Button>
+        <button
+          onClick={() => fetchData(true)}
+          disabled={refreshing}
+          className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-md shadow-orange-500/20 hover:from-orange-600 hover:to-amber-600 transition-all disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Refreshing...' : 'Refresh'}
+        </button>
       </div>
     </div>
     {error && <div className="mx-4 mt-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm">{error}</div>}

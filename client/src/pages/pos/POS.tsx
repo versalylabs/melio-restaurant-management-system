@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon } from 'lucide-react';
+import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft } from 'lucide-react';
 import { orderApi, customerApi, promotionApi, restaurantApi, branchApi } from '../../services/api';
 import type { PosCategory, PosMenuItem, PosTable, SaleItem, SaleItemModifier } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
@@ -23,6 +23,7 @@ export default function POS() {
   const [categories, setCategories] = useState<PosCategory[]>([]);
   const [tables, setTables] = useState<PosTable[]>([]);
   const [loading, setLoading] = useState(true);
+  const [mobileTab, setMobileTab] = useState<'menu' | 'cart'>('menu');
   const [error, setError] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [search, setSearch] = useState('');
@@ -276,58 +277,76 @@ export default function POS() {
     );
   }
 
-  const selectedCat = categories.find((c) => c.id === selectedCategory);
-
   return (
-    <div className="h-[calc(100vh-4.25rem)] flex flex-col bg-[#faf9f7] dark:bg-[#0b0b0f]">
+    <div className="h-[calc(100vh-4.25rem)] flex flex-col bg-[#faf9f7] dark:bg-[#0b0b0f] overflow-hidden">
       {/* Top Header Toolbar */}
-      <div className="relative px-5 py-3.5 border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between bg-white/75 dark:bg-[#0e0e13]/80 backdrop-blur-xl flex-shrink-0">
+      <div className="relative px-3.5 sm:px-5 py-3 border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between bg-white/75 dark:bg-[#0e0e13]/80 backdrop-blur-xl flex-shrink-0 gap-2">
         <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-orange-400/30 dark:via-white/15 to-transparent pointer-events-none" />
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Point of Sale</h1>
-          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400">Branch: <span className="font-semibold text-orange-600 dark:text-orange-400">{activeBranchName || user?.branchName || 'Not assigned'}</span></p>
+        <div className="min-w-0">
+          <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-gray-900 dark:text-gray-100 truncate">Point of Sale</h1>
+          <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 truncate">Branch: <span className="font-semibold text-orange-600 dark:text-orange-400">{activeBranchName || user?.branchName || 'Not assigned'}</span></p>
         </div>
-        <div className="flex gap-2">
+
+        <div className="flex items-center gap-2">
+          {/* Mobile Menu / Cart Switcher Toggle */}
+          <div className="flex items-center lg:hidden bg-white/60 dark:bg-white/5 p-1 rounded-xl border border-orange-500/15 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setMobileTab('menu')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${mobileTab === 'menu' ? 'bg-orange-500 text-white shadow-sm' : 'text-gray-600 dark:text-gray-300'}`}
+            >
+              Menu
+            </button>
+            <button
+              type="button"
+              onClick={() => setMobileTab('cart')}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${mobileTab === 'cart' ? 'bg-orange-500 text-white shadow-sm' : 'text-gray-600 dark:text-gray-300'}`}
+            >
+              <ShoppingCart className="h-3 w-3" />
+              Cart {cart.length > 0 && <span className="ml-0.5 rounded-full bg-orange-600 px-1 text-[10px] text-white">{cart.reduce((s, i) => s + i.quantity, 0)}</span>}
+            </button>
+          </div>
+
           <button
             onClick={() => setShowOrderTypeModal(true)}
-            className="inline-flex items-center gap-2 rounded-xl border border-orange-500/20 bg-white/80 dark:bg-[#121218]/80 backdrop-blur-md px-3.5 py-2 text-xs sm:text-sm font-semibold text-gray-800 dark:text-gray-100 shadow-sm hover:border-orange-500/40 hover:bg-orange-50/80 dark:hover:bg-white/5 transition-all liquid-glass-card"
+            className="inline-flex items-center gap-1.5 sm:gap-2 rounded-xl border border-orange-500/20 bg-white/80 dark:bg-[#121218]/80 backdrop-blur-md px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-gray-800 dark:text-gray-100 shadow-sm hover:border-orange-500/40 hover:bg-orange-50/80 dark:hover:bg-white/5 transition-all liquid-glass-card"
           >
-            <ShoppingCart className="w-4 h-4 text-orange-500" />
-            <span>{orderType.replace('_', ' ')}</span>
+            <ShoppingCart className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-orange-500 shrink-0" />
+            <span className="truncate max-w-[80px] sm:max-w-none">{orderType.replace('_', ' ')}</span>
             {selectedTable && <span className="rounded-md bg-orange-500/15 px-1.5 py-0.5 text-xs text-orange-600 dark:text-orange-300 font-bold">{selectedTable.tableNumber}</span>}
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="mx-4 mt-4 bg-red-500/10 border border-red-500/20 backdrop-blur-md text-red-600 dark:text-red-400 px-4 py-3 rounded-2xl text-sm shadow-sm">
+        <div className="mx-4 mt-3 bg-red-500/10 border border-red-500/20 backdrop-blur-md text-red-600 dark:text-red-400 px-4 py-2.5 rounded-2xl text-xs sm:text-sm shadow-sm flex-shrink-0">
           {error}
         </div>
       )}
 
-      <div className="min-h-0 flex-1 flex overflow-hidden">
+      <div className="min-h-0 flex-1 flex flex-col lg:flex-row overflow-hidden relative">
         {/* Left menu panel */}
-        <div className="min-w-0 min-h-0 flex-1 flex flex-col overflow-hidden">
+        <div className={`min-w-0 min-h-0 flex-1 flex-col overflow-hidden ${mobileTab === 'menu' ? 'flex' : 'hidden lg:flex'}`}>
           {/* Search & Categories Toolbar */}
-          <div className="p-3.5 sm:p-4 border-b border-orange-500/10 dark:border-white/10 flex gap-3 bg-white/60 dark:bg-[#0e0e13]/60 backdrop-blur-md flex-shrink-0">
+          <div className="p-3 sm:p-4 border-b border-orange-500/10 dark:border-white/10 flex gap-3 bg-white/60 dark:bg-[#0e0e13]/60 backdrop-blur-md flex-shrink-0">
             <div className="relative flex-1">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-orange-500/70 pointer-events-none" />
               <input
                 type="text"
-                placeholder="Search menu items by name..."
+                placeholder="Search menu items..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="flex h-10 w-full rounded-xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 backdrop-blur-md text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 pl-10 pr-4 py-2 text-sm shadow-sm outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-500/15"
+                className="flex h-9 sm:h-10 w-full rounded-xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 backdrop-blur-md text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 pl-10 pr-4 py-2 text-xs sm:text-sm shadow-sm outline-none transition focus:border-orange-500 focus:ring-4 focus:ring-orange-500/15"
               />
             </div>
           </div>
 
-          <div className="p-3.5 sm:p-4 border-b border-orange-500/10 dark:border-white/10 flex gap-2 overflow-x-auto bg-white/40 dark:bg-[#0e0e13]/40 backdrop-blur-md flex-shrink-0">
+          <div className="p-2.5 sm:p-4 border-b border-orange-500/10 dark:border-white/10 flex gap-2 overflow-x-auto bg-white/40 dark:bg-[#0e0e13]/40 backdrop-blur-md flex-shrink-0 scrollbar-none">
             {categories.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
-                className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap transition-all duration-200 ${
+                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap transition-all duration-200 ${
                   selectedCategory === cat.id
                     ? 'bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-md shadow-orange-500/20'
                     : 'border border-orange-500/10 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 text-gray-700 dark:text-gray-300 hover:bg-orange-50 dark:hover:bg-white/5 hover:border-orange-500/30'
@@ -339,14 +358,14 @@ export default function POS() {
           </div>
 
           {/* Menu Items Liquid Glass Grid */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          <div className="flex-1 overflow-y-auto p-3.5 sm:p-6 pb-24 lg:pb-6">
             {selectedCat && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
                 {getFilteredItems().map((item) => (
                   <button
                     key={item.id}
                     onClick={() => handleAddItem(item)}
-                    className="group relative overflow-hidden rounded-2xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/85 backdrop-blur-xl p-3.5 text-left shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card hover:-translate-y-1 hover:border-orange-500/40 dark:hover:border-orange-500/40 hover:shadow-lg transition-all duration-300"
+                    className="group relative overflow-hidden rounded-2xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/85 backdrop-blur-xl p-3 sm:p-3.5 text-left shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card hover:-translate-y-1 hover:border-orange-500/40 dark:hover:border-orange-500/40 hover:shadow-lg transition-all duration-300 flex flex-col justify-between"
                   >
                     {/* Top Specular Glare Sheen */}
                     <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/50 dark:via-white/20 to-transparent pointer-events-none" />
@@ -355,21 +374,21 @@ export default function POS() {
                     <div className="absolute -top-10 -right-10 h-24 w-24 rounded-full bg-orange-500/10 dark:bg-orange-500/5 blur-xl pointer-events-none group-hover:scale-150 transition-transform duration-500" />
 
                     <div className="relative z-10 flex flex-col h-full">
-                      <div className="aspect-square bg-gradient-to-br from-orange-500/5 to-amber-500/5 dark:bg-white/5 border border-orange-500/10 dark:border-white/5 rounded-xl mb-3 flex items-center justify-center overflow-hidden">
+                      <div className="aspect-square bg-gradient-to-br from-orange-500/5 to-amber-500/5 dark:bg-white/5 border border-orange-500/10 dark:border-white/5 rounded-xl mb-2.5 sm:mb-3 flex items-center justify-center overflow-hidden">
                         {item.image ? (
                           <img src={item.image} alt={item.name} className="w-full h-full object-cover rounded-xl transition-transform duration-300 group-hover:scale-105" />
                         ) : (
-                          <span className="text-3xl drop-shadow-sm">🍽️</span>
+                          <span className="text-2xl sm:text-3xl drop-shadow-sm">🍽️</span>
                         )}
                       </div>
-                      <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-sm truncate tracking-tight">{item.name}</h3>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed flex-1">{item.description || 'Freshly prepared specialty'}</p>
-                      <div className="mt-3 flex items-center justify-between pt-2 border-t border-orange-500/10 dark:border-white/5">
-                        <span className="text-sm font-bold bg-gradient-to-r from-orange-600 to-amber-600 dark:from-orange-400 dark:to-amber-400 bg-clip-text text-transparent">
+                      <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-xs sm:text-sm truncate tracking-tight">{item.name}</h3>
+                      <p className="text-[11px] sm:text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2 leading-relaxed flex-1">{item.description || 'Fresh specialty item'}</p>
+                      <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-orange-500/10 dark:border-white/5">
+                        <span className="text-xs sm:text-sm font-bold bg-gradient-to-r from-orange-600 to-amber-600 dark:from-orange-400 dark:to-amber-400 bg-clip-text text-transparent">
                           KES {(item.sellingPrice ?? 0).toLocaleString()}
                         </span>
-                        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-orange-500/10 text-orange-500 dark:bg-orange-500/20 group-hover:bg-orange-500 group-hover:text-white transition-colors">
-                          <Plus className="h-3.5 w-3.5" />
+                        <span className="flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-lg bg-orange-500/10 text-orange-500 dark:bg-orange-500/20 group-hover:bg-orange-500 group-hover:text-white transition-colors">
+                          <Plus className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                         </span>
                       </div>
                     </div>
@@ -383,19 +402,45 @@ export default function POS() {
               </div>
             )}
           </div>
+
+          {/* Floating Mobile Cart summary bar when on mobile and in menu tab */}
+          {cart.length > 0 && mobileTab === 'menu' && (
+            <div className="lg:hidden absolute bottom-3 inset-x-3 p-3 rounded-2xl border border-orange-500/30 bg-white/95 dark:bg-[#121218]/95 backdrop-blur-2xl flex items-center justify-between shadow-2xl z-20 liquid-glass-card animate-in slide-in-from-bottom duration-200">
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{cart.reduce((s, i) => s + i.quantity, 0)} items in order</p>
+                <p className="text-base font-extrabold text-orange-600 dark:text-orange-400">KES {getPreviewTotals().total.toLocaleString()}</p>
+              </div>
+              <button
+                onClick={() => setMobileTab('cart')}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg shadow-orange-500/30 active:scale-95 transition-transform"
+              >
+                <ShoppingCart className="h-4 w-4" /> View Cart →
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Right cart & order panel */}
-        <div className="min-h-0 w-[min(100%,28rem)] shrink-0 border-l border-orange-500/10 dark:border-white/10 flex flex-col bg-white/80 dark:bg-[#0e0e13]/85 backdrop-blur-2xl shadow-xl">
+        <div className={`min-h-0 w-full lg:w-[min(100%,28rem)] shrink-0 border-l border-orange-500/10 dark:border-white/10 flex-col bg-white/80 dark:bg-[#0e0e13]/85 backdrop-blur-2xl shadow-xl ${mobileTab === 'cart' ? 'flex' : 'hidden lg:flex'}`}>
           <div className="p-4 border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">Current Order</h2>
-              {selectedTable && (
-                <div className="flex items-center gap-1.5 mt-1 text-xs font-semibold text-orange-600 dark:text-orange-400">
-                  <TableIcon className="w-3.5 h-3.5" />
-                  Table {selectedTable.tableNumber}
-                </div>
-              )}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMobileTab('menu')}
+                className="lg:hidden p-1.5 -ml-1 rounded-xl text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white bg-orange-500/10 hover:bg-orange-500/20"
+                title="Back to menu"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+              <div>
+                <h2 className="text-base font-bold text-gray-900 dark:text-gray-100">Current Order</h2>
+                {selectedTable && (
+                  <div className="flex items-center gap-1.5 mt-0.5 text-xs font-semibold text-orange-600 dark:text-orange-400">
+                    <TableIcon className="w-3.5 h-3.5" />
+                    Table {selectedTable.tableNumber}
+                  </div>
+                )}
+              </div>
             </div>
             {cart.length > 0 && (
               <span className="rounded-full bg-orange-500/10 border border-orange-500/20 px-2.5 py-0.5 text-xs font-bold text-orange-600 dark:text-orange-400">

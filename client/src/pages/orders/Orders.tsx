@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Eye, Trash2, CreditCard, Printer } from 'lucide-react';
+import { Search, Eye, Trash2, CreditCard, Printer, RefreshCw } from 'lucide-react';
 import { orderApi, paymentApi } from '../../services/api';
 import type { Sale } from '../../types';
 import Card from '../../components/ui/Card';
@@ -12,6 +12,7 @@ export default function Orders() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
@@ -26,7 +27,8 @@ export default function Orders() {
   const [tendered, setTendered] = useState('');
   const [paymentBusy, setPaymentBusy] = useState(false);
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (isManualRefresh = false) => {
+    if (isManualRefresh) setRefreshing(true);
     try {
       const activeBranchId = getActiveBranchId(user);
       const params: any = { page: page.toString(), limit: '20', ...(activeBranchId ? { branchId: activeBranchId } : {}) };
@@ -42,6 +44,7 @@ export default function Orders() {
       setError(err.response?.data?.message || 'Failed to load orders');
     } finally {
       setLoading(false);
+      if (isManualRefresh) setRefreshing(false);
     }
   };
 
@@ -85,7 +88,7 @@ export default function Orders() {
 
   useEffect(() => {
     fetchOrders();
-    return listenForBranchChanges(fetchOrders);
+    return listenForBranchChanges(() => fetchOrders());
   }, [page, search, filterStatus, filterType, user?.id]);
 
   const handleViewOrder = async (order: Sale) => {
@@ -111,7 +114,7 @@ export default function Orders() {
     }
   };
 
-  if (loading) {
+  if (loading && !refreshing) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-gray-500 dark:text-gray-400">Loading orders...</div>
@@ -121,11 +124,19 @@ export default function Orders() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Orders</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Manage restaurant orders</p>
         </div>
+        <button
+          onClick={() => fetchOrders(true)}
+          disabled={refreshing}
+          className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-md shadow-orange-500/20 hover:from-orange-600 hover:to-amber-600 transition-all disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Refreshing...' : 'Refresh Orders'}
+        </button>
       </div>
 
       {error && (

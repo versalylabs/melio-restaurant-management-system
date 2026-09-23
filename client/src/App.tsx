@@ -189,11 +189,6 @@ function App() {
             <Sections />
           </ProtectedRoute>
         } />
-        <Route path="/table-combinations" element={
-          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
-            <TableCombinations />
-          </ProtectedRoute>
-        } />
         <Route path="/kitchen" element={
           <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'CHEF']}>
             <KitchenDisplay />

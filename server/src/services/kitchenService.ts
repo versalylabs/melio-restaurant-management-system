@@ -9,7 +9,7 @@ import { notifyCustomerOrderUpdate } from './customerNotificationService';
 
 export const getKitchenStations = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
-  const branchId = req.user!.branchId;
+  const branchId = (req.query.branchId as string) || req.user!.branchId;
   const { status } = req.query;
 
   const where: any = { restaurantId };
@@ -177,7 +177,7 @@ export const removeMenuItemFromStation = async (req: AuthRequest, res: ExpressRe
 
 export const getKitchenTickets = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
-  const branchId = req.user!.branchId;
+  const branchId = (req.query.branchId as string) || req.user!.branchId;
   const { status, stationId, startDate, endDate } = req.query;
 
   const where: any = { restaurantId };
@@ -260,7 +260,7 @@ export const getKitchenTickets = async (req: AuthRequest, res: ExpressResponse) 
           quantity: item.quantity,
           notes: item.notes,
           status: item.status,
-          modifiers: item.saleItem.modifiers.map((m) => ({ optionNameSnapshot: m.optionNameSnapshot, priceAdjustment: m.priceAdjustment })),
+          modifiers: item.saleItem?.modifiers ? item.saleItem.modifiers.map((m) => ({ optionNameSnapshot: m.optionNameSnapshot, priceAdjustment: m.priceAdjustment })) : [],
           stationIds: (stationsByMenuItem.get(item.menuItemId) || []).map((station) => station.id),
           stationNames: (stationsByMenuItem.get(item.menuItemId) || []).map((station) => station.name),
         })),

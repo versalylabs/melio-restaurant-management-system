@@ -86,8 +86,14 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
 
       {/* Mobile Drawer Sidebar */}
       {mobileSidebarOpen && (
-        <div className="fixed inset-0 z-50 flex lg:hidden bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="relative w-64 max-w-[80vw] h-full bg-white/95 dark:bg-[#111116]/95 backdrop-blur-2xl border-r border-orange-500/10 dark:border-white/10 shadow-2xl flex flex-col">
+        <div
+          className="fixed inset-0 z-50 flex lg:hidden bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
+          onClick={() => setMobileSidebarOpen(false)}
+        >
+          <div
+            className="relative w-64 max-w-[80vw] h-full bg-white/95 dark:bg-[#111116]/95 backdrop-blur-2xl border-r border-orange-500/10 dark:border-white/10 shadow-2xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
               onClick={() => setMobileSidebarOpen(false)}
               className="absolute top-4 right-4 p-1.5 rounded-lg text-gray-400 hover:text-white bg-white/5"
@@ -95,8 +101,8 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
             >
               <X size={18} />
             </button>
-            <div className="h-full overflow-y-auto" onClick={() => setMobileSidebarOpen(false)}>
-              <Sidebar />
+            <div className="h-full overflow-y-auto">
+              <Sidebar onNavigate={() => setMobileSidebarOpen(false)} />
             </div>
           </div>
         </div>
