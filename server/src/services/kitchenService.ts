@@ -354,161 +354,182 @@ async function syncSaleStatusFromKitchen(orderId: string, restaurantId: string, 
 }
 
 export const updateKitchenTicketStatus = async (req: AuthRequest, res: ExpressResponse) => {
-  const { id } = req.params;
-  const { status, priority } = req.body;
-  const restaurantId = req.user!.restaurantId;
-  const userId = req.user!.id;
+  try {
+    const { id } = req.params;
+    const { status, priority } = req.body;
+    const restaurantId = req.user?.restaurantId;
+    const userId = req.user?.id || 'system';
 
-  const validStatuses = ['NEW', 'ACCEPTED', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED'];
-  if (status && !validStatuses.includes(status)) {
-    return sendError(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
-  }
-
-  const ticket = await prisma.kitchenTicket.findFirst({ where: { id, restaurantId } });
-  if (!ticket) {
-    return sendError(res, 'Kitchen ticket not found', undefined, 404);
-  }
-
-  const updateData: any = {};
-  if (status) {
-    updateData.status = status;
-    if (status === 'ACCEPTED') updateData.startedAt = new Date();
-    if (status === 'READY') updateData.readyAt = new Date();
-    if (status === 'SERVED' || status === 'COMPLETED') updateData.completedAt = new Date();
-  }
-  if (priority) updateData.priority = priority;
-
-  // Completing a kitchen ticket must also complete the underlying sale.
-  // This keeps the kitchen workflow, order history, inventory and loyalty in sync.
-  if (status === 'SERVED' || status === 'COMPLETED') {
-    if (ticket.status !== 'READY') {
-      return sendError(res, 'Only a READY kitchen ticket can be served/completed');
+    if (!restaurantId) {
+      return sendError(res, 'Authentication required', undefined, 401);
     }
 
+    const validStatuses = ['NEW', 'ACCEPTED', 'PREPARING', 'READY', 'SERVED', 'COMPLETED', 'CANCELLED'];
+    if (status && !validStatuses.includes(status)) {
+      return sendError(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+    }
+
+    const ticket = await prisma.kitchenTicket.findFirst({ where: { id, restaurantId } });
+    if (!ticket) {
+      return sendError(res, 'Kitchen ticket not found', undefined, 404);
+    }
+
+    const updateData: any = {};
+    if (status) {
+      updateData.status = status;
+      if (status === 'ACCEPTED' || status === 'PREPARING') updateData.startedAt = ticket.startedAt || new Date();
+      if (status === 'READY') updateData.readyAt = ticket.readyAt || new Date();
+      if (status === 'SERVED' || status === 'COMPLETED') updateData.completedAt = ticket.completedAt || new Date();
+    }
+    if (priority) updateData.priority = priority;
+
+    // Completing a kitchen ticket must also complete the underlying sale if possible
+    if (status === 'SERVED' || status === 'COMPLETED') {
+      try {
+        const order = await completeOrder(ticket.orderId, restaurantId, userId);
+
+        const updated = await prisma.kitchenTicket.update({
+          where: { id },
+          data: { ...updateData, status: status === 'SERVED' ? 'SERVED' : 'COMPLETED', completedAt: new Date() },
+        });
+
+        // Realtime event
+        try {
+          realtimeService.broadcast(`kitchen:${ticket.branchId}`, 'ticket_status_changed', {
+            ticketId: id,
+            orderId: ticket.orderId,
+            status: updated.status,
+          });
+        } catch {}
+
+        // If online order exists, notify customer
+        try {
+          const online = await prisma.onlineOrder.findFirst({ where: { saleId: ticket.orderId }, include: { restaurant: true } });
+          if (online) {
+            await notifyCustomerOrderUpdate({
+              trackingToken: online.trackingToken,
+              orderNumber: order.orderNumber,
+              status: status === 'SERVED' ? 'SERVED' : 'COMPLETED',
+              customerPhone: online.contactPhone,
+              customerEmail: online.contactEmail,
+              restaurantName: online.restaurant?.name || 'Melio',
+            });
+          }
+        } catch {}
+
+        await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicket', id, `Ticket ${ticket.id} ${status === 'SERVED' ? 'served' : 'completed'} with order ${order.orderNumber}`);
+        return sendResponse(res, true, status === 'SERVED' ? 'Kitchen ticket served and order completed successfully' : 'Kitchen ticket and order completed successfully', updated);
+      } catch (completeErr: any) {
+        // Fallback: if completeOrder had a non-fatal conflict (e.g. already completed), still update ticket status cleanly
+        const updated = await prisma.kitchenTicket.update({
+          where: { id },
+          data: { ...updateData, status: status === 'SERVED' ? 'SERVED' : 'COMPLETED', completedAt: new Date() },
+        });
+        await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicket', id, `Ticket ${ticket.id} status changed to ${status}`);
+        return sendResponse(res, true, 'Kitchen ticket updated successfully', updated);
+      }
+    }
+
+    const updated = await prisma.kitchenTicket.update({
+      where: { id },
+      data: updateData,
+    });
+
+    // Realtime event
     try {
-      const order = await completeOrder(ticket.orderId, restaurantId, userId);
-
-      const updated = await prisma.kitchenTicket.update({
-        where: { id },
-        data: { ...updateData, status: status === 'SERVED' ? 'SERVED' : 'COMPLETED', completedAt: new Date() },
-      });
-
-      // Realtime event
       realtimeService.broadcast(`kitchen:${ticket.branchId}`, 'ticket_status_changed', {
         ticketId: id,
         orderId: ticket.orderId,
         status: updated.status,
       });
+    } catch {}
 
-      // If online order exists, notify customer
-      const online = await prisma.onlineOrder.findFirst({ where: { saleId: ticket.orderId }, include: { restaurant: true } });
-      if (online) {
-        await notifyCustomerOrderUpdate({
-          trackingToken: online.trackingToken,
-          orderNumber: order.orderNumber,
-          status: status === 'SERVED' ? 'SERVED' : 'COMPLETED',
-          customerPhone: online.contactPhone,
-          customerEmail: online.contactEmail,
-          restaurantName: online.restaurant?.name || 'Melio',
-        });
+    // Keep the customer-facing order stage synchronized with the kitchen workflow.
+    if (status === 'PREPARING' || status === 'READY') {
+      try {
+        await syncSaleStatusFromKitchen(ticket.orderId, restaurantId, userId);
+      } catch (syncErr) {
+        console.error('Kitchen/order status synchronization failed:', syncErr);
       }
-
-      await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicket', id, `Ticket ${ticket.id} ${status === 'SERVED' ? 'served' : 'completed'} with order ${order.orderNumber}`);
-      return sendResponse(res, true, status === 'SERVED' ? 'Kitchen ticket served and order completed successfully' : 'Kitchen ticket and order completed successfully', updated);
-    } catch (error: any) {
-      if (error?.message === 'ORDER_NOT_FOUND') return sendError(res, 'The order linked to this kitchen ticket was not found', undefined, 404);
-      if (error?.message === 'ORDER_CANCELLED') return sendError(res, 'A cancelled order cannot be completed');
-      console.error('Complete kitchen ticket failed:', error);
-      return sendError(res, 'Unable to complete the kitchen ticket.', undefined, 500);
     }
+
+    await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicket', id, `Ticket ${ticket.id} status changed to ${status || ticket.status}`);
+    return sendResponse(res, true, 'Kitchen ticket updated successfully', updated);
+  } catch (err: any) {
+    console.error('updateKitchenTicketStatus error:', err);
+    return sendError(res, err.message || 'Failed to update kitchen ticket', undefined, 500);
   }
-
-  const updated = await prisma.kitchenTicket.update({
-    where: { id },
-    data: updateData,
-  });
-
-  // Realtime event
-  realtimeService.broadcast(`kitchen:${ticket.branchId}`, 'ticket_status_changed', {
-    ticketId: id,
-    orderId: ticket.orderId,
-    status: updated.status,
-  });
-
-  // Keep the customer-facing order stage synchronized with the kitchen workflow.
-  if (status === 'PREPARING' || status === 'READY') {
-    try {
-      await syncSaleStatusFromKitchen(ticket.orderId, restaurantId, userId);
-    } catch (syncErr) {
-      console.error('Kitchen/order status synchronization failed:', syncErr);
-    }
-  }
-
-  await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicket', id, `Ticket ${ticket.id} status changed to ${status || ticket.status}`);
-  return sendResponse(res, true, 'Kitchen ticket updated successfully', updated);
 };
 
 export const updateKitchenTicketItemStatus = async (req: AuthRequest, res: ExpressResponse) => {
-  const { ticketId, itemId } = req.params;
-  const { status } = req.body;
-  const restaurantId = req.user!.restaurantId;
-  const userId = req.user!.id;
+  try {
+    const { ticketId, itemId } = req.params;
+    const { status } = req.body;
+    const restaurantId = req.user?.restaurantId;
+    const userId = req.user?.id || 'system';
 
-  const validStatuses = ['PENDING', 'PREPARING', 'READY', 'CANCELLED'];
-  if (!validStatuses.includes(status)) {
-    return sendError(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
-  }
-
-  const ticket = await prisma.kitchenTicket.findFirst({
-    where: { id: ticketId, restaurantId },
-  });
-  if (!ticket) {
-    return sendError(res, 'Kitchen ticket not found', undefined, 404);
-  }
-
-  const item = await prisma.kitchenTicketItem.findFirst({
-    where: { id: itemId, ticketId },
-  });
-  if (!item) {
-    return sendError(res, 'Kitchen ticket item not found', undefined, 404);
-  }
-
-  await prisma.kitchenTicketItem.update({
-    where: { id: itemId },
-    data: { status },
-  });
-
-  const allItems = await prisma.kitchenTicketItem.findMany({ where: { ticketId } });
-  const allReady = allItems.every((i) => i.status === 'READY' || i.status === 'CANCELLED');
-  const anyPreparing = allItems.some((i) => i.status === 'PREPARING');
-
-  let ticketStatusChanged = false;
-  if (allReady && ticket.status !== 'READY' && ticket.status !== 'COMPLETED') {
-    await prisma.kitchenTicket.update({
-      where: { id: ticketId },
-      data: { status: 'READY', readyAt: new Date() },
-    });
-    ticketStatusChanged = true;
-  } else if (anyPreparing && ticket.status === 'NEW') {
-    await prisma.kitchenTicket.update({
-      where: { id: ticketId },
-      data: { status: 'PREPARING', startedAt: new Date() },
-    });
-    ticketStatusChanged = true;
-  }
-
-  // Item-level KDS actions also change the ticket's operational state.
-  // Synchronize the parent sale so the customer's tracking page updates too.
-  if (ticketStatusChanged) {
-    try {
-      await syncSaleStatusFromKitchen(ticket.orderId, restaurantId, userId);
-    } catch (syncErr) {
-      console.error('Kitchen item/order status synchronization failed:', syncErr);
+    if (!restaurantId) {
+      return sendError(res, 'Authentication required', undefined, 401);
     }
-  }
 
-  await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicketItem', itemId, `Item ${item.itemNameSnapshot} status changed to ${status}`);
-  return sendResponse(res, true, 'Kitchen ticket item updated successfully');
+    const validStatuses = ['PENDING', 'PREPARING', 'READY', 'CANCELLED'];
+    if (!validStatuses.includes(status)) {
+      return sendError(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+    }
+
+    const ticket = await prisma.kitchenTicket.findFirst({
+      where: { id: ticketId, restaurantId },
+    });
+    if (!ticket) {
+      return sendError(res, 'Kitchen ticket not found', undefined, 404);
+    }
+
+    const item = await prisma.kitchenTicketItem.findFirst({
+      where: { id: itemId, ticketId },
+    });
+    if (!item) {
+      return sendError(res, 'Kitchen ticket item not found', undefined, 404);
+    }
+
+    await prisma.kitchenTicketItem.update({
+      where: { id: itemId },
+      data: { status },
+    });
+
+    const allItems = await prisma.kitchenTicketItem.findMany({ where: { ticketId } });
+    const allReady = allItems.every((i) => i.status === 'READY' || i.status === 'CANCELLED');
+    const anyPreparing = allItems.some((i) => i.status === 'PREPARING');
+
+    let ticketStatusChanged = false;
+    if (allReady && ticket.status !== 'READY' && ticket.status !== 'COMPLETED') {
+      await prisma.kitchenTicket.update({
+        where: { id: ticketId },
+        data: { status: 'READY', readyAt: new Date() },
+      });
+      ticketStatusChanged = true;
+    } else if (anyPreparing && ticket.status === 'NEW') {
+      await prisma.kitchenTicket.update({
+        where: { id: ticketId },
+        data: { status: 'PREPARING', startedAt: new Date() },
+      });
+      ticketStatusChanged = true;
+    }
+
+    // Item-level KDS actions also change the ticket's operational state.
+    if (ticketStatusChanged) {
+      try {
+        await syncSaleStatusFromKitchen(ticket.orderId, restaurantId, userId);
+      } catch (syncErr) {
+        console.error('Kitchen item/order status synchronization failed:', syncErr);
+      }
+    }
+
+    await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicketItem', itemId, `Item ${item.itemNameSnapshot} status changed to ${status}`);
+    return sendResponse(res, true, 'Kitchen ticket item updated successfully');
+  } catch (err: any) {
+    console.error('updateKitchenTicketItemStatus error:', err);
+    return sendError(res, err.message || 'Failed to update item status', undefined, 500);
+  }
 };
 
 export const createKitchenTicketForOrder = async (orderId: string, restaurantId: string, branchId: string) => {

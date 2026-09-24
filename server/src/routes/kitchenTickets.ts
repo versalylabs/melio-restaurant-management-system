@@ -13,7 +13,7 @@ router.use(authenticate);
 
 router.get('/tickets', getKitchenTickets);
 router.get('/tickets/:id', getKitchenTicket);
-router.patch('/tickets/:id/status', authorize('OWNER', 'ADMIN', 'MANAGER', 'CHEF'), updateKitchenTicketStatus);
-router.patch('/tickets/:ticketId/items/:itemId/status', authorize('OWNER', 'ADMIN', 'MANAGER', 'CHEF'), updateKitchenTicketItemStatus);
+router.patch('/tickets/:id/status', authorize('OWNER', 'ADMIN', 'MANAGER', 'CHEF', 'CASHIER', 'WAITER', 'STAFF', 'COOK', 'BARISTA', 'KITCHEN'), updateKitchenTicketStatus);
+router.patch('/tickets/:ticketId/items/:itemId/status', authorize('OWNER', 'ADMIN', 'MANAGER', 'CHEF', 'CASHIER', 'WAITER', 'STAFF', 'COOK', 'BARISTA', 'KITCHEN'), updateKitchenTicketItemStatus);
 
 export default router;

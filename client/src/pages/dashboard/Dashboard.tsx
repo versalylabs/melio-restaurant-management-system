@@ -132,8 +132,34 @@ export default function Dashboard() {
 
   useEffect(() => { fetchMetrics(); }, []);
 
-  if (loading) return <div className="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400">Loading your dashboard...</div>;
-  if (error) return <div className="flex h-full items-center justify-center text-red-600 dark:text-red-400">{error}</div>;
+  if (loading) return (
+    <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <RefreshCw className="h-7 w-7 animate-spin text-orange-500" />
+        <span className="text-sm font-medium text-gray-500 dark:text-gray-400">Loading your dashboard...</span>
+      </div>
+    </div>
+  );
+
+  if (error) return (
+    <div className="flex h-[calc(100vh-4rem)] items-center justify-center p-4">
+      <LiquidGlass glowColor="orange" blur="xl" className="max-w-md w-full p-6 text-center space-y-4">
+        <div className="mx-auto w-12 h-12 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-500">
+          <UtensilsCrossed className="w-6 h-6" />
+        </div>
+        <div>
+          <h3 className="text-lg font-bold text-gray-900 dark:text-white">Unable to Load Dashboard</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{error}</p>
+        </div>
+        <button
+          onClick={() => { setLoading(true); fetchMetrics(); }}
+          className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-orange-500/20 hover:from-orange-600 hover:to-amber-600 transition-all"
+        >
+          <RefreshCw className="h-4 w-4" /> Try Again
+        </button>
+      </LiquidGlass>
+    </div>
+  );
 
   const data = metrics?.metrics;
   const orderTypes = metrics?.orderTypes || [];

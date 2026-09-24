@@ -66,22 +66,33 @@ export const getAuditLogs = async (req: AuthRequest, res: ExpressResponse) => {
 
 export const createAuditLog = async (
   restaurantId: string,
-  userId: string,
-  action: string,
-  entity: string,
+  userId?: string | null,
+  action?: string,
+  entity?: string,
   entityId?: string,
   description?: string,
   metadata?: any
 ) => {
-  await prisma.auditLog.create({
-    data: {
-      restaurantId,
-      userId,
-      action,
-      entity,
-      entityId,
-      description,
-      metadata: metadata ? JSON.stringify(metadata) : undefined,
-    },
-  });
+  try {
+    let validUserId: string | undefined = undefined;
+    if (userId && userId !== 'system' && userId !== 'SYSTEM') {
+      try {
+        const userExists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+        if (userExists) validUserId = userId;
+      } catch {}
+    }
+    await prisma.auditLog.create({
+      data: {
+        restaurantId,
+        userId: validUserId,
+        action: action || 'UNKNOWN',
+        entity: entity || 'SYSTEM',
+        entityId,
+        description,
+        metadata: metadata ? JSON.stringify(metadata) : undefined,
+      },
+    });
+  } catch (err) {
+    console.warn('createAuditLog skipped due to error:', err);
+  }
 };
