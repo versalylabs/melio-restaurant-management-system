@@ -87,13 +87,18 @@ export default function POS() {
   };
 
   const getFilteredItems = (): PosMenuItem[] => {
-    const category = categories.find((c) => c.id === selectedCategory);
-    if (!category) return [];
-    let items = category.items;
-    if (search) {
-      items = items.filter((item) => item.name.toLowerCase().includes(search.toLowerCase()));
+    if (search.trim()) {
+      const allItems = categories.flatMap((c) => c.items || []);
+      const uniqueItems = Array.from(new Map(allItems.map((item) => [item.id, item])).values());
+      return uniqueItems.filter(
+        (item) =>
+          item.name.toLowerCase().includes(search.toLowerCase()) ||
+          (item.description && item.description.toLowerCase().includes(search.toLowerCase()))
+      );
     }
-    return items;
+    const category = categories.find((c) => c.id === selectedCategory) || categories[0];
+    if (!category) return [];
+    return category.items || [];
   };
 
   const calculateCartTotal = () => {
@@ -359,48 +364,46 @@ export default function POS() {
 
           {/* Menu Items Liquid Glass Grid */}
           <div className="flex-1 overflow-y-auto p-3.5 sm:p-6 pb-24 lg:pb-6">
-            {selectedCat && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
-                {getFilteredItems().map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => handleAddItem(item)}
-                    className="group relative overflow-hidden rounded-2xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/85 backdrop-blur-xl p-3 sm:p-3.5 text-left shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card hover:-translate-y-1 hover:border-orange-500/40 dark:hover:border-orange-500/40 hover:shadow-lg transition-all duration-300 flex flex-col justify-between"
-                  >
-                    {/* Top Specular Glare Sheen */}
-                    <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/50 dark:via-white/20 to-transparent pointer-events-none" />
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4">
+              {getFilteredItems().map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => handleAddItem(item)}
+                  className="group relative overflow-hidden rounded-2xl border border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/85 backdrop-blur-xl p-3 sm:p-3.5 text-left shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card hover:-translate-y-1 hover:border-orange-500/40 dark:hover:border-orange-500/40 hover:shadow-lg transition-all duration-300 flex flex-col justify-between"
+                >
+                  {/* Top Specular Glare Sheen */}
+                  <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/50 dark:via-white/20 to-transparent pointer-events-none" />
 
-                    {/* Prismatic Corner Glow */}
-                    <div className="absolute -top-10 -right-10 h-24 w-24 rounded-full bg-orange-500/10 dark:bg-orange-500/5 blur-xl pointer-events-none group-hover:scale-150 transition-transform duration-500" />
+                  {/* Prismatic Corner Glow */}
+                  <div className="absolute -top-10 -right-10 h-24 w-24 rounded-full bg-orange-500/10 dark:bg-orange-500/5 blur-xl pointer-events-none group-hover:scale-150 transition-transform duration-500" />
 
-                    <div className="relative z-10 flex flex-col h-full">
-                      <div className="aspect-square bg-gradient-to-br from-orange-500/5 to-amber-500/5 dark:bg-white/5 border border-orange-500/10 dark:border-white/5 rounded-xl mb-2.5 sm:mb-3 flex items-center justify-center overflow-hidden">
-                        {item.image ? (
-                          <img src={item.image} alt={item.name} className="w-full h-full object-cover rounded-xl transition-transform duration-300 group-hover:scale-105" />
-                        ) : (
-                          <span className="text-2xl sm:text-3xl drop-shadow-sm">🍽️</span>
-                        )}
-                      </div>
-                      <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-xs sm:text-sm truncate tracking-tight">{item.name}</h3>
-                      <p className="text-[11px] sm:text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2 leading-relaxed flex-1">{item.description || 'Fresh specialty item'}</p>
-                      <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-orange-500/10 dark:border-white/5">
-                        <span className="text-xs sm:text-sm font-bold bg-gradient-to-r from-orange-600 to-amber-600 dark:from-orange-400 dark:to-amber-400 bg-clip-text text-transparent">
-                          KES {(item.sellingPrice ?? 0).toLocaleString()}
-                        </span>
-                        <span className="flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-lg bg-orange-500/10 text-orange-500 dark:bg-orange-500/20 group-hover:bg-orange-500 group-hover:text-white transition-colors">
-                          <Plus className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
-                        </span>
-                      </div>
+                  <div className="relative z-10 flex flex-col h-full">
+                    <div className="aspect-square bg-gradient-to-br from-orange-500/5 to-amber-500/5 dark:bg-white/5 border border-orange-500/10 dark:border-white/5 rounded-xl mb-2.5 sm:mb-3 flex items-center justify-center overflow-hidden">
+                      {item.image ? (
+                        <img src={item.image} alt={item.name} className="w-full h-full object-cover rounded-xl transition-transform duration-300 group-hover:scale-105" />
+                      ) : (
+                        <span className="text-2xl sm:text-3xl drop-shadow-sm">🍽️</span>
+                      )}
                     </div>
-                  </button>
-                ))}
-                {getFilteredItems().length === 0 && (
-                  <div className="col-span-full text-center py-16 text-gray-500 dark:text-gray-400">
-                    <p className="text-sm">No items found in this category</p>
+                    <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-xs sm:text-sm truncate tracking-tight">{item.name}</h3>
+                    <p className="text-[11px] sm:text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2 leading-relaxed flex-1">{item.description || 'Fresh specialty item'}</p>
+                    <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-orange-500/10 dark:border-white/5">
+                      <span className="text-xs sm:text-sm font-bold bg-gradient-to-r from-orange-600 to-amber-600 dark:from-orange-400 dark:to-amber-400 bg-clip-text text-transparent">
+                        KES {(item.sellingPrice ?? 0).toLocaleString()}
+                      </span>
+                      <span className="flex h-5 w-5 sm:h-6 sm:w-6 items-center justify-center rounded-lg bg-orange-500/10 text-orange-500 dark:bg-orange-500/20 group-hover:bg-orange-500 group-hover:text-white transition-colors">
+                        <Plus className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                      </span>
+                    </div>
                   </div>
-                )}
-              </div>
-            )}
+                </button>
+              ))}
+              {getFilteredItems().length === 0 && (
+                <div className="col-span-full text-center py-16 text-gray-500 dark:text-gray-400">
+                  <p className="text-sm">No items found in this category</p>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Floating Mobile Cart summary bar when on mobile and in menu tab */}
