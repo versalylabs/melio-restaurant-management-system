@@ -4,6 +4,8 @@ import { dashboardApi } from '../../services/api';
 import type { DashboardMetrics } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { LiquidGlass } from '../../components/react-bits';
+import { OptimizedImage } from '../../components/common/OptimizedImage';
+import { preloadImages } from '../../utils/imagePreloader';
 
 const money = (value: number) => `KSh ${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -117,12 +119,20 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const fetchMetrics = async () => {
+  const fetchMetrics = async (isManual = false) => {
     setError('');
+    if (isManual) setLoading(true);
     try {
-      const response = await dashboardApi.getMetrics();
-      if (response.data.success) setMetrics(response.data.data);
-      else setError(response.data.message || 'Failed to load dashboard');
+      const response = await dashboardApi.getMetrics({ refresh: isManual });
+      if (response.data.success) {
+        const loaded = response.data.data;
+        setMetrics(loaded);
+        if (loaded?.topMenuItems?.length) {
+          preloadImages(loaded.topMenuItems.map((i: any) => i.image));
+        }
+      } else {
+        setError(response.data.message || 'Failed to load dashboard');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load dashboard');
     } finally {
@@ -254,7 +264,26 @@ export default function Dashboard() {
           <div className="xl:col-span-5 relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
             <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
             <div className="relative z-10 flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Trending menu</h2><p className="text-xs text-gray-500 dark:text-gray-400">Best-performing items this week</p></div><ChefHat className="h-5 w-5 text-orange-500" /></div>
-            <div className="relative z-10 mt-4 space-y-3">{(metrics?.topMenuItems || []).map((item, index) => <div key={item.id} className="flex items-center gap-3 rounded-2xl border border-orange-500/10 bg-white/50 p-3 transition hover:border-orange-500/30 hover:bg-orange-500/5 dark:border-white/10 dark:bg-white/[0.02] dark:hover:border-white/20"><div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-orange-50 text-xs font-bold text-orange-500 dark:bg-orange-500/10">{item.image ? <img src={item.image} alt="" className="h-full w-full object-cover" /> : `#${index + 1}`}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-gray-800 dark:text-gray-200">{item.name}</p><p className="text-xs text-gray-400">{item.quantity} sold</p></div><p className="text-sm font-semibold text-orange-600 dark:text-orange-400">{money(item.price)}</p></div>)}</div>
+            <div className="relative z-10 mt-4 space-y-3">
+              {(metrics?.topMenuItems || []).map((item, index) => (
+                <div key={item.id} className="flex items-center gap-3 rounded-2xl border border-orange-500/10 bg-white/50 p-3 transition hover:border-orange-500/30 hover:bg-orange-500/5 dark:border-white/10 dark:bg-white/[0.02] dark:hover:border-white/20">
+                  <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-orange-50 text-xs font-bold text-orange-500 dark:bg-orange-500/10">
+                    <OptimizedImage
+                      src={item.image}
+                      alt={item.name}
+                      containerClassName="h-full w-full"
+                      className="h-full w-full object-cover"
+                      fallbackIcon={<span>#{index + 1}</span>}
+                    />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-gray-800 dark:text-gray-200">{item.name}</p>
+                    <p className="text-xs text-gray-400">{item.quantity} sold</p>
+                  </div>
+                  <p className="text-sm font-semibold text-orange-600 dark:text-orange-400">{money(item.price)}</p>
+                </div>
+              ))}
+            </div>
             {!metrics?.topMenuItems?.length && <div className="py-10 text-center text-sm text-gray-400">Complete some orders to see menu trends.</div>}
           </div>
         </section>

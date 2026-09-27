@@ -37,6 +37,8 @@ import {
   Magnet,
   CountUp,
 } from '../../components/react-bits';
+import { OptimizedImage } from '../../components/common/OptimizedImage';
+import { preloadImages } from '../../utils/imagePreloader';
 
 type Branch = { id: string; name: string; code: string; address?: string; city?: string; phone?: string };
 type Restaurant = {
@@ -179,9 +181,11 @@ export default function OnlineOrdering() {
     setMenuLoading(true);
     setError('');
     try {
-      const res = await publicOrderingApi.getMenu({ restaurantId: targetRestaurantId, branchId: targetBranchId });
+      const menuItems = res.data.data?.items || [];
       setCategories(res.data.data?.categories || []);
-      setItems(res.data.data?.items || []);
+      setItems(menuItems);
+      // Preload images in background for instant viewing
+      preloadImages(menuItems.map((i: any) => menuImage(i)));
       if (res.data.data?.restaurant) {
         setRestaurant((current) => (current ? { ...current, ...res.data.data.restaurant } : current));
       }
@@ -532,18 +536,13 @@ export default function OnlineOrdering() {
                     <div className="w-full min-w-0">
                       {/* Image Container */}
                       <div className="relative h-44 sm:h-48 w-full overflow-hidden bg-zinc-950">
-                        {resolvedImage ? (
-                          <img
-                            src={resolvedImage}
-                            alt={item.name}
-                            loading="lazy"
-                            className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-orange-500/10 to-transparent text-5xl">
-                            🍽️
-                          </div>
-                        )}
+                        <OptimizedImage
+                          src={resolvedImage}
+                          alt={item.name}
+                          containerClassName="h-full w-full"
+                          className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                          fallbackIcon={<div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-orange-500/10 to-transparent text-5xl">🍽️</div>}
+                        />
                         <span className="absolute right-3 top-3 rounded-full bg-black/75 px-3 py-1 text-xs font-extrabold text-orange-400 backdrop-blur-md border border-orange-500/30 shadow-md">
                           {money(item.sellingPrice, currency)}
                         </span>

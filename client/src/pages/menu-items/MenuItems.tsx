@@ -7,6 +7,8 @@ import Input from '../../components/ui/Input';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
+import { OptimizedImage } from '../../components/common/OptimizedImage';
+import { preloadImages } from '../../utils/imagePreloader';
 
 export default function MenuItems() {
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -37,7 +39,9 @@ export default function MenuItems() {
       if (filterStatus) params.status = filterStatus;
       const response = await menuItemApi.getMenuItems(params);
       if (response.data.success) {
-        setItems(response.data.data?.items || []);
+        const loadedItems = response.data.data?.items || [];
+        setItems(loadedItems);
+        preloadImages(loadedItems.map((i: any) => i.image));
       }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load menu items');
@@ -254,7 +258,15 @@ export default function MenuItems() {
               {items.map((item) => (
                 <tr key={item.id}>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="h-12 w-12 overflow-hidden rounded-xl border border-orange-100 bg-orange-50 dark:border-gray-700 dark:bg-[#111116]">{item.image ? <img src={item.image} alt={item.name} className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center text-orange-400"><ImageIcon className="h-5 w-5" /></div>}</div>
+                    <div className="h-12 w-12 overflow-hidden rounded-xl border border-orange-100 bg-orange-50 dark:border-gray-700 dark:bg-[#111116]">
+                      <OptimizedImage
+                        src={item.image}
+                        alt={item.name}
+                        containerClassName="h-full w-full"
+                        className="h-full w-full object-cover"
+                        fallbackIcon={<div className="flex h-full w-full items-center justify-center text-orange-400"><ImageIcon className="h-5 w-5" /></div>}
+                      />
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{item.name}</div>

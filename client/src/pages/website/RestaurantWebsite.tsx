@@ -39,6 +39,8 @@ import GalleryLightbox, { GalleryItem } from './components/GalleryLightbox';
 import ReservationModal from './components/ReservationModal';
 import CustomerAuthModal from './components/CustomerAuthModal';
 import { Dock, GlassIcon, SpotlightCard, ShinyText, Magnet, CountUp } from '../../components/react-bits';
+import { OptimizedImage } from '../../components/common/OptimizedImage';
+import { preloadImages } from '../../utils/imagePreloader';
 
 type Branch = { id: string; name: string; code: string; address?: string; city?: string; phone?: string; email?: string; callPhone?: string; diningHours?: string };
 type Restaurant = {
@@ -167,7 +169,14 @@ export default function RestaurantWebsite() {
         if (data[0]) {
           setRestaurant(data[0]);
           setBranchId(data[0].branches?.[0]?.id || '');
-          websiteApi.getPublic(data[0].id).then((r:any)=>{const w=r.data.data;setWebsiteConfig(w);setWebsiteGallery(w.gallery||[]);setWebsiteTestimonials(w.testimonials||[])}).catch(()=>{});
+          websiteApi.getPublic(data[0].id).then((r:any)=>{
+            const w=r.data.data;
+            setWebsiteConfig(w);
+            const gal = w.gallery || [];
+            setWebsiteGallery(gal);
+            preloadImages(gal.map((g: any) => g.image));
+            setWebsiteTestimonials(w.testimonials || []);
+          }).catch(()=>{});
         } else {
           setError('No restaurant is currently configured.');
         }
@@ -182,7 +191,9 @@ export default function RestaurantWebsite() {
       .getMenu({ restaurantId: restaurant.id, branchId })
       .then((res) => {
         setCategories(res.data.data?.categories || []);
-        setItems(res.data.data?.items || []);
+        const menuItems = res.data.data?.items || [];
+        setItems(menuItems);
+        preloadImages(menuItems.map((i: any) => menuImage(i)));
         if (res.data.data?.restaurant) {
           setRestaurant((current) => (current ? { ...current, ...res.data.data.restaurant } : current));
         }
@@ -711,17 +722,13 @@ export default function RestaurantWebsite() {
                   <div>
                     {/* Item Image */}
                     <div className="relative h-56 overflow-hidden bg-zinc-900">
-                      {menuImage(item) ? (
-                        <img
-                          src={menuImage(item)}
-                          alt={item.name}
-                          className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-orange-500/10 to-transparent text-5xl">
-                          🍽️
-                        </div>
-                      )}
+                      <OptimizedImage
+                        src={menuImage(item)}
+                        alt={item.name}
+                        containerClassName="h-full w-full"
+                        className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
+                        fallbackIcon={<div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-orange-500/10 to-transparent text-5xl">🍽️</div>}
+                      />
                       <span className="absolute right-4 top-4 rounded-full bg-black/60 px-3.5 py-1.5 text-sm font-extrabold text-orange-400 backdrop-blur-md border border-orange-500/20">
                         {money(item.sellingPrice, restaurant?.currency)}
                       </span>
@@ -921,9 +928,10 @@ export default function RestaurantWebsite() {
                   onClick={() => openLightbox(idx)}
                   className="group relative h-72 cursor-pointer overflow-hidden rounded-3xl bg-zinc-900 shadow-md transition duration-300 hover:-translate-y-1 hover:shadow-2xl"
                 >
-                  <img
+                  <OptimizedImage
                     src={item.image}
                     alt={item.title}
+                    containerClassName="h-full w-full"
                     className="h-full w-full object-cover transition duration-700 group-hover:scale-110"
                   />
                   {/* Hover Overlay */}

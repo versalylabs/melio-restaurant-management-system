@@ -7,6 +7,8 @@ import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
+import { OptimizedImage } from '../../components/common/OptimizedImage';
+import { preloadImages } from '../../utils/imagePreloader';
 
 const ORDER_TYPES = [
   { value: 'DINE_IN', label: 'Dine In', requiresTable: true },
@@ -65,10 +67,14 @@ export default function POS() {
         branchApi.getBranches(),
       ]);
       if (menuRes.data.success) {
-        setCategories(menuRes.data.data?.categories || []);
-        if (menuRes.data.data?.categories?.length > 0 && !selectedCategory) {
-          setSelectedCategory(menuRes.data.data.categories[0].id);
+        const cats = menuRes.data.data?.categories || [];
+        setCategories(cats);
+        if (cats.length > 0 && !selectedCategory) {
+          setSelectedCategory(cats[0].id);
         }
+        // Preload menu item images in the background for 0ms render
+        const allItemImages = cats.flatMap((c: any) => (c.items || []).map((i: any) => i.image));
+        preloadImages(allItemImages);
       }
       if (tablesRes.data.success) {
         setTables(tablesRes.data.data?.tables || []);
@@ -379,11 +385,11 @@ export default function POS() {
 
                   <div className="relative z-10 flex flex-col h-full">
                     <div className="aspect-square bg-gradient-to-br from-orange-500/5 to-amber-500/5 dark:bg-white/5 border border-orange-500/10 dark:border-white/5 rounded-xl mb-2.5 sm:mb-3 flex items-center justify-center overflow-hidden">
-                      {item.image ? (
-                        <img src={item.image} alt={item.name} className="w-full h-full object-cover rounded-xl transition-transform duration-300 group-hover:scale-105" />
-                      ) : (
-                        <span className="text-2xl sm:text-3xl drop-shadow-sm">🍽️</span>
-                      )}
+                      <OptimizedImage
+                        src={item.image}
+                        alt={item.name}
+                        className="w-full h-full object-cover rounded-xl transition-transform duration-300 group-hover:scale-105"
+                      />
                     </div>
                     <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-xs sm:text-sm truncate tracking-tight">{item.name}</h3>
                     <p className="text-[11px] sm:text-xs text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-2 leading-relaxed flex-1">{item.description || 'Fresh specialty item'}</p>
