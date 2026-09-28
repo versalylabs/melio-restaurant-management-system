@@ -75,15 +75,17 @@ export default function DeliveryMapViewer({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
 
+  const safeAddress = typeof address === 'string' ? address : '';
+
   // Parse [geo:lat,lng] from address string
   let targetCoords: { lat: number; lng: number } | null = null;
-  const match = address.match(/\[(?:geo|Pinned Location):\s*([-\d.]+),\s*([-\d.]+)\]/i);
+  const match = safeAddress.match(/\[(?:geo|Pinned Location):\s*([-\d.]+),\s*([-\d.]+)\]/i);
   if (match) {
     targetCoords = { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
   } else {
     // Check for lat/lng in text
-    const latMatch = address.match(/(?:Lat|lat):\s*([-\d.]+)/);
-    const lngMatch = address.match(/(?:Lng|lng):\s*([-\d.]+)/);
+    const latMatch = safeAddress.match(/(?:Lat|lat):\s*([-\d.]+)/);
+    const lngMatch = safeAddress.match(/(?:Lng|lng):\s*([-\d.]+)/);
     if (latMatch && lngMatch) {
       targetCoords = { lat: parseFloat(latMatch[1]), lng: parseFloat(lngMatch[2]) };
     }
@@ -98,37 +100,40 @@ export default function DeliveryMapViewer({
   useEffect(() => {
     if (!containerRef.current) return;
     if (mapRef.current) {
-      mapRef.current.remove();
+      try {
+        mapRef.current.remove();
+      } catch (_) {}
       mapRef.current = null;
     }
 
-    const map = L.map(containerRef.current, {
-      center: [destCoords.lat, destCoords.lng],
-      zoom: 14,
-      zoomControl: false,
-    });
+    try {
+      const map = L.map(containerRef.current, {
+        center: [destCoords.lat, destCoords.lng],
+        zoom: 14,
+        zoomControl: false,
+      });
 
-    L.control.zoom({ position: 'bottomright' }).addTo(map);
+      L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-    // OpenStreetMap Tiles
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap contributors',
-    }).addTo(map);
+      // OpenStreetMap Tiles
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors',
+      }).addTo(map);
 
-    // Customer Marker
-    const customerMarker = L.marker([destCoords.lat, destCoords.lng], {
-      icon: createCustomerPin(),
-    }).addTo(map);
+      // Customer Marker
+      const customerMarker = L.marker([destCoords.lat, destCoords.lng], {
+        icon: createCustomerPin(),
+      }).addTo(map);
 
-    customerMarker.bindPopup(`
-      <div style="font-family: sans-serif; font-size: 12px; color: #111;">
-        <b style="color: #ea580c;">Delivery Destination</b><br/>
-        ${customerName ? `<b>Customer:</b> ${customerName}<br/>` : ''}
-        ${orderNumber ? `<b>Order:</b> #${orderNumber}<br/>` : ''}
-        ${address.replace(/\s*\[geo:[-\d.]+,\s*[-\d.]+\]/, '')}
-      </div>
-    `);
+      customerMarker.bindPopup(`
+        <div style="font-family: sans-serif; font-size: 12px; color: #111;">
+          <b style="color: #ea580c;">Delivery Destination</b><br/>
+          ${customerName ? `<b>Customer:</b> ${customerName}<br/>` : ''}
+          ${orderNumber ? `<b>Order:</b> #${orderNumber}<br/>` : ''}
+          ${safeAddress.replace(/\s*\[geo:[-\d.]+,\s*[-\d.]+\]/, '')}
+        </div>
+      `);
 
     // Branch Marker
     const branchMarker = L.marker([branchCoords.lat, branchCoords.lng], {
@@ -163,18 +168,25 @@ export default function DeliveryMapViewer({
     ]);
     map.fitBounds(bounds, { padding: [40, 40] });
 
-    mapRef.current = map;
+      mapRef.current = map;
+    } catch (err) {
+      console.warn('DeliveryMapViewer Leaflet initialization warning:', err);
+    }
 
     return () => {
-      map.remove();
-      mapRef.current = null;
+      if (mapRef.current) {
+        try {
+          mapRef.current.remove();
+        } catch (_) {}
+        mapRef.current = null;
+      }
     };
   }, [destCoords.lat, destCoords.lng, branchCoords.lat, branchCoords.lng]);
 
   const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${destCoords.lat},${destCoords.lng}`;
   const osmUrl = `https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${branchCoords.lat},${branchCoords.lng}%3B${destCoords.lat},${destCoords.lng}`;
 
-  const cleanText = address.replace(/\s*\[geo:[-\d.]+,\s*[-\d.]+\]/, '');
+  const cleanText = safeAddress.replace(/\s*\[geo:[-\d.]+,\s*[-\d.]+\]/, '');
 
   return (
     <div className="rounded-2xl overflow-hidden border border-orange-500/20 bg-white/70 dark:bg-[#111116]/80 backdrop-blur-xl shadow-xl transition-all">

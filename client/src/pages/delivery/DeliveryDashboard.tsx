@@ -72,7 +72,10 @@ export default function DeliveryDashboard() {
     try {
       const res = await orderApi.getOrders({ limit: 100 });
       if (res.data?.success) {
-        const allOrders: DeliveryOrder[] = res.data.data?.orders || [];
+        const allOrders: DeliveryOrder[] = (res.data.data?.orders || []).map((o: any) => ({
+          ...o,
+          items: Array.isArray(o.items) ? o.items : [],
+        }));
         // Filter for orders that have delivery fulfillment or orderType === 'DELIVERY'
         const deliveryOnly = allOrders.filter(
           (o) =>
@@ -396,7 +399,7 @@ export default function DeliveryDashboard() {
                     address={rawAddress}
                     customerName={order.customerName || undefined}
                     orderNumber={order.orderNumber}
-                    branchName={order.branch?.name || 'Melio Kitchen'}
+                    branchName={order.branch?.name || (order as any).branchName || 'Melio Kitchen'}
                   />
                 </div>
 
@@ -418,7 +421,7 @@ export default function DeliveryDashboard() {
                   <div className="space-y-1">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Order Items</span>
                     <div className="space-y-1 max-h-24 overflow-y-auto pr-1">
-                      {order.items.map((item, idx) => (
+                      {(order.items || []).map((item, idx) => (
                         <div key={idx} className="flex items-center justify-between text-xs text-gray-700 dark:text-gray-300">
                           <span>
                             <span className="font-bold text-orange-500">{item.quantity}×</span> {item.itemNameSnapshot}
@@ -426,6 +429,9 @@ export default function DeliveryDashboard() {
                           <span className="font-mono text-gray-500">KES {(item.unitPrice * item.quantity).toLocaleString()}</span>
                         </div>
                       ))}
+                      {(!order.items || order.items.length === 0) && (
+                        <p className="text-[11px] text-gray-400 italic">No specific items detailed</p>
+                      )}
                     </div>
                   </div>
 
