@@ -117,7 +117,7 @@ class ReportsErrorBoundary extends React.Component<React.PropsWithChildren, { ha
 }
 
 function App() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
     return (
