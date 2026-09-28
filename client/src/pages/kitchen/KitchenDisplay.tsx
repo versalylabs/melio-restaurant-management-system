@@ -125,26 +125,61 @@ export default function KitchenDisplay() {
 
   const updateTicket = async (ticket: KitchenTicket, status: string, extra: any = {}) => {
     setUpdating(ticket.id);
+    const previousTickets = [...tickets];
+    // Optimistic update: advance the ticket and its items immediately
+    setTickets((prev) =>
+      prev.map((t) => {
+        if (t.id !== ticket.id) return t;
+        const updatedItems =
+          status === 'PREPARING'
+            ? t.items.map((i) => ({ ...i, status: 'PREPARING' }))
+            : status === 'READY'
+            ? t.items.map((i) => ({ ...i, status: 'READY' }))
+            : t.items;
+        return { ...t, status: status as any, ...extra, items: updatedItems };
+      })
+    );
+    if (selectedTicket?.id === ticket.id) {
+      setSelectedTicket((prev) => (prev ? { ...prev, status: status as any, ...extra } : null));
+    }
     try {
       await kitchenApi.updateTicketStatus(ticket.id, { status, ...extra });
-      await fetchData();
-      if (selectedTicket?.id === ticket.id) {
-        const fresh = tickets.find(t => t.id === ticket.id);
-        if (fresh) setSelectedTicket(fresh);
-      }
+      setError('');
+      // Background silent revalidation
+      fetchData().catch(() => {});
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update kitchen ticket');
-    } finally { setUpdating(null); }
+      setTickets(previousTickets);
+      if (selectedTicket?.id === ticket.id) {
+        setSelectedTicket(ticket);
+      }
+      setError(err.response?.data?.message || err.message || 'Failed to update kitchen ticket');
+    } finally {
+      setUpdating(null);
+    }
   };
 
   const handleItemStatus = async (ticketId: string, itemId: string, status: string) => {
     setUpdating(itemId);
+    const previousTickets = [...tickets];
+    setTickets((prev) =>
+      prev.map((t) => {
+        if (t.id !== ticketId) return t;
+        return {
+          ...t,
+          items: t.items.map((i) => (i.id === itemId ? { ...i, status } : i)),
+        };
+      })
+    );
     try {
       await kitchenApi.updateTicketItemStatus(ticketId, itemId, { status });
-      await fetchData();
+      setError('');
+      fetchData().catch(() => {});
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update item status');
-    } finally { setUpdating(null); }
+      setTickets(previousTickets);
+      setError(err.response?.data?.message || err.message || 'Failed to update item status');
+    } finally {
+      setUpdating(null);
+    }
   };
 
   const printTicket = (ticket: KitchenTicket) => {

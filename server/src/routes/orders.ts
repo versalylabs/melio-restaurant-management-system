@@ -28,6 +28,6 @@ router.post('/:id/hold', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAIT
 router.post('/:id/resume', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), resumeOrderController);
 router.post('/:id/submit', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), submitOrderController);
 router.post('/:id/cancel', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), cancelOrderController);
-router.patch('/:id/status', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), updateOrderStatusController);
+router.patch('/:id/status', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'DELIVERY'), updateOrderStatusController);
 
 export default router;

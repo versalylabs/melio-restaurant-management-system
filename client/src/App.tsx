@@ -38,6 +38,8 @@ const Shifts = lazy(() => import('./pages/shifts/Shifts'));
 const Expenses = lazy(() => import('./pages/expenses/Expenses'));
 const CustomerAccount = lazy(() => import('./pages/customer-portal/CustomerAccount'));
 const WebsiteManagement = lazy(() => import('./pages/website/WebsiteManagement'));
+const DeliveryDashboard = lazy(() => import('./pages/delivery/DeliveryDashboard'));
+const AutomatedMessaging = lazy(() => import('./pages/settings/AutomatedMessaging'));
 
 const PageLoader = () => (
   <div className="min-h-screen flex items-center justify-center bg-[#faf9f7] dark:bg-[#0d0d11]">
@@ -68,6 +70,8 @@ const permissionForPath = (path: string) => {
   if (path === '/tables' || path === '/sections' || path === '/table-combinations') return 'tables.view';
   if (path === '/website-management' || path === '/website_management') return 'dashboard.view';
   if (path === '/notifications') return 'dashboard.view';
+  if (path === '/deliveries') return 'orders.view';
+  if (path === '/automated-messaging') return 'settings.manage';
   if (path === '/dashboard' || path === '/settings') return 'dashboard.view';
   return null;
 };
@@ -79,7 +83,9 @@ function ProtectedRoute({ children, allowedRoles, requiredPermission }: { childr
   const permission = requiredPermission || permissionForPath(window.location.pathname);
   const roleAllowed = !allowedRoles || !user || allowedRoles.includes(user.roleName);
   const permissionAllowed = !!user && (!!permission && (user.permissions?.includes('*') || user.permissions?.includes(permission)));
-  if (allowedRoles && user && !roleAllowed && !permissionAllowed) return <Navigate to="/dashboard" replace />;
+  if (allowedRoles && user && !roleAllowed && !permissionAllowed) {
+    return <Navigate to={user.roleName === 'DELIVERY' ? '/deliveries' : '/dashboard'} replace />;
+  }
   return <AppShell>{children}</AppShell>;
 }
 
@@ -127,13 +133,29 @@ function App() {
         <Route path="/order-online" element={<OnlineOrdering />} />
         <Route path="/online-order/:trackingToken" element={<OnlineOrderTracking />} />
         <Route path="/account" element={<CustomerAccount />} />
-        <Route path="/login" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />} />
+        <Route path="/login" element={isAuthenticated ? (user?.roleName === 'DELIVERY' ? <Navigate to="/deliveries" replace /> : <Navigate to="/dashboard" replace />) : <Login />} />
         <Route path="/setup" element={<Setup />} />
         <Route
           path="/dashboard"
           element={
             <ProtectedRoute>
               <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/deliveries"
+          element={
+            <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'DELIVERY', 'CASHIER', 'WAITER']}>
+              <DeliveryDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/automated-messaging"
+          element={
+            <ProtectedRoute allowedRoles={['OWNER', 'ADMIN']}>
+              <AutomatedMessaging />
             </ProtectedRoute>
           }
         />

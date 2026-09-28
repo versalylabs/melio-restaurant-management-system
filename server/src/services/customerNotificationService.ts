@@ -12,24 +12,32 @@ export interface NotificationLog {
 }
 
 // In-memory inspection log for simulated / dev messages
+import { resolveMessage } from './automatedMessagingService';
+
 export const notificationHistory: NotificationLog[] = [];
 
 export async function notifyCustomerOrderUpdate({
   trackingToken,
   orderNumber,
   status,
+  customerName,
   customerPhone,
   customerEmail,
   restaurantName,
+  restaurantId,
   totalAmount,
+  deliveryAddress,
 }: {
   trackingToken: string;
   orderNumber: string;
   status: string;
+  customerName?: string | null;
   customerPhone?: string | null;
   customerEmail?: string | null;
   restaurantName: string;
+  restaurantId?: string | null;
   totalAmount?: number;
+  deliveryAddress?: string | null;
 }) {
   const statusMessages: Record<string, string> = {
     SUBMITTED: `Thank you for dining with ${restaurantName}! Your order ${orderNumber} has been received. Track live: /online-order/${trackingToken}`,
@@ -41,7 +49,30 @@ export async function notifyCustomerOrderUpdate({
     CANCELLED: `Your order ${orderNumber} from ${restaurantName} has been cancelled. If you have questions, please reach out to us.`,
   };
 
-  const message = statusMessages[status] || `Your order ${orderNumber} status is now ${status}.`;
+  let message = statusMessages[status] || `Your order ${orderNumber} status is now ${status}.`;
+  let subject = `${restaurantName} — Order ${orderNumber} Update: ${status}`;
+  let sendEmail = !!customerEmail;
+  let sendSms = !!customerPhone;
+
+  // Check if owner has configured a custom automated message template for this action
+  if (restaurantId) {
+    const custom = resolveMessage(restaurantId, `ORDER_${status}`, {
+      restaurantName,
+      customerName: customerName || 'Valued Customer',
+      orderNumber,
+      status,
+      totalAmount: totalAmount ? `KES ${totalAmount.toLocaleString()}` : '',
+      trackingLink: `/online-order/${trackingToken}`,
+      deliveryAddress: deliveryAddress ? deliveryAddress.replace(/\s*\[geo:[-\d.]+,\s*[-\d.]+\]/, '') : 'Provided address',
+    });
+
+    if (custom) {
+      message = custom.body;
+      subject = custom.subject;
+      if (custom.channel === 'EMAIL') sendSms = false;
+      if (custom.channel === 'SMS') sendEmail = false;
+    }
+  }
 
   // 1. Dispatch Realtime event to the customer's active tracking stream
   realtimeService.broadcast(`order-tracking:${trackingToken}`, 'order_status_updated', {
@@ -53,7 +84,7 @@ export async function notifyCustomerOrderUpdate({
   });
 
   // 2. Dispatch simulated/live SMS if phone is provided
-  if (customerPhone) {
+  if (customerPhone && sendSms) {
     const smsEntry: NotificationLog = {
       id: `sms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       type: 'SMS',
@@ -68,12 +99,12 @@ export async function notifyCustomerOrderUpdate({
   }
 
   // 3. Dispatch simulated/live Email if email is provided
-  if (customerEmail) {
+  if (customerEmail && sendEmail) {
     const emailEntry: NotificationLog = {
       id: `email-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       type: 'EMAIL',
       recipient: customerEmail,
-      subject: `${restaurantName} — Order ${orderNumber} Update: ${status}`,
+      subject,
       message,
       status: process.env.SMTP_HOST ? 'SENT' : 'SIMULATED',
       createdAt: new Date(),

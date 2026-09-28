@@ -38,6 +38,7 @@ import {
   CountUp,
 } from '../../components/react-bits';
 import { OptimizedImage } from '../../components/common/OptimizedImage';
+import DeliveryLocationPicker from '../../components/common/DeliveryLocationPicker';
 import { preloadImages } from '../../utils/imagePreloader';
 
 type Branch = { id: string; name: string; code: string; address?: string; city?: string; phone?: string };
@@ -876,16 +877,9 @@ export default function OnlineOrdering() {
 
               {form.fulfillmentType === 'DELIVERY' && (
                 <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-gray-300 mb-1">
-                    Delivery Address
-                  </label>
-                  <textarea
-                    rows={2}
-                    required
-                    placeholder="e.g. Apartment 4B, 123 Westlands Road"
+                  <DeliveryLocationPicker
                     value={form.deliveryAddress}
-                    onChange={(e) => setForm({ ...form, deliveryAddress: e.target.value })}
-                    className="w-full rounded-xl bg-zinc-900 border border-white/10 px-3.5 py-2 text-base sm:text-sm text-white placeholder:text-gray-500 focus:border-orange-500 focus:outline-none"
+                    onChange={(val) => setForm({ ...form, deliveryAddress: val })}
                   />
                 </div>
               )}

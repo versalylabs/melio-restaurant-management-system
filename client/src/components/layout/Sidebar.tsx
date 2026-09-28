@@ -12,6 +12,8 @@ import {
   Shield,
   Bell,
   ChevronDown,
+  Truck,
+  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -32,9 +34,10 @@ interface NavItem {
 
 const navigation: NavItem[] = [
   { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { title: 'Operations', icon: CreditCard, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF'], children: [
+  { title: 'Operations', icon: CreditCard, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','DELIVERY'], children: [
     { title: 'POS', href: '/pos', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
     { title: 'Orders', href: '/orders', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
+    { title: 'Deliveries', href: '/deliveries', roles: ['OWNER','ADMIN','MANAGER','DELIVERY','CASHIER','WAITER'] },
     { title: 'Tables', href: '/tables', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
     { title: 'Sections', href: '/sections', roles: ['OWNER','ADMIN','MANAGER'] },
     { title: 'Kitchen', href: '/kitchen', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF'] },
@@ -60,8 +63,12 @@ const navigation: NavItem[] = [
   ]},
   { title: 'Notifications', href: '/notifications', icon: Bell, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','INVENTORY_MANAGER'] },
   { title: 'Administration', icon: Shield, roles: ['OWNER','ADMIN','MANAGER'], children: [
-    { title: 'User Accounts', href: '/users', roles: ['OWNER','ADMIN','MANAGER'] }, { title: 'Roles', href: '/roles', roles: ['OWNER','ADMIN'] },
-    { title: 'Settings', href: '/settings', roles: ['OWNER','ADMIN','MANAGER'] }, { title: 'Website Management', href: '/website-management', roles: ['OWNER','ADMIN','MANAGER'] }, { title: 'Audit Log', href: '/audit-log', roles: ['OWNER','ADMIN'] },
+    { title: 'User Accounts', href: '/users', roles: ['OWNER','ADMIN','MANAGER'] },
+    { title: 'Roles', href: '/roles', roles: ['OWNER','ADMIN'] },
+    { title: 'Automated Messaging', href: '/automated-messaging', roles: ['OWNER','ADMIN'] },
+    { title: 'Settings', href: '/settings', roles: ['OWNER','ADMIN','MANAGER'] },
+    { title: 'Website Management', href: '/website-management', roles: ['OWNER','ADMIN','MANAGER'] },
+    { title: 'Audit Log', href: '/audit-log', roles: ['OWNER','ADMIN'] },
   ]},
 ];
 

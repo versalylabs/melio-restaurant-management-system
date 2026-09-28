@@ -193,13 +193,9 @@ export const getKitchenTickets = async (req: AuthRequest, res: ExpressResponse) 
   const tickets = await prisma.kitchenTicket.findMany({
     where,
     orderBy: { receivedAt: 'asc' },
-  });
-
-  const result = await Promise.all(
-    tickets.map(async (t) => {
-      const branch = await prisma.branch.findUnique({ where: { id: t.branchId }, select: { id: true, name: true, code: true } });
-      const order = await prisma.sale.findUnique({
-        where: { id: t.orderId },
+    include: {
+      branch: { select: { id: true, name: true, code: true } },
+      order: {
         select: {
           id: true,
           orderNumber: true,
@@ -209,66 +205,75 @@ export const getKitchenTickets = async (req: AuthRequest, res: ExpressResponse) 
           customerName: true,
           notes: true,
         },
-      });
-      const station = t.stationId ? await prisma.kitchenStation.findUnique({ where: { id: t.stationId }, select: { id: true, name: true } }) : null;
-      const items = await prisma.kitchenTicketItem.findMany({
-        where: { ticketId: t.id },
+      },
+      station: { select: { id: true, name: true } },
+      items: {
         include: {
           saleItem: { include: { modifiers: true } },
         },
-      });
-      const itemMenuIds = [...new Set(items.map((item) => item.menuItemId))];
-      const itemStationLinks = itemMenuIds.length
-        ? await prisma.menuItemStation.findMany({ where: { menuItemId: { in: itemMenuIds }, station: { branchId: t.branchId, status: 'ACTIVE' } }, include: { station: { select: { id: true, name: true } } } })
-        : [];
-      const stationsByMenuItem = new Map<string, Array<{ id: string; name: string }>>();
-      for (const link of itemStationLinks) {
-        const current = stationsByMenuItem.get(link.menuItemId) || [];
-        current.push(link.station);
-        stationsByMenuItem.set(link.menuItemId, current);
-      }
-      const ticketStationIds = [...new Set(itemStationLinks.map((link) => link.stationId))];
-      const ticketStationNames = [...new Set(itemStationLinks.map((link) => link.station.name))];
+      },
+    },
+  });
 
-      return {
-        id: t.id,
-        restaurantId: t.restaurantId,
-        branchId: t.branchId,
-        branchName: branch?.name,
-        orderId: t.orderId,
-        orderNumber: order?.orderNumber,
-        orderType: order?.orderType,
-        tableId: order?.tableId,
-        tableNumber: order?.table?.tableNumber,
-        tableName: order?.table?.name,
-        customerName: order?.customerName,
-        orderNotes: order?.notes,
-        stationId: t.stationId,
-        stationName: station?.name,
-        stationIds: ticketStationIds,
-        stationNames: ticketStationNames,
-        status: t.status,
-        priority: t.priority,
-        receivedAt: t.receivedAt,
-        startedAt: t.startedAt,
-        readyAt: t.readyAt,
-        completedAt: t.completedAt,
-        items: items.map((item) => ({
-          id: item.id,
-          menuItemId: item.menuItemId,
-          itemNameSnapshot: item.itemNameSnapshot,
-          quantity: item.quantity,
-          notes: item.notes,
-          status: item.status,
-          modifiers: item.saleItem?.modifiers ? item.saleItem.modifiers.map((m) => ({ optionNameSnapshot: m.optionNameSnapshot, priceAdjustment: m.priceAdjustment })) : [],
-          stationIds: (stationsByMenuItem.get(item.menuItemId) || []).map((station) => station.id),
-          stationNames: (stationsByMenuItem.get(item.menuItemId) || []).map((station) => station.name),
-        })),
-        createdAt: t.createdAt,
-        updatedAt: t.updatedAt,
-      };
-    })
-  );
+  const allItemMenuIds = [...new Set(tickets.flatMap((t) => t.items.map((i) => i.menuItemId)))];
+  const allStationLinks = allItemMenuIds.length
+    ? await prisma.menuItemStation.findMany({
+        where: { menuItemId: { in: allItemMenuIds }, station: { status: 'ACTIVE' } },
+        include: { station: { select: { id: true, name: true, branchId: true } } },
+      })
+    : [];
+
+  const stationsByMenuItemAndBranch = new Map<string, Array<{ id: string; name: string }>>();
+  for (const link of allStationLinks) {
+    const key = `${link.menuItemId}::${link.station.branchId}`;
+    const list = stationsByMenuItemAndBranch.get(key) || [];
+    list.push(link.station);
+    stationsByMenuItemAndBranch.set(key, list);
+  }
+
+  const result = tickets.map((t) => {
+    const itemStationLinks = t.items.flatMap((item) => stationsByMenuItemAndBranch.get(`${item.menuItemId}::${t.branchId}`) || []);
+    const ticketStationIds = [...new Set(itemStationLinks.map((s) => s.id))];
+    const ticketStationNames = [...new Set(itemStationLinks.map((s) => s.name))];
+
+    return {
+      id: t.id,
+      restaurantId: t.restaurantId,
+      branchId: t.branchId,
+      branchName: t.branch?.name,
+      orderId: t.orderId,
+      orderNumber: t.order?.orderNumber,
+      orderType: t.order?.orderType,
+      tableId: t.order?.tableId,
+      tableNumber: t.order?.table?.tableNumber,
+      tableName: t.order?.table?.name,
+      customerName: t.order?.customerName,
+      orderNotes: t.order?.notes,
+      stationId: t.stationId,
+      stationName: t.station?.name,
+      stationIds: ticketStationIds,
+      stationNames: ticketStationNames,
+      status: t.status,
+      priority: t.priority,
+      receivedAt: t.receivedAt,
+      startedAt: t.startedAt,
+      readyAt: t.readyAt,
+      completedAt: t.completedAt,
+      items: t.items.map((item) => ({
+        id: item.id,
+        menuItemId: item.menuItemId,
+        itemNameSnapshot: item.itemNameSnapshot,
+        quantity: item.quantity,
+        notes: item.notes,
+        status: item.status,
+        modifiers: item.saleItem?.modifiers ? item.saleItem.modifiers.map((m) => ({ optionNameSnapshot: m.optionNameSnapshot, priceAdjustment: m.priceAdjustment })) : [],
+        stationIds: (stationsByMenuItemAndBranch.get(`${item.menuItemId}::${t.branchId}`) || []).map((s) => s.id),
+        stationNames: (stationsByMenuItemAndBranch.get(`${item.menuItemId}::${t.branchId}`) || []).map((s) => s.name),
+      })),
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    };
+  });
 
   return sendResponse(res, true, 'Kitchen tickets retrieved', { tickets: result });
 };
@@ -434,6 +439,23 @@ export const updateKitchenTicketStatus = async (req: AuthRequest, res: ExpressRe
       where: { id },
       data: updateData,
     });
+
+    // Also update ticket items status to match ticket workflow
+    if (status === 'PREPARING') {
+      try {
+        await prisma.kitchenTicketItem.updateMany({
+          where: { ticketId: id, status: 'PENDING' },
+          data: { status: 'PREPARING' },
+        });
+      } catch {}
+    } else if (status === 'READY') {
+      try {
+        await prisma.kitchenTicketItem.updateMany({
+          where: { ticketId: id, status: { in: ['PENDING', 'PREPARING'] } },
+          data: { status: 'READY' },
+        });
+      } catch {}
+    }
 
     // Realtime event
     try {

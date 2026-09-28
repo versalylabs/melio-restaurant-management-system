@@ -15,7 +15,7 @@ export const api = axios.create({
   baseURL: import.meta.env.DEV
     ? '/api'
     : (import.meta.env.VITE_API_URL || 'https://melio-restaurant-management-system.vercel.app/api'),
-  timeout: 15000,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -235,6 +235,7 @@ export const orderApi = {
   resumeOrder: (id: string) => api.post(`/orders/${id}/resume`),
   submitOrder: (id: string) => api.post(`/orders/${id}/submit`),
   cancelOrder: (id: string, data: any) => api.post(`/orders/${id}/cancel`, data),
+  updateOrderStatus: (id: string, status: string) => api.patch(`/orders/${id}/status`, { status }),
   getPosMenu: () => cachedGet('/orders/pos/menu'),
   getPosTables: () => cachedGet('/orders/pos/tables'),
 };
@@ -453,4 +454,11 @@ export const expenseApi = {
   update: (id: string, data: any) => api.put(`/expenses/${id}`, data),
   remove: (id: string) => api.delete(`/expenses/${id}`),
   setStatus: (id: string, status: string) => api.patch(`/expenses/${id}/status`, { status }),
+};
+
+export const automatedMessagingApi = {
+  getTemplates: () => cachedGet('/automated-messaging'),
+  updateTemplate: (action: string, data: any) => api.put(`/automated-messaging/${action}`, data),
+  sendTest: (data: { action: string; recipientEmail?: string; recipientPhone?: string }) =>
+    api.post('/automated-messaging/test', data),
 };

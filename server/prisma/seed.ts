@@ -165,6 +165,11 @@ async function fullSeed() {
       update: {},
       create: { name: 'INVENTORY_MANAGER', description: 'Inventory management access', permissions: JSON.stringify(['read', 'write:inventory']), isSystem: true },
     }),
+    prisma.role.upsert({
+      where: { name: 'DELIVERY' },
+      update: {},
+      create: { name: 'DELIVERY', description: 'Delivery courier access', permissions: JSON.stringify(['orders.view', 'orders.manage', 'dashboard.view']), isSystem: true },
+    }),
   ]);
 
   console.log('Roles seeded:', roles.map((r) => r.name).join(', '));
@@ -221,6 +226,7 @@ async function fullSeed() {
   const cashierRole = roles.find((r) => r.name === 'CASHIER')!;
   const waiterRole = roles.find((r) => r.name === 'WAITER')!;
   const chefRole = roles.find((r) => r.name === 'CHEF')!;
+  const deliveryRole = roles.find((r) => r.name === 'DELIVERY')!;
 
   const passwordHash = await bcrypt.hash('melio@2026', 12);
 
@@ -239,6 +245,9 @@ async function fullSeed() {
     }),
     prisma.user.create({
       data: { restaurantId: restaurant.id, branchId: westlandsBranch.id, firstName: 'Mary', lastName: 'Achieng', email: 'chef@example.com', phone: '+254 700 000 005', passwordHash, roleId: chefRole.id, status: 'ACTIVE' },
+    }),
+    prisma.user.create({
+      data: { restaurantId: restaurant.id, firstName: 'Delivery', lastName: 'Driver', email: 'delivery@example.com', phone: '+254 700 000 008', passwordHash, roleId: deliveryRole.id, status: 'ACTIVE', jobTitle: 'Delivery Courier', employeeCode: 'DEL-001' },
     }),
   ]);
 

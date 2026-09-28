@@ -30,6 +30,7 @@ import expensesRoutes from './expenses';
 import websiteRoutes from './website';
 import realtimeRoutes from './realtime';
 import publicPaymentsRoutes from './publicPayments';
+import automatedMessagingRoutes from './automatedMessaging';
 import { notFound } from '../middleware/errorHandler';
 import { errorHandler } from '../middleware/errorHandler';
 
@@ -67,6 +68,7 @@ router.use('/expenses', expensesRoutes);
 router.use('/website', websiteRoutes);
 router.use('/realtime', realtimeRoutes);
 router.use('/public/payments', publicPaymentsRoutes);
+router.use('/automated-messaging', automatedMessagingRoutes);
 
 router.get('/health', (req, res) => {
   res.json({
