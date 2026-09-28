@@ -181,6 +181,7 @@ export default function OnlineOrdering() {
     setMenuLoading(true);
     setError('');
     try {
+      const res = await publicOrderingApi.getMenu({ restaurantId: targetRestaurantId, branchId: targetBranchId });
       const menuItems = res.data.data?.items || [];
       setCategories(res.data.data?.categories || []);
       setItems(menuItems);
