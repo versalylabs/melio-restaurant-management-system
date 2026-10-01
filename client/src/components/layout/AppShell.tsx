@@ -2,7 +2,7 @@ import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { useAuth } from '../../contexts/AuthContext';
 import { useEffect, useRef, useState } from 'react';
-import { Moon, Sun, Building2, Bell, ChevronDown, Check, ExternalLink, Menu as MenuIcon, X } from 'lucide-react';
+import { Moon, Sun, Building2, Bell, ChevronDown, Check, ExternalLink, Menu as MenuIcon, X, UtensilsCrossed } from 'lucide-react';
 import { notificationApi, branchApi } from '../../services/api';
 
 export default function AppShell({ children }: { children?: React.ReactNode }) {
@@ -121,9 +121,19 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
             >
               <MenuIcon size={18} />
             </button>
-            <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 font-medium truncate max-w-[120px] sm:max-w-none">
-              {user?.restaurantName || 'Melio'}
-            </p>
+            <div className="flex items-center gap-2.5">
+              <div className="grid h-8 w-8 place-items-center rounded-xl bg-orange-500 text-white shadow-md shadow-orange-500/25 shrink-0">
+                <UtensilsCrossed size={16} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs sm:text-sm font-bold text-gray-900 dark:text-gray-100 truncate max-w-[120px] sm:max-w-none leading-tight">
+                  {user?.restaurantName || 'Melio'}
+                </p>
+                <p className="text-[10px] uppercase tracking-wider text-orange-500 font-semibold hidden sm:block leading-tight">
+                  Management System
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2.5">
