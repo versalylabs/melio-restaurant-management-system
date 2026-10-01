@@ -36,16 +36,20 @@ function parseDate(value: string) {
 
 export const getReservations = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
-  const { branchId, status, date, search } = req.query;
+  const { branchId, status, date, search, upcoming } = req.query;
   const where: any = { restaurantId };
   if (req.user!.branchId) where.branchId = req.user!.branchId;
-  else if (branchId) where.branchId = branchId as string;
-  if (status) where.status = status as string;
+  else if (branchId && branchId !== 'ALL') where.branchId = branchId as string;
+  if (status && status !== 'ALL') where.status = status as string;
   if (search) where.OR = [
     { customerName: { contains: search as string } },
     { phone: { contains: search as string } },
   ];
-  if (date) {
+  if (upcoming === 'true') {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    where.startAt = { gte: todayStart };
+  } else if (date && date !== 'ALL') {
     const start = new Date(`${date}T00:00:00`);
     const end = new Date(`${date}T23:59:59.999`);
     where.startAt = { gte: start, lte: end };
@@ -55,7 +59,7 @@ export const getReservations = async (req: AuthRequest, res: ExpressResponse) =>
     where,
     orderBy: { startAt: 'asc' },
     include: {
-      branch: { select: { id: true, name: true, code: true } },
+      branch: { select: { id: true, name: true, code: true, address: true, city: true, phone: true } },
       table: { select: { id: true, tableNumber: true, name: true, capacity: true } },
       customer: { select: { id: true, name: true, phone: true } },
       creator: { select: { id: true, firstName: true, lastName: true } },

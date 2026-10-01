@@ -213,13 +213,33 @@ export const createPublicReservation = async (req: Request, res: Response) => {
   const specialRequests = String(body.specialRequests || body.notes || '').trim();
   const durationMinutes = Number(body.durationMinutes || 90);
 
-  if (!restaurantId || !branchId) return sendError(res, 'Restaurant and branch are required');
   if (!customerName) return sendError(res, 'Guest name is required');
   if (!phone && !email) return sendError(res, 'Phone number or email is required');
   if (!dateStr) return sendError(res, 'Reservation date is required');
 
-  const branch = await prisma.branch.findFirst({ where: { id: branchId, restaurantId, status: 'ACTIVE' } });
+  let branch = null;
+  if (branchId) {
+    branch = await prisma.branch.findFirst({
+      where: { id: branchId, ...(restaurantId ? { restaurantId } : {}), status: 'ACTIVE' },
+      include: { restaurant: { select: { id: true, name: true, phone: true } } },
+    });
+  }
+  if (!branch && restaurantId) {
+    branch = await prisma.branch.findFirst({
+      where: { restaurantId, status: 'ACTIVE' },
+      include: { restaurant: { select: { id: true, name: true, phone: true } } },
+    });
+  }
+  if (!branch) {
+    branch = await prisma.branch.findFirst({
+      where: { status: 'ACTIVE' },
+      include: { restaurant: { select: { id: true, name: true, phone: true } } },
+    });
+  }
   if (!branch) return sendError(res, 'Selected branch is unavailable', undefined, 404);
+
+  const effectiveRestaurantId = branch.restaurantId;
+  const effectiveBranchId = branch.id;
 
   const startAt = new Date(`${dateStr}T${timeStr}:00`);
   if (Number.isNaN(startAt.getTime())) return sendError(res, 'Invalid reservation date or time format');
@@ -227,12 +247,12 @@ export const createPublicReservation = async (req: Request, res: Response) => {
 
   // Link or create customer
   let customer = await prisma.customer.findFirst({
-    where: { restaurantId, OR: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])] },
+    where: { restaurantId: effectiveRestaurantId, OR: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])] },
   });
   if (!customer) {
     customer = await prisma.customer.create({
       data: {
-        restaurantId,
+        restaurantId: effectiveRestaurantId,
         name: customerName,
         phone: phone || null,
         email: email || null,
@@ -243,16 +263,27 @@ export const createPublicReservation = async (req: Request, res: Response) => {
   }
 
   // System user for creator
-  const systemUser = await prisma.user.findFirst({
-    where: { restaurantId, status: 'ACTIVE' },
+  let systemUser = await prisma.user.findFirst({
+    where: { restaurantId: effectiveRestaurantId, status: 'ACTIVE' },
     orderBy: { createdAt: 'asc' },
     select: { id: true },
   });
+  if (!systemUser) {
+    systemUser = await prisma.user.findFirst({
+      where: { restaurantId: effectiveRestaurantId },
+      select: { id: true },
+    });
+  }
+  if (!systemUser) {
+    systemUser = await prisma.user.findFirst({
+      select: { id: true },
+    });
+  }
   if (!systemUser) return sendError(res, 'Reservations are not configured for this restaurant', undefined, 409);
 
   // Check available tables for this branch
   const tables = await prisma.table.findMany({
-    where: { branchId, restaurantId, status: { not: 'OUT_OF_SERVICE' }, capacity: { gte: partySize } },
+    where: { branchId: effectiveBranchId, restaurantId: effectiveRestaurantId, status: { not: 'OUT_OF_SERVICE' }, capacity: { gte: partySize } },
     orderBy: { capacity: 'asc' },
   });
 
@@ -261,8 +292,8 @@ export const createPublicReservation = async (req: Request, res: Response) => {
   for (const table of tables) {
     const conflict = await prisma.reservation.findFirst({
       where: {
-        restaurantId,
-        branchId,
+        restaurantId: effectiveRestaurantId,
+        branchId: effectiveBranchId,
         tableId: table.id,
         status: { in: ['PENDING', 'CONFIRMED', 'SEATED'] },
         startAt: { lt: endAt },
@@ -282,8 +313,8 @@ export const createPublicReservation = async (req: Request, res: Response) => {
 
   const reservation = await prisma.reservation.create({
     data: {
-      restaurantId,
-      branchId,
+      restaurantId: effectiveRestaurantId,
+      branchId: effectiveBranchId,
       customerId: customer.id,
       tableId: assignedTableId,
       customerName,
@@ -298,7 +329,7 @@ export const createPublicReservation = async (req: Request, res: Response) => {
       createdBy: systemUser.id,
     },
     include: {
-      branch: { select: { id: true, name: true, city: true, phone: true } },
+      branch: { select: { id: true, name: true, city: true, address: true, phone: true } },
       table: { select: { id: true, tableNumber: true, name: true } },
     },
   });
@@ -306,8 +337,8 @@ export const createPublicReservation = async (req: Request, res: Response) => {
   const reservationCode = `RES-${reservation.id.slice(-6).toUpperCase()}`;
 
   await notifyRestaurantStaff(
-    restaurantId,
-    branchId,
+    effectiveRestaurantId,
+    effectiveBranchId,
     'RESERVATION',
     'New online table reservation',
     `Online reservation for ${customerName} (${partySize} guests) on ${dateStr} at ${timeStr}.`,
@@ -316,7 +347,7 @@ export const createPublicReservation = async (req: Request, res: Response) => {
   );
 
   // Broadcast realtime event to staff
-  realtimeService.broadcast(`reservations:${branchId}`, 'new_reservation', {
+  const resEventPayload = {
     reservationId: reservation.id,
     reservationCode,
     customerName,
@@ -325,16 +356,19 @@ export const createPublicReservation = async (req: Request, res: Response) => {
     time: timeStr,
     status: reservation.status,
     tableNumber: reservation.table?.tableNumber || null,
-  });
+  };
+  realtimeService.broadcast(`reservations:${effectiveBranchId}`, 'new_reservation', resEventPayload);
+  realtimeService.broadcast(`restaurant:${effectiveRestaurantId}`, 'new_reservation', resEventPayload);
 
   // Notify customer
-  const restData = await prisma.restaurant.findUnique({ where: { id: restaurantId }, select: { name: true } });
+  const restData = await prisma.restaurant.findUnique({ where: { id: effectiveRestaurantId }, select: { name: true } });
+  const finalRestaurantName = restData?.name || branch.restaurant?.name || 'Melio';
   await notifyCustomerReservation({
     reference: reservationCode,
     customerName,
     customerPhone: phone || null,
     customerEmail: email || null,
-    restaurantName: restData?.name || 'Melio',
+    restaurantName: finalRestaurantName,
     branchName: reservation.branch.name,
     reservationDate: dateStr,
     reservationTime: timeStr,
@@ -350,10 +384,15 @@ export const createPublicReservation = async (req: Request, res: Response) => {
       reservationId: reservation.id,
       reservationCode,
       customerName,
+      phone: phone || null,
+      email: email || null,
       partySize,
       date: dateStr,
       time: timeStr,
+      startAt: reservation.startAt,
+      endAt: reservation.endAt,
       status: reservation.status,
+      restaurantName: finalRestaurantName,
       branch: reservation.branch,
       tableNumber: reservation.table?.tableNumber || null,
       notes: reservation.notes,

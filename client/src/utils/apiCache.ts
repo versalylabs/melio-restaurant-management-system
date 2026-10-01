@@ -120,5 +120,7 @@ export const handleMutationInvalidation = (url: string) => {
     invalidateCache(/(\/customers|\/loyalty|\/dashboard)/);
   } else if (url.includes('/shifts') || url.includes('/users')) {
     invalidateCache(/(\/shifts|\/users|\/dashboard)/);
+  } else if (url.includes('/reservations')) {
+    invalidateCache(/(\/reservations|\/dashboard|\/public\/reservations)/);
   }
 };

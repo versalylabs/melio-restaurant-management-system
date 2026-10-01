@@ -9,7 +9,9 @@ import {
   UserCheck,
   CheckCircle2,
   AlertCircle,
-  Table as TableIcon
+  Table as TableIcon,
+  RefreshCw,
+  Printer
 } from 'lucide-react';
 import { reservationApi, tableApi, branchApi, api } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
@@ -19,6 +21,8 @@ import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
+import { printReservationReceipt } from '../../utils/reservationReceipt';
+import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
 
 const statusVariant: any = {
   PENDING: 'warning',
@@ -35,11 +39,13 @@ export default function Reservations() {
   const [tables, setTables] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
+  const [dateMode, setDateMode] = useState<'UPCOMING' | 'TODAY' | 'TOMORROW' | 'ALL' | 'CUSTOM'>('UPCOMING');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [status, setStatus] = useState('');
   const [sourceFilter, setSourceFilter] = useState('ALL');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<any>(null);
@@ -57,15 +63,36 @@ export default function Reservations() {
     branchId: ''
   });
 
-  const load = async () => {
+  const load = async (isManual = false) => {
     try {
       setError('');
+      if (isManual) setRefreshing(true);
       const activeBranchId = getActiveBranchId(user);
-      const params: any = { date, ...(activeBranchId ? { branchId: activeBranchId } : {}) };
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const tomorrowDate = new Date();
+      tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+      const tomorrowStr = tomorrowDate.toISOString().slice(0, 10);
+
+      const params: any = { ...(activeBranchId ? { branchId: activeBranchId } : {}) };
+      if (dateMode === 'UPCOMING') {
+        params.upcoming = 'true';
+      } else if (dateMode === 'TODAY') {
+        params.date = todayStr;
+      } else if (dateMode === 'TOMORROW') {
+        params.date = tomorrowStr;
+      } else if (dateMode === 'ALL') {
+        params.date = 'ALL';
+      } else {
+        params.date = date;
+      }
+
       if (status) params.status = status;
       if (search) params.search = search;
+
+      const config = isManual ? { headers: { 'x-refresh': 'true' }, params: { _refresh: Date.now() } } : undefined;
+
       const [r, t, c, b] = await Promise.all([
-        reservationApi.getReservations(params),
+        reservationApi.getReservations(params, config),
         tableApi.getTables({}),
         api.get('/customers', { params: { limit: 100 } }),
         branchApi.getBranches()
@@ -78,13 +105,34 @@ export default function Reservations() {
       setError(e.response?.data?.message || 'Failed to load reservations');
     } finally {
       setLoading(false);
+      if (isManual) setRefreshing(false);
     }
   };
 
   useEffect(() => {
     load();
-    return listenForBranchChanges(load);
-  }, [date, status, user?.id]);
+    return listenForBranchChanges(() => load());
+  }, [date, dateMode, status, user?.id]);
+
+  // Real-time Event Subscription for Live Reservations
+  const activeBranchId = getActiveBranchId(user);
+  const { subscribe } = useRealtimeEvents({
+    url: '/api/realtime/stream',
+    channels: [
+      ...(activeBranchId ? [`reservations:${activeBranchId}`] : []),
+      ...(user?.restaurantId ? [`restaurant:${user.restaurantId}`] : []),
+    ],
+    enabled: !!user,
+  });
+
+  useEffect(() => {
+    const unsub1 = subscribe('new_reservation', () => load(true));
+    const unsub2 = subscribe('reservation_status_updated', () => load(true));
+    return () => {
+      unsub1();
+      unsub2();
+    };
+  }, [subscribe]);
 
   const openNew = () => {
     setEditing(null);
@@ -182,16 +230,28 @@ export default function Reservations() {
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Table Reservations</h1>
             <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-bold text-orange-700 dark:bg-orange-950/60 dark:text-orange-300">
-              Phase 32
+              Live Engine
             </span>
           </div>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             Manage incoming online bookings, telephone reservations, table allocations, and dining turns.
           </p>
         </div>
-        <Button onClick={openNew} className="gap-2 shrink-0">
-          <Plus className="w-4 h-4" /> New Booking
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => load(true)}
+            disabled={refreshing}
+            className="gap-2 shrink-0"
+            title="Refresh reservation list"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-orange-500' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+          <Button onClick={openNew} className="gap-2 shrink-0">
+            <Plus className="w-4 h-4" /> New Booking
+          </Button>
+        </div>
       </div>
 
       {/* KPI Cards Summary */}
@@ -239,9 +299,98 @@ export default function Reservations() {
         </div>
       )}
 
+      {/* Quick Date Switcher Tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-[#111116] p-3 rounded-2xl border border-gray-200 dark:border-gray-800">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            onClick={() => setDateMode('UPCOMING')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
+              dateMode === 'UPCOMING'
+                ? 'bg-orange-500 text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-[#1a1a20] text-gray-600 dark:text-gray-300 hover:text-orange-500'
+            }`}
+          >
+            🌟 All Upcoming
+          </button>
+          <button
+            type="button"
+            onClick={() => setDateMode('TODAY')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
+              dateMode === 'TODAY'
+                ? 'bg-orange-500 text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-[#1a1a20] text-gray-600 dark:text-gray-300 hover:text-orange-500'
+            }`}
+          >
+            Today
+          </button>
+          <button
+            type="button"
+            onClick={() => setDateMode('TOMORROW')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
+              dateMode === 'TOMORROW'
+                ? 'bg-orange-500 text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-[#1a1a20] text-gray-600 dark:text-gray-300 hover:text-orange-500'
+            }`}
+          >
+            Tomorrow
+          </button>
+          <button
+            type="button"
+            onClick={() => setDateMode('ALL')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
+              dateMode === 'ALL'
+                ? 'bg-orange-500 text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-[#1a1a20] text-gray-600 dark:text-gray-300 hover:text-orange-500'
+            }`}
+          >
+            All Dates
+          </button>
+          <button
+            type="button"
+            onClick={() => setDateMode('CUSTOM')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition ${
+              dateMode === 'CUSTOM'
+                ? 'bg-orange-500 text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-[#1a1a20] text-gray-600 dark:text-gray-300 hover:text-orange-500'
+            }`}
+          >
+            Pick Date...
+          </button>
+        </div>
+
+        <div className="text-xs text-gray-400">
+          Viewing: <span className="font-semibold text-gray-700 dark:text-gray-200">
+            {dateMode === 'UPCOMING'
+              ? 'Upcoming Bookings (All Days)'
+              : dateMode === 'TODAY'
+              ? 'Today'
+              : dateMode === 'TOMORROW'
+              ? 'Tomorrow'
+              : dateMode === 'ALL'
+              ? 'All Records'
+              : date}
+          </span>
+        </div>
+      </div>
+
       {/* Filter Controls */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <Input id="date" type="date" label="Booking Date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            {dateMode === 'CUSTOM' ? 'Selected Date' : 'Filter by Specific Date'}
+          </label>
+          <input
+            id="date"
+            type="date"
+            value={date}
+            onChange={(e) => {
+              setDate(e.target.value);
+              setDateMode('CUSTOM');
+            }}
+            className="h-10 w-full rounded-xl border border-gray-300 bg-white px-3 text-sm dark:border-gray-700 dark:bg-[#111116] dark:text-gray-100"
+          />
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
@@ -281,7 +430,7 @@ export default function Reservations() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && load()}
+              onKeyDown={(e) => e.key === 'Enter' && load(true)}
               placeholder="Guest name, phone or email"
               className="h-10 w-full rounded-xl border border-gray-300 bg-white pl-10 pr-4 text-sm dark:border-gray-700 dark:bg-[#111116] dark:text-gray-100"
             />
@@ -295,7 +444,7 @@ export default function Reservations() {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b dark:border-gray-700 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                <th className="py-3.5 pr-4 pl-4">Time & Ref</th>
+                <th className="py-3.5 pr-4 pl-4">Date & Time</th>
                 <th className="py-3.5 pr-4">Guest Details</th>
                 <th className="py-3.5 pr-4">Channel</th>
                 <th className="py-3.5 pr-4">Party</th>
@@ -314,8 +463,10 @@ export default function Reservations() {
                   }`}
                 >
                   <td className="py-4 pr-4 pl-4 font-medium">
-                    <div className="text-gray-900 dark:text-gray-100 font-semibold">
-                      {new Date(r.startAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    <div className="text-gray-900 dark:text-gray-100 font-semibold flex items-center gap-1.5">
+                      <span>{new Date(r.startAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
+                      <span className="text-orange-500">•</span>
+                      <span>{new Date(r.startAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                     <div className="text-[11px] text-gray-400">
                       until {new Date(r.endAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -401,6 +552,33 @@ export default function Reservations() {
                         </Button>
                       )}
 
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => printReservationReceipt({
+                          id: r.id,
+                          customerName: r.customerName,
+                          phone: r.phone,
+                          email: r.email,
+                          partySize: r.partySize,
+                          startAt: r.startAt,
+                          endAt: r.endAt,
+                          notes: r.notes,
+                          status: r.status,
+                          table: r.table ? { tableNumber: r.table.tableNumber, name: r.table.name } : undefined,
+                          branch: r.branch ? {
+                            name: r.branch.name,
+                            city: r.branch.city,
+                            address: r.branch.address,
+                            phone: r.branch.phone,
+                          } : undefined,
+                        })}
+                        className="gap-1 text-gray-700 dark:text-gray-300"
+                        title="Print booking slip / confirmation"
+                      >
+                        <Printer size={13} /> Slip
+                      </Button>
+
                       <Button size="sm" variant="secondary" onClick={() => openEdit(r)}>
                         Edit
                       </Button>
@@ -413,8 +591,10 @@ export default function Reservations() {
                 <tr>
                   <td colSpan={8} className="py-16 text-center text-gray-500 dark:text-gray-400">
                     <CalendarDays className="w-10 h-10 mx-auto mb-2 text-gray-400" />
-                    <p className="font-semibold">No reservations found for {date}</p>
-                    <p className="text-xs text-gray-400 mt-1">Try switching dates, clearing search filters, or click "New Booking".</p>
+                    <p className="font-semibold">
+                      No reservations found {dateMode === 'UPCOMING' ? 'for upcoming dates' : dateMode === 'ALL' ? 'in system' : `for ${date}`}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">Try switching tabs ("All Upcoming", "Today", "All Dates"), clearing search filters, or click "New Booking".</p>
                   </td>
                 </tr>
               )}

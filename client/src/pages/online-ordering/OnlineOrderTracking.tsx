@@ -74,6 +74,7 @@ export default function OnlineOrderTracking() {
   const { trackingToken = '' } = useParams<{ trackingToken: string }>();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
 
   // Payment Modal States
@@ -94,11 +95,15 @@ export default function OnlineOrderTracking() {
   const [cardLoading, setCardLoading] = useState(false);
   const [cardError, setCardError] = useState('');
 
-  const fetchOrder = useCallback(async () => {
+  const fetchOrder = useCallback(async (isManual = false) => {
     if (!trackingToken) return;
+    if (isManual) setRefreshing(true);
     try {
-      const res = await publicOrderingApi.getOrder(trackingToken);
-      if (res.data.success) {
+      const res = await publicOrderingApi.getOrder(
+        trackingToken,
+        isManual ? { headers: { 'x-refresh': 'true' }, params: { _refresh: Date.now() } } : undefined
+      );
+      if (res.data?.success) {
         setData(res.data.data);
         if (res.data.data?.contactPhone && !mpesaPhone) {
           setMpesaPhone(res.data.data.contactPhone);
@@ -109,6 +114,7 @@ export default function OnlineOrderTracking() {
       setError(err.response?.data?.message || 'Unable to locate order.');
     } finally {
       setLoading(false);
+      if (isManual) setRefreshing(false);
     }
   }, [trackingToken, mpesaPhone]);
 
@@ -289,11 +295,13 @@ export default function OnlineOrderTracking() {
               </span>
             )}
             <button
-              onClick={fetchOrder}
-              className="p-2 rounded-xl bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 transition"
+              onClick={() => fetchOrder(true)}
+              disabled={refreshing}
+              className="p-2 rounded-xl bg-white/5 border border-white/10 text-gray-300 hover:text-white hover:bg-white/10 transition disabled:opacity-50"
               title="Refresh order"
+              aria-label="Refresh order"
             >
-              <RefreshCw size={14} />
+              <RefreshCw size={14} className={refreshing ? 'animate-spin text-orange-400' : ''} />
             </button>
           </div>
         </div>

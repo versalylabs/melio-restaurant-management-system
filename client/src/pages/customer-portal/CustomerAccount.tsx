@@ -15,11 +15,14 @@ import {
   Sparkles,
   RotateCcw,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Printer,
+  CalendarPlus,
 } from 'lucide-react';
 import { useCustomerAuth } from '../../contexts/CustomerAuthContext';
 import { customerPortalApi, publicOrderingApi } from '../../services/api';
 import { GlassIcon, SpotlightCard, ShinyText, CountUp } from '../../components/react-bits';
+import { printReservationReceipt, downloadReservationIcs } from '../../utils/reservationReceipt';
 
 const money = (val: number, currency = 'KES') =>
   new Intl.NumberFormat('en-KE', { style: 'currency', currency, maximumFractionDigits: 0 }).format(val);
@@ -415,10 +418,56 @@ export default function CustomerAccount() {
                         {res.notes}
                       </div>
                     )}
+
+                    <div className="flex flex-wrap items-center gap-2 mt-3 pt-2 border-t border-orange-500/10 dark:border-white/5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          printReservationReceipt({
+                            reservationCode: res.reservationCode,
+                            customerName: customer?.name || 'Guest',
+                            partySize: res.partySize,
+                            startAt: res.startAt,
+                            status: res.status,
+                            branch: res.branch,
+                            tableNumber: res.tableNumber,
+                            notes: res.notes,
+                            phone: customer?.phone,
+                            email: customer?.email,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-orange-500/30 bg-orange-500/10 px-3 py-1.5 text-xs font-semibold text-orange-500 hover:bg-orange-500 hover:text-white transition"
+                        title="Print reservation receipt / save as PDF"
+                      >
+                        <Printer size={13} />
+                        <span>Print Receipt</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          downloadReservationIcs({
+                            reservationCode: res.reservationCode,
+                            customerName: customer?.name || 'Guest',
+                            partySize: res.partySize,
+                            startAt: res.startAt,
+                            status: res.status,
+                            branch: res.branch,
+                            tableNumber: res.tableNumber,
+                            notes: res.notes,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-gray-400 hover:text-white hover:bg-white/10 transition"
+                        title="Add to Calendar"
+                      >
+                        <CalendarPlus size={13} />
+                        <span>Add to Calendar</span>
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="text-xs font-semibold text-gray-400">
-                    Source: {res.source}
+                  <div className="text-xs font-semibold text-gray-400 self-start md:self-center">
+                    Channel: <span className="font-mono text-orange-400">{res.source}</span>
                   </div>
                 </div>
               ))

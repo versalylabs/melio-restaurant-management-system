@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Users, CheckCircle, Sparkles, AlertCircle, BookmarkCheck } from 'lucide-react';
+import { X, Calendar, Clock, Users, CheckCircle, Sparkles, AlertCircle, BookmarkCheck, Printer, CalendarPlus, Copy, Check } from 'lucide-react';
 import { publicOrderingApi } from '../../../services/api';
+import { printReservationReceipt, downloadReservationIcs } from '../../../utils/reservationReceipt';
 
 type Branch = { id: string; name: string; city?: string; address?: string; phone?: string };
 
@@ -33,6 +34,7 @@ export default function ReservationModal({
   const [email, setEmail] = useState('');
   const [specialRequests, setSpecialRequests] = useState('');
   const [submittedData, setSubmittedData] = useState<any>(null);
+  const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -89,43 +91,146 @@ export default function ReservationModal({
         </button>
 
         {submittedData ? (
-          <div className="text-center py-4 space-y-4">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-500/20 text-orange-400">
-              <CheckCircle size={36} />
-            </div>
-
-            <div className="inline-flex items-center gap-2 rounded-full border border-orange-500/30 bg-orange-500/10 px-4 py-1 text-xs font-bold uppercase tracking-widest text-orange-400">
-              <BookmarkCheck size={14} /> Ref: {submittedData.reservationCode}
-            </div>
-
-            <h3 className="font-serif text-2xl font-bold text-white">Table Request Confirmed!</h3>
-
-            <p className="text-sm text-gray-300">
-              Thank you, <span className="text-orange-400 font-semibold">{submittedData.customerName}</span>. Your reservation for <span className="text-white font-semibold">{submittedData.partySize} guests</span> at <span className="text-white font-semibold">{submittedData.branch?.name || 'our restaurant'}</span> on <span className="text-white font-semibold">{submittedData.date}</span> at <span className="text-white font-semibold">{submittedData.time}</span> is now recorded.
-            </p>
-
-            <div className="rounded-2xl bg-zinc-900/90 border border-white/10 p-4 text-xs text-gray-400 text-left space-y-2">
-              <div className="flex justify-between">
-                <span className="text-gray-400">Status:</span>
-                <span className="font-bold text-amber-400">{submittedData.status || 'PENDING'}</span>
+          <div className="py-2 space-y-4">
+            <div className="text-center space-y-2">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+                <CheckCircle size={32} />
               </div>
-              {submittedData.tableNumber && (
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Pre-assigned Table:</span>
-                  <span className="font-bold text-white">Table #{submittedData.tableNumber}</span>
+              <h3 className="font-serif text-2xl font-bold text-white">Table Booking Confirmed!</h3>
+              <p className="text-xs text-gray-300 max-w-sm mx-auto">
+                Thank you, <span className="text-orange-400 font-semibold">{submittedData.customerName}</span>. Your reservation has been recorded in our system.
+              </p>
+            </div>
+
+            {/* Receipt Card Style Container */}
+            <div className="rounded-2xl bg-zinc-900/90 border border-orange-500/20 p-4 text-xs space-y-3 relative overflow-hidden shadow-inner">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/5 rounded-full blur-2xl pointer-events-none" />
+
+              {/* Reference Header */}
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-gray-400 tracking-wider">Booking Reference</span>
+                  <div className="font-mono text-base font-extrabold text-orange-400 tracking-wider">
+                    {submittedData.reservationCode}
+                  </div>
                 </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-gray-400">Confirmation Contact:</span>
-                <span className="font-mono text-white">{phone || email}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(submittedData.reservationCode);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2500);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-gray-300 hover:text-white hover:bg-white/10 transition"
+                  title="Copy reference code"
+                >
+                  {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                  <span>{copied ? 'Copied!' : 'Copy Ref'}</span>
+                </button>
               </div>
+
+              {/* Key Details Grid */}
+              <div className="grid grid-cols-2 gap-2.5 py-1">
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-semibold">Date & Time</span>
+                  <p className="font-bold text-white text-xs mt-0.5">
+                    {submittedData.date} at {submittedData.time}
+                  </p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-semibold">Party Size</span>
+                  <p className="font-bold text-white text-xs mt-0.5">
+                    {submittedData.partySize} {submittedData.partySize === 1 ? 'Guest' : 'Guests'}
+                  </p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-semibold">Venue / Branch</span>
+                  <p className="font-bold text-white text-xs mt-0.5 truncate">
+                    {submittedData.branch?.name || 'Melio Fine Dining'}
+                  </p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
+                  <span className="text-[10px] text-gray-400 uppercase font-semibold">Table Allocation</span>
+                  <p className="font-bold text-orange-400 text-xs mt-0.5">
+                    {submittedData.tableNumber ? `Table #${submittedData.tableNumber}` : 'Host stand assignment'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Contact and Status */}
+              <div className="space-y-1.5 pt-1 text-[11px] border-t border-white/5">
+                <div className="flex justify-between text-gray-300">
+                  <span className="text-gray-400">Confirmation Sent To:</span>
+                  <span className="font-mono font-medium text-white">{phone || email || 'Provided Contact'}</span>
+                </div>
+                {submittedData.notes && (
+                  <div className="flex justify-between text-gray-300">
+                    <span className="text-gray-400">Special Notes:</span>
+                    <span className="text-amber-400/90 text-right truncate max-w-[200px]">{submittedData.notes}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Arrival Notice:</span>
+                  <span className="text-emerald-400 font-semibold">Tables held for 15 mins past time</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Receipt Actions */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() =>
+                  printReservationReceipt({
+                    reservationCode: submittedData.reservationCode,
+                    customerName: submittedData.customerName,
+                    partySize: submittedData.partySize,
+                    date: submittedData.date,
+                    time: submittedData.time,
+                    startAt: submittedData.startAt,
+                    status: submittedData.status,
+                    branch: submittedData.branch,
+                    tableNumber: submittedData.tableNumber,
+                    notes: submittedData.notes,
+                    phone,
+                    email,
+                  })
+                }
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-2.5 text-xs font-bold text-white hover:from-orange-600 hover:to-amber-600 transition shadow-lg shadow-orange-500/25"
+              >
+                <Printer size={14} />
+                <span>Print Receipt / PDF</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  downloadReservationIcs({
+                    reservationCode: submittedData.reservationCode,
+                    customerName: submittedData.customerName,
+                    partySize: submittedData.partySize,
+                    date: submittedData.date,
+                    time: submittedData.time,
+                    startAt: submittedData.startAt,
+                    status: submittedData.status,
+                    branch: submittedData.branch,
+                    tableNumber: submittedData.tableNumber,
+                    notes: submittedData.notes,
+                  })
+                }
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-4 py-2.5 text-xs font-semibold text-gray-200 hover:bg-white/10 hover:text-white transition"
+              >
+                <CalendarPlus size={14} />
+                <span>Add to Calendar</span>
+              </button>
             </div>
 
             <button
+              type="button"
               onClick={handleReset}
-              className="w-full rounded-xl bg-orange-500 py-3 text-sm font-bold text-white hover:bg-orange-600 transition shadow-lg shadow-orange-500/25"
+              className="w-full rounded-xl border border-white/10 py-2.5 text-xs font-semibold text-gray-400 hover:text-white hover:bg-white/5 transition"
             >
-              Done
+              Done & Return to Site
             </button>
           </div>
         ) : (

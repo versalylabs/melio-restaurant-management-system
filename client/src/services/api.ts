@@ -360,8 +360,8 @@ export const reportApi = {
 };
 
 export const reservationApi = {
-  getReservations: (params?: any) => cachedGet('/reservations', { params }),
-  getReservation: (id: string) => cachedGet(`/reservations/${id}`),
+  getReservations: (params?: any, config?: any) => cachedGet('/reservations', { params, ...config }),
+  getReservation: (id: string, config?: any) => cachedGet(`/reservations/${id}`, config),
   createReservation: (data: any) => api.post('/reservations', data),
   updateReservation: (id: string, data: any) => api.put(`/reservations/${id}`, data),
   updateStatus: (id: string, data: any) => api.patch(`/reservations/${id}/status`, data),
@@ -372,10 +372,10 @@ export const publicOrderingApi = {
   getRestaurants: () => cachedGet('/public/restaurants'),
   getMenu: (params: { restaurantId: string; branchId: string }) => cachedGet('/public/menu', { params }),
   placeOrder: (data: any) => api.post('/public/orders', data),
-  getOrder: (trackingToken: string) => cachedGet(`/public/orders/${trackingToken}`),
+  getOrder: (trackingToken: string, config?: any) => cachedGet(`/public/orders/${trackingToken}`, config),
   confirmPayment: (trackingToken: string, data?: { reference?: string }) => api.post(`/public/orders/${trackingToken}/pay/confirm`, data || {}),
   createReservation: (data: any) => api.post('/public/reservations', data),
-  getReservation: (codeOrId: string) => cachedGet(`/public/reservations/${codeOrId}`),
+  getReservation: (codeOrId: string, config?: any) => cachedGet(`/public/reservations/${codeOrId}`, config),
   checkAvailability: (params: { restaurantId: string; branchId: string; date: string; partySize?: number }) => cachedGet('/public/reservations/availability', { params }),
 };
 
