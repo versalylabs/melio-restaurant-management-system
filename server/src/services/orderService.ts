@@ -945,3 +945,169 @@ export const getPosTables = async (req: AuthRequest, res: ExpressResponse) => {
     })),
   });
 };
+
+export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) => {
+  const restaurantId = req.user!.restaurantId;
+  const userId = req.user!.id;
+  const userBranchId = req.user!.branchId;
+
+  const orders = req.body.orders;
+  if (!orders || !Array.isArray(orders) || orders.length === 0) {
+    return sendError(res, 'No offline orders provided to sync', undefined, 400);
+  }
+
+  const syncedOrders: Array<{ offlineId: string; serverOrderId: string; serverOrderNumber: string }> = [];
+  const errors: Array<{ offlineId: string; error: string }> = [];
+
+  for (const offlineOrder of orders) {
+    const offlineId = String(offlineOrder.id || '');
+    if (!offlineId) continue;
+
+    const branchId = offlineOrder.branchId || userBranchId;
+    if (!branchId) {
+      errors.push({ offlineId, error: 'No branch ID associated with this order' });
+      continue;
+    }
+
+    try {
+      // 1. Idempotency check: see if an order with this offline tag was already created
+      const offlineTag = `[OfflineID: ${offlineId}]`;
+      const existing = await prisma.sale.findFirst({
+        where: {
+          restaurantId,
+          notes: { contains: offlineTag },
+        },
+        select: { id: true, orderNumber: true },
+      });
+
+      if (existing) {
+        syncedOrders.push({
+          offlineId,
+          serverOrderId: existing.id,
+          serverOrderNumber: existing.orderNumber,
+        });
+        continue;
+      }
+
+      // 2. Validate items
+      const rawItems = Array.isArray(offlineOrder.items) ? offlineOrder.items : [];
+      if (rawItems.length === 0) {
+        errors.push({ offlineId, error: 'Order has no items' });
+        continue;
+      }
+
+      // 3. Process inside transaction
+      const createdSale = await prisma.$transaction(async (tx) => {
+        // Atomic sequential order number
+        const counter = await tx.orderCounter.upsert({
+          where: { restaurantId_branchId: { restaurantId, branchId } },
+          create: { restaurantId, branchId, lastNumber: 1 },
+          update: { lastNumber: { increment: 1 } },
+        });
+
+        const orderNumber = `#${counter.lastNumber}`;
+
+        // Validate table if provided
+        let tableConnect: any = undefined;
+        if (offlineOrder.tableId) {
+          const tbl = await tx.table.findFirst({
+            where: { id: offlineOrder.tableId, branchId, restaurantId, status: { not: 'INACTIVE' } },
+            select: { id: true },
+          });
+          if (tbl) {
+            tableConnect = { connect: { id: tbl.id } };
+          }
+        }
+
+        const notesWithTag = `${offlineOrder.notes ? offlineOrder.notes + ' ' : ''}${offlineTag} [OfflineRef: ${offlineOrder.offlineOrderNumber || 'OFF'}] [OfflineCreated: ${offlineOrder.createdAt || new Date().toISOString()}]`;
+
+        const finalStatus = offlineOrder.status === 'HELD' ? 'HELD' : 'SUBMITTED';
+
+        const newSale = await tx.sale.create({
+          data: {
+            orderNumber,
+            orderType: offlineOrder.orderType || 'DINE_IN',
+            customerName: offlineOrder.customerName ? String(offlineOrder.customerName).trim() : null,
+            ...(offlineOrder.customerId ? { customer: { connect: { id: offlineOrder.customerId } } } : {}),
+            status: finalStatus,
+            subtotal: Number(offlineOrder.subtotal) || 0,
+            discountAmount: Number(offlineOrder.discountAmount) || 0,
+            discountReason: offlineOrder.discountReason || (offlineOrder.discountAmount > 0 ? 'Offline Discount' : null),
+            discountAppliedBy: offlineOrder.discountAmount > 0 ? userId : null,
+            taxAmount: Number(offlineOrder.taxAmount) || 0,
+            serviceChargeAmount: Number(offlineOrder.serviceChargeAmount) || 0,
+            totalAmount: Number(offlineOrder.totalAmount) || 0,
+            notes: notesWithTag,
+            createdBy: userId,
+            createdAt: offlineOrder.createdAt ? new Date(offlineOrder.createdAt) : new Date(),
+            restaurant: { connect: { id: restaurantId } },
+            branch: { connect: { id: branchId } },
+            ...(tableConnect ? { table: tableConnect } : {}),
+            items: {
+              create: rawItems.map((item: any) => ({
+                menuItemId: item.menuItemId,
+                itemNameSnapshot: item.itemNameSnapshot || 'Menu Item',
+                unitPrice: Number(item.unitPrice) || 0,
+                quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+                subtotal: Math.round(((Number(item.unitPrice) || 0) * Math.max(1, Math.floor(Number(item.quantity) || 1))) * 100) / 100,
+                notes: item.notes || null,
+                modifiers: {
+                  create: (item.modifiers || []).map((m: any) => ({
+                    modifierOptionId: m.modifierOptionId,
+                    optionNameSnapshot: m.optionNameSnapshot || 'Option',
+                    priceAdjustment: Number(m.priceAdjustment) || 0,
+                  })),
+                },
+              })),
+            },
+          },
+          include: {
+            items: { include: { modifiers: true } },
+          },
+        });
+
+        await tx.saleStatusHistory.create({
+          data: {
+            saleId: newSale.id,
+            status: finalStatus,
+            changedBy: userId,
+            notes: `Synced from offline queue (${offlineOrder.offlineOrderNumber || 'OFF'})`,
+          },
+        });
+
+        if (finalStatus === 'SUBMITTED' && offlineOrder.tableId) {
+          await tx.table.updateMany({
+            where: { id: offlineOrder.tableId, branchId },
+            data: { status: 'OCCUPIED' },
+          });
+        }
+
+        return newSale;
+      });
+
+      if (createdSale.status === 'SUBMITTED') {
+        try {
+          await createKitchenTicketForOrder(createdSale.id, restaurantId, branchId);
+        } catch (e) {
+          console.warn('[OfflineSync] Note: kitchen ticket routing completed with notice:', e);
+        }
+      }
+
+      syncedOrders.push({
+        offlineId,
+        serverOrderId: createdSale.id,
+        serverOrderNumber: createdSale.orderNumber,
+      });
+    } catch (orderErr: any) {
+      console.error(`[OfflineSync] Error syncing offline order ${offlineId}:`, orderErr);
+      errors.push({ offlineId, error: orderErr.message || 'Failed to sync order' });
+    }
+  }
+
+  return sendResponse(res, true, 'Offline orders synchronization processed', {
+    syncedCount: syncedOrders.length,
+    failedCount: errors.length,
+    syncedOrders,
+    errors,
+  });
+};

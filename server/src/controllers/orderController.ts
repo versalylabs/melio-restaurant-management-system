@@ -11,6 +11,7 @@ import {
   cancelOrder,
   getPosMenu,
   getPosTables,
+  syncOfflineOrders,
 } from '../services/orderService';
 import { AuthRequest, authenticate, authorize } from '../middleware/auth';
 
@@ -25,3 +26,5 @@ export const submitOrderController = async (req: AuthRequest, res: ExpressRespon
 export const cancelOrderController = async (req: AuthRequest, res: ExpressResponse) => cancelOrder(req, res);
 export const getPosMenuController = async (req: AuthRequest, res: ExpressResponse) => getPosMenu(req, res);
 export const getPosTablesController = async (req: AuthRequest, res: ExpressResponse) => getPosTables(req, res);
+export const syncOfflineOrdersController = async (req: AuthRequest, res: ExpressResponse) => syncOfflineOrders(req, res);
+

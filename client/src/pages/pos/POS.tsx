@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Clock, CheckCircle, AlertCircle, UtensilsCrossed } from 'lucide-react';
+import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Clock, CheckCircle, AlertCircle, UtensilsCrossed, Wifi, WifiOff, UploadCloud, RefreshCw, Trash2 } from 'lucide-react';
 import { orderApi, customerApi, promotionApi, restaurantApi, branchApi } from '../../services/api';
 import type { PosCategory, PosMenuItem, PosTable, SaleItem, SaleItemModifier } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
@@ -9,6 +9,7 @@ import Modal from '../../components/ui/Modal';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
 import { OptimizedImage } from '../../components/common/OptimizedImage';
 import { preloadImages } from '../../utils/imagePreloader';
+import { offlineSyncService, type OfflineOrder } from '../../services/offlineSyncService';
 
 const ORDER_TYPES = [
   { value: 'DINE_IN', label: 'Dine In', requiresTable: true },
@@ -56,6 +57,65 @@ export default function POS() {
   const [selectedModifiers, setSelectedModifiers] = useState<SaleItemModifier[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [activeBranchName, setActiveBranchName] = useState('');
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [pendingOfflineCount, setPendingOfflineCount] = useState(0);
+  const [showOfflineModal, setShowOfflineModal] = useState(false);
+  const [offlineOrders, setOfflineOrders] = useState<OfflineOrder[]>([]);
+  const [syncingOffline, setSyncingOffline] = useState(false);
+
+  const refreshOfflineQueue = async () => {
+    const list = await offlineSyncService.getAllOfflineOrders();
+    setOfflineOrders(list);
+    const pending = list.filter((o) => o.syncStatus === 'PENDING' || o.syncStatus === 'FAILED');
+    setPendingOfflineCount(pending.length);
+  };
+
+  useEffect(() => {
+    refreshOfflineQueue();
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      setSuccessMessage('Internet connection restored. Synchronizing offline orders...');
+      triggerSync();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      setError('You are currently offline. New orders will be safely queued locally.');
+    };
+    const handleQueueChange = () => {
+      refreshOfflineQueue();
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('rms-offline-queue-changed', handleQueueChange);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('rms-offline-queue-changed', handleQueueChange);
+    };
+  }, []);
+
+  const triggerSync = async () => {
+    if (!navigator.onLine) {
+      setError('Cannot sync while offline. Please check your internet connection.');
+      return;
+    }
+    setSyncingOffline(true);
+    try {
+      const res = await offlineSyncService.syncOfflineOrders(orderApi);
+      if (res.syncedCount > 0) {
+        setSuccessMessage(`Synced ${res.syncedCount} offline order(s) to cloud successfully!`);
+        setTimeout(() => setSuccessMessage(''), 4500);
+      }
+      await refreshOfflineQueue();
+    } catch {
+      // Handled internally in service
+    } finally {
+      setSyncingOffline(false);
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -63,6 +123,7 @@ export default function POS() {
   }, [user?.id]);
 
   const fetchData = async () => {
+    const activeBranchId = getActiveBranchId(user);
     try {
       const [menuRes, tablesRes, customersRes, promotionsRes, restaurantRes, branchesRes] = await Promise.all([
         orderApi.getPosMenu(),
@@ -78,20 +139,40 @@ export default function POS() {
         if (cats.length > 0 && !selectedCategory) {
           setSelectedCategory(cats[0].id);
         }
+        if (activeBranchId) {
+          offlineSyncService.saveMenuCache(activeBranchId, cats);
+        }
         // Preload menu item images in the background for 0ms render
         const allItemImages = cats.flatMap((c: any) => (c.items || []).map((i: any) => i.image));
         preloadImages(allItemImages);
       }
       if (tablesRes.data.success) {
-        setTables(tablesRes.data.data?.tables || []);
+        const tbls = tablesRes.data.data?.tables || [];
+        setTables(tbls);
+        if (activeBranchId) {
+          offlineSyncService.saveTablesCache(activeBranchId, tbls);
+        }
       }
       if (customersRes.data.success) setCustomers(customersRes.data.data?.customers || customersRes.data.data || []);
       if (promotionsRes.data.success) setPromotions(promotionsRes.data.data?.promotions || []);
-      const activeBranchId = getActiveBranchId(user);
       const activeBranch = (branchesRes.data?.data?.branches || []).find((b:any) => b.id === activeBranchId);
       setActiveBranchName(activeBranch?.name || user?.branchName || 'Active branch');
       if (restaurantRes.data.success) { setTaxRate((restaurantRes.data.data?.taxRate || 0) * 100); setServiceChargeRate((restaurantRes.data.data?.serviceChargeRate || 0) * 100); }
     } catch (err: any) {
+      if (!navigator.onLine || !err.response) {
+        setIsOnline(false);
+        const cachedCats = activeBranchId ? await offlineSyncService.getMenuCache(activeBranchId) : null;
+        const cachedTbls = activeBranchId ? await offlineSyncService.getTablesCache(activeBranchId) : null;
+        if (cachedCats && cachedCats.length > 0) {
+          setCategories(cachedCats);
+          if (cachedCats.length > 0 && !selectedCategory) setSelectedCategory(cachedCats[0].id);
+          if (cachedTbls) setTables(cachedTbls);
+          setSuccessMessage('Loaded cached menu & tables (Offline Mode)');
+          setTimeout(() => setSuccessMessage(''), 4500);
+          setLoading(false);
+          return;
+        }
+      }
       setError(err.response?.data?.message || 'Failed to load POS data');
     } finally {
       setLoading(false);
@@ -287,6 +368,49 @@ export default function POS() {
     setCart((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const queueOrderLocally = async (status: 'SUBMITTED' | 'HELD') => {
+    const activeBranchId = getActiveBranchId(user);
+    const totals = getPreviewTotals();
+    const offOrder = await offlineSyncService.queueOfflineOrder({
+      branchId: activeBranchId || user?.branchId || '',
+      branchName: activeBranchName,
+      restaurantId: user?.restaurantId || '',
+      orderType,
+      tableId: selectedTable?.id,
+      tableNumber: selectedTable?.tableNumber,
+      customerName: customerName || undefined,
+      customerId: selectedCustomerId || undefined,
+      notes: orderNotes || undefined,
+      status,
+      items: cart.map((item) => ({
+        menuItemId: item.menuItemId,
+        itemNameSnapshot: item.itemNameSnapshot,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+        notes: item.notes,
+        modifiers: item.modifiers,
+      })),
+      subtotal: totals.subtotal,
+      discountAmount: totals.discount,
+      discountType: selectedPromotionId ? 'FIXED' : manualDiscountType,
+      discountReason: selectedPromotionId ? 'Promotion' : undefined,
+      taxAmount: totals.tax,
+      serviceChargeAmount: totals.service,
+      totalAmount: totals.total,
+    });
+
+    setSuccessMessage(`Order #${offOrder.offlineOrderNumber} saved to Offline Queue! Will auto-sync when online.`);
+    setTimeout(() => setSuccessMessage(''), 5000);
+    setCart([]);
+    setCustomerName('');
+    setSelectedCustomerId('');
+    setOrderNotes('');
+    setSelectedPromotionId('');
+    setManualDiscount(0);
+    setSelectedTable(null);
+    await refreshOfflineQueue();
+  };
+
   const handleSubmitOrder = async () => {
     if (cart.length === 0) return;
     setError('');
@@ -296,6 +420,17 @@ export default function POS() {
     }
 
     setSubmitting(true);
+    if (!navigator.onLine) {
+      try {
+        await queueOrderLocally('SUBMITTED');
+      } catch (err: any) {
+        setError('Failed to queue offline order: ' + err.message);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     try {
       const response = await orderApi.createOrder({
         orderType,
@@ -335,7 +470,15 @@ export default function POS() {
         fetchData();
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to submit order');
+      if (!navigator.onLine || !err.response || err.code === 'ERR_NETWORK') {
+        try {
+          await queueOrderLocally('SUBMITTED');
+        } catch (offErr: any) {
+          setError('Network unavailable and offline queueing failed: ' + offErr.message);
+        }
+      } else {
+        setError(err.response?.data?.message || 'Failed to submit order');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -345,6 +488,18 @@ export default function POS() {
     if (cart.length === 0) return;
     setError('');
     setSubmitting(true);
+
+    if (!navigator.onLine) {
+      try {
+        await queueOrderLocally('HELD');
+      } catch (err: any) {
+        setError('Failed to queue offline held order: ' + err.message);
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
     try {
       const response = await orderApi.createOrder({
         orderType,
@@ -378,7 +533,15 @@ export default function POS() {
         setSelectedTable(null);
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to hold order');
+      if (!navigator.onLine || !err.response || err.code === 'ERR_NETWORK') {
+        try {
+          await queueOrderLocally('HELD');
+        } catch (offErr: any) {
+          setError('Network unavailable and offline queueing failed: ' + offErr.message);
+        }
+      } else {
+        setError(err.response?.data?.message || 'Failed to hold order');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -403,6 +566,40 @@ export default function POS() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Offline/Online Network Indicator */}
+          {!isOnline ? (
+            <div className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-amber-600 dark:text-amber-400">
+              <WifiOff className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+              <span className="hidden sm:inline">Offline Mode</span>
+            </div>
+          ) : (
+            <div className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400" title="Connected to Neon Cloud">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span>Online</span>
+            </div>
+          )}
+
+          {/* Pending Offline Sync Badge */}
+          {pendingOfflineCount > 0 && (
+            <button
+              onClick={() => { setShowOfflineModal(true); refreshOfflineQueue(); }}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-orange-500/30 bg-orange-500/15 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-orange-600 dark:text-orange-400 hover:bg-orange-500/25 transition shadow-sm"
+              title="Click to view offline queue"
+            >
+              <UploadCloud className="w-3.5 h-3.5 text-orange-500" />
+              <span>{pendingOfflineCount} Queued</span>
+              {isOnline && (
+                <span
+                  onClick={(e) => { e.stopPropagation(); triggerSync(); }}
+                  className="ml-1 rounded-md bg-orange-500 px-1.5 py-0.5 text-[10px] text-white hover:bg-orange-600 transition"
+                  title="Sync now"
+                >
+                  {syncingOffline ? '...' : 'Sync'}
+                </span>
+              )}
+            </button>
+          )}
+
           {/* Mobile Menu / Cart Switcher Toggle */}
           <div className="flex items-center lg:hidden bg-white/60 dark:bg-white/5 p-1 rounded-xl border border-orange-500/15 shadow-sm">
             <button
@@ -900,6 +1097,101 @@ export default function POS() {
             )}
             <div className="flex justify-end pt-2">
               <Button variant="secondary" onClick={() => setShowHeldOrdersModal(false)} className="rounded-xl">Close</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showOfflineModal && (
+        <Modal title="Offline Orders Queue" onClose={() => setShowOfflineModal(false)}>
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <span>Orders taken while offline are safely queued locally in IndexedDB.</span>
+              {isOnline && pendingOfflineCount > 0 && (
+                <Button
+                  size="sm"
+                  onClick={triggerSync}
+                  disabled={syncingOffline}
+                  className="rounded-xl bg-orange-500 text-white hover:bg-orange-600 shrink-0"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 mr-1 ${syncingOffline ? 'animate-spin' : ''}`} />
+                  {syncingOffline ? 'Syncing...' : 'Sync Pending to Cloud'}
+                </Button>
+              )}
+            </div>
+
+            {offlineOrders.length === 0 ? (
+              <div className="py-8 text-center text-gray-500">
+                <UploadCloud className="w-8 h-8 text-orange-400 mx-auto mb-2 opacity-50" />
+                <p className="text-sm font-semibold text-gray-700 dark:text-gray-200">No offline orders in queue</p>
+                <p className="text-xs text-gray-400 mt-0.5">Orders taken while disconnected will appear here and sync automatically.</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                {offlineOrders.map((ord) => (
+                  <div
+                    key={ord.id}
+                    className="p-3.5 border rounded-2xl border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 flex items-center justify-between gap-3 shadow-sm"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-gray-900 dark:text-gray-100">
+                          {ord.offlineOrderNumber}
+                          {ord.serverOrderNumber && (
+                            <span className="ml-2 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                              → Cloud: {ord.serverOrderNumber}
+                            </span>
+                          )}
+                        </p>
+                        <Badge
+                          variant={
+                            ord.syncStatus === 'SYNCED'
+                              ? 'success'
+                              : ord.syncStatus === 'SYNCING'
+                              ? 'warning'
+                              : ord.syncStatus === 'FAILED'
+                              ? 'danger'
+                              : 'warning'
+                          }
+                        >
+                          {ord.syncStatus}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                        {ord.orderType} {ord.tableNumber ? `· Table ${ord.tableNumber}` : ''} {ord.customerName ? `· ${ord.customerName}` : ''} · {ord.items.length} item(s)
+                      </p>
+                      <p className="text-[11px] text-gray-400">
+                        {new Date(ord.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </p>
+                      {ord.syncError && (
+                        <p className="text-[11px] text-red-500 mt-1 font-medium">{ord.syncError}</p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-orange-600 dark:text-orange-400">
+                        KES {(ord.totalAmount || 0).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2 border-t border-orange-500/10 dark:border-white/10">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  await offlineSyncService.clearSyncedOrders();
+                  await refreshOfflineQueue();
+                }}
+                className="text-xs text-gray-400 hover:text-red-500"
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1" /> Clear Synced
+              </Button>
+              <Button variant="secondary" onClick={() => setShowOfflineModal(false)} className="rounded-xl">
+                Close
+              </Button>
             </div>
           </div>
         </Modal>

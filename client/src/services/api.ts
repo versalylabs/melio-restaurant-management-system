@@ -240,6 +240,7 @@ export const orderApi = {
   updateOrderStatus: (id: string, status: string) => api.patch(`/orders/${id}/status`, { status }),
   getPosMenu: () => cachedGet('/orders/pos/menu'),
   getPosTables: () => cachedGet('/orders/pos/tables'),
+  syncOfflineOrders: (data: any) => api.post('/orders/sync-offline', data),
 };
 
 export const kitchenApi = {

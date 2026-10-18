@@ -11,6 +11,7 @@ import {
   cancelOrderController,
   getPosMenuController,
   getPosTablesController,
+  syncOfflineOrdersController,
 } from '../controllers/orderController';
 import { authenticate, authorize } from '../middleware/auth';
 
@@ -21,6 +22,7 @@ router.use(authenticate);
 router.get('/', getOrdersController);
 router.get('/pos/menu', getPosMenuController);
 router.get('/pos/tables', getPosTablesController);
+router.post('/sync-offline', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), syncOfflineOrdersController);
 router.get('/:id', getOrderController);
 router.post('/', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), createOrderController);
 router.patch('/:id', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), updateOrderController);

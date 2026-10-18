@@ -2,7 +2,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { useAuth } from '../../contexts/AuthContext';
 import { useEffect, useRef, useState } from 'react';
-import { Moon, Sun, Building2, Bell, ChevronDown, Check, ExternalLink, Menu as MenuIcon, X, UtensilsCrossed } from 'lucide-react';
+import { Moon, Sun, Building2, Bell, ChevronDown, Check, ExternalLink, Menu as MenuIcon, X, UtensilsCrossed, WifiOff } from 'lucide-react';
 import { notificationApi, branchApi } from '../../services/api';
 
 export default function AppShell({ children }: { children?: React.ReactNode }) {
@@ -14,9 +14,21 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [activeBranchId, setActiveBranchId] = useState(() => localStorage.getItem('rms-active-branch') || user?.branchId || '');
+  const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
   const branchMenuRef = useRef<HTMLDivElement>(null);
   const canSwitchBranch = ['OWNER','ADMIN','MANAGER'].includes(user?.roleName || '');
   const activeBranch = branches.find((b) => b.id === activeBranchId);
+
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
 
   useEffect(() => {
     const saved = localStorage.getItem('rms-active-branch');
@@ -138,6 +150,13 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-1.5 sm:gap-2.5">
+            {!isOnline && (
+              <span className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-600 dark:text-amber-400" title="Operating offline: transactions will sync automatically when reconnected">
+                <WifiOff className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
+                <span className="hidden sm:inline">Offline Mode</span>
+              </span>
+            )}
+
             <a href="/" target="_blank" rel="noopener noreferrer" className="hidden md:inline-flex items-center gap-1.5 rounded-xl border border-orange-200/80 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 shadow-sm transition hover:border-orange-400 hover:bg-orange-50 hover:text-orange-700 dark:border-white/10 dark:bg-[#0d0d11] dark:text-gray-200" title="Open public live website">
               <ExternalLink className="h-3.5 w-3.5 text-orange-500" /> Live Site
             </a>
