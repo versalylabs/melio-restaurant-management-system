@@ -21,10 +21,32 @@ async function main() {
       update: { featuredMenuItemId: featured?.id || null, galleryFilters: JSON.stringify([{id:'dishes',label:'Signature Dishes'},{id:'ambience',label:'Interior & Ambience'}]) },
       create: { restaurantId: existing.id, featuredMenuItemId: featured?.id || null, galleryFilters: JSON.stringify([{id:'dishes',label:'Signature Dishes'},{id:'ambience',label:'Interior & Ambience'}]) },
     });
-    const galleryBase = (process.env.SUPABASE_URL || 'https://czqznpcgyhcntlpsecla.supabase.co').replace(/\/$/, '');
     const gallery = [['Grilled Chicken','dishes','Grilled Chicken.jpg','Melio signature grilled chicken.'],['Beef Steak','dishes','Beef Steak.jpg','Tender beef steak served with chips and salad.'],['Beef Burger','dishes','Beef Burger.jpg','Melio gourmet beef burger.'],['Chicken Burger','dishes','Chicken Burger.jpg','Grilled chicken burger with house sauce.'],['Chicken Wings','dishes','Chicken Wings.jpg','Spicy grilled chicken wings.'],['Chocolate Cake','dishes','Chocolate Cake.jpg','Rich chocolate layer cake.']];
-    if ((await prisma.websiteGalleryItem.count({ where: { restaurantId: existing.id } })) === 0) {
-      for (let i=0;i<gallery.length;i++) { const [title,category,filename,description]=gallery[i]; await prisma.websiteGalleryItem.create({data:{restaurantId:existing.id,title,category,image:`${galleryBase}/storage/v1/object/public/menu-images/${encodeURIComponent(filename)}`,description,displayOrder:i}}); }
+    for (let i=0;i<gallery.length;i++) {
+      const [title,category,filename,description]=gallery[i];
+      const existingGal = await prisma.websiteGalleryItem.findFirst({ where: { restaurantId: existing.id, title } });
+      if (!existingGal) {
+        await prisma.websiteGalleryItem.create({data:{restaurantId:existing.id,title,category,image:`/images/food/${encodeURIComponent(filename)}`,description,displayOrder:i}});
+      } else {
+        await prisma.websiteGalleryItem.update({where:{id:existingGal.id},data:{image:`/images/food/${encodeURIComponent(filename)}`}});
+      }
+    }
+    const menuPhotos = [
+      ['Samosa', 'Samosa.jpg'],
+      ['Chicken Wings', 'Chicken Wings.jpg'],
+      ['Grilled Chicken', 'Grilled Chicken.jpg'],
+      ['Beef Steak', 'Beef Steak.jpg'],
+      ['Chicken Burger', 'Chicken Burger.jpg'],
+      ['Beef Burger', 'Beef Burger.jpg'],
+      ['Coke', 'Coke.jpg'],
+      ['Fresh Passion Juice', 'Passion Juice.jpg'],
+      ['Chocolate Cake', 'Chocolate Cake.jpg']
+    ];
+    for (const [name, file] of menuPhotos) {
+      await prisma.menuItem.updateMany({
+        where: { restaurantId: existing.id, name },
+        data: { image: `/images/food/${encodeURIComponent(file)}` }
+      });
     }
     const branches = await prisma.branch.findMany({ where: { restaurantId: existing.id } });
     if (branches.length >= 2) { await inventorySeed(existing, branches[0], branches[1]); }
@@ -261,7 +283,6 @@ async function fullSeed() {
     update: { featuredMenuItemId: featured?.id || null, galleryFilters: JSON.stringify([{id:'dishes',label:'Signature Dishes'},{id:'ambience',label:'Interior & Ambience'}]) },
     create: { restaurantId: restaurant.id, featuredMenuItemId: featured?.id || null, galleryFilters: JSON.stringify([{id:'dishes',label:'Signature Dishes'},{id:'ambience',label:'Interior & Ambience'}]) },
   });
-  const galleryBase = (process.env.SUPABASE_URL || 'https://czqznpcgyhcntlpsecla.supabase.co').replace(/\/$/, '');
   const gallery = [
     ['Grilled Chicken', 'dishes', 'Grilled Chicken.jpg', 'Melio signature grilled chicken.'],
     ['Beef Steak', 'dishes', 'Beef Steak.jpg', 'Tender beef steak served with chips and salad.'],
@@ -273,7 +294,7 @@ async function fullSeed() {
   if ((await prisma.websiteGalleryItem.count({ where: { restaurantId: restaurant.id } })) === 0) {
     for (let i = 0; i < gallery.length; i++) {
       const [title, category, filename, description] = gallery[i];
-      await prisma.websiteGalleryItem.create({ data: { restaurantId: restaurant.id, title, category, image: `${galleryBase}/storage/v1/object/public/menu-images/${encodeURIComponent(filename)}`, description, displayOrder: i } });
+      await prisma.websiteGalleryItem.create({ data: { restaurantId: restaurant.id, title, category, image: `/images/food/${encodeURIComponent(filename)}`, description, displayOrder: i } });
     }
   }
 }
@@ -334,8 +355,7 @@ async function menuSeed(restaurant: any, users: any) {
   const kilimani = branches.find((b: any) => b.code === 'KM')!;
   const moiAvenue = branches.find((b: any) => b.code === 'MA');
 
-  const supabaseBase = (process.env.SUPABASE_URL || 'https://czqznpcgyhcntlpsecla.supabase.co').replace(/\/$/, '');
-  const imageUrl = (filename: string) => `${supabaseBase}/storage/v1/object/public/menu-images/${encodeURIComponent(filename)}`;
+  const imageUrl = (filename: string) => `/images/food/${encodeURIComponent(filename)}`;
 
   const menuItems = [
     { categoryName: 'Starters', name: 'Samosa', image: imageUrl('Samosa.jpg'), description: 'Crispy triangular pastries with spiced meat filling', sellingPrice: 300, costPrice: 120, taxRate: 0, preparationTime: 10, available: true },

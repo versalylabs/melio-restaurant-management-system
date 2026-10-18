@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { MapPin, Navigation, Search, Check, AlertCircle, RefreshCw } from 'lucide-react';
+import { MapPin, Navigation, Search, Check, RefreshCw } from 'lucide-react';
 
 interface DeliveryLocationPickerProps {
   value: string;
@@ -315,7 +315,8 @@ export default function DeliveryLocationPicker({
         <div className="flex items-center justify-between mb-1">
           <label className="text-xs font-semibold text-gray-300 flex items-center gap-1.5">
             <MapPin size={13} className="text-orange-400" />
-            Delivery Address & Specific Directions
+            <span>Delivery Address & Specific Directions</span>
+            {addressFeedback && <span className="text-[10px] text-orange-400 font-normal">({addressFeedback})</span>}
           </label>
           {coords && (
             <span className="text-[10px] text-gray-400 font-mono">

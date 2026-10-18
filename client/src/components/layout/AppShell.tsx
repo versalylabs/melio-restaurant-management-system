@@ -1,4 +1,4 @@
-import { Outlet } from 'react-router-dom';
+import { Outlet, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { useAuth } from '../../contexts/AuthContext';
 import { useEffect, useRef, useState } from 'react';
@@ -7,6 +7,7 @@ import { notificationApi, branchApi } from '../../services/api';
 
 export default function AppShell({ children }: { children?: React.ReactNode }) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('rms-theme') !== 'light');
   const [branches, setBranches] = useState<Array<{id:string; name:string; code:string}>>([]);
   const [hasNotifications, setHasNotifications] = useState(false);
@@ -185,7 +186,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
               </div>
             )}
 
-            <button onClick={()=>window.location.href='/notifications'} className="relative rounded-xl border border-transparent p-1.5 sm:p-2 text-gray-500 dark:text-gray-400 hover:bg-orange-50 dark:hover:bg-[#1a1a20] transition" title="Notifications">
+            <button onClick={() => navigate('/notifications')} className="relative rounded-xl border border-transparent p-1.5 sm:p-2 text-gray-500 dark:text-gray-400 hover:bg-orange-50 dark:hover:bg-[#1a1a20] transition" title="Notifications">
               <Bell className="w-4 h-4" />
               {hasNotifications&&<span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-orange-500 ring-2 ring-white dark:ring-[#111116]"/>}
             </button>

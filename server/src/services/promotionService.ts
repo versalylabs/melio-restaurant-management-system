@@ -37,9 +37,21 @@ export const createPromotion = async (req: AuthRequest, res: ExpressResponse) =>
   if (!['ORDER','PRODUCT'].includes(b.scope)) return sendError(res, 'Invalid promotion scope');
   if (b.discountType === 'PERCENTAGE' && value > 100) return sendError(res, 'Percentage discount cannot exceed 100%');
   if (b.scope === 'PRODUCT' && !b.menuItemId) return sendError(res, 'Product promotions require a menu item');
+  
+  const code = b.code?.trim() || null;
+  if (code) {
+    const codeConflict = await prisma.promotion.findFirst({ where: { restaurantId, code } });
+    if (codeConflict) return sendError(res, 'Promotion code already exists for this restaurant', undefined, 409);
+  }
+
+  if (b.menuItemId) {
+    const mi = await prisma.menuItem.findFirst({ where: { id: b.menuItemId, restaurantId } });
+    if (!mi) return sendError(res, 'Selected menu item does not exist');
+  }
   if (b.customerId) { const c = await prisma.customer.findFirst({ where: { id: b.customerId, restaurantId } }); if (!c) return sendError(res, 'Invalid customer'); }
   if (b.branchId) { const br = await prisma.branch.findFirst({ where: { id: b.branchId, restaurantId, status: 'ACTIVE' } }); if (!br) return sendError(res, 'Invalid branch'); }
-  const promotion = await prisma.promotion.create({ data: { restaurantId, branchId: b.branchId || null, name: b.name.trim(), code: b.code?.trim() || null, description: b.description || null, discountType: b.discountType, value, scope: b.scope, menuItemId: b.menuItemId || null, customerId: b.customerId || null, minSubtotal: Math.max(0, Number(b.minSubtotal) || 0), maxDiscountAmount: b.maxDiscountAmount ? Math.max(0, Number(b.maxDiscountAmount)) : null, startsAt: b.startsAt ? new Date(b.startsAt) : null, endsAt: b.endsAt ? new Date(b.endsAt) : null, startTime: b.startTime || null, endTime: b.endTime || null, happyHour: !!b.happyHour, active: b.active !== false, createdBy: userId } });
+
+  const promotion = await prisma.promotion.create({ data: { restaurantId, branchId: b.branchId || null, name: b.name.trim(), code, description: b.description || null, discountType: b.discountType, value, scope: b.scope, menuItemId: b.menuItemId || null, customerId: b.customerId || null, minSubtotal: Math.max(0, Number(b.minSubtotal) || 0), maxDiscountAmount: b.maxDiscountAmount ? Math.max(0, Number(b.maxDiscountAmount)) : null, startsAt: b.startsAt ? new Date(b.startsAt) : null, endsAt: b.endsAt ? new Date(b.endsAt) : null, startTime: b.startTime || null, endTime: b.endTime || null, happyHour: !!b.happyHour, active: b.active !== false, createdBy: userId } });
   await createAuditLog(restaurantId, userId, 'CREATE', 'Promotion', promotion.id, `Created promotion ${promotion.name}`);
   return sendResponse(res, true, 'Promotion created successfully', promotion, 201);
 };
@@ -49,11 +61,47 @@ export const updatePromotion = async (req: AuthRequest, res: ExpressResponse) =>
   const existing = await prisma.promotion.findFirst({ where: { id, restaurantId } }); if (!existing) return sendError(res, 'Promotion not found', undefined, 404);
   const b=req.body||{}; const data:any={};
   for (const k of ['name','description','code','discountType','scope','menuItemId','customerId','branchId','startTime','endTime']) if (b[k] !== undefined) data[k]=b[k] || null;
-  if (b.name !== undefined) data.name=b.name.trim(); if (b.value !== undefined) data.value=Number(b.value); if (b.minSubtotal !== undefined) data.minSubtotal=Math.max(0,Number(b.minSubtotal)||0); if (b.maxDiscountAmount !== undefined) data.maxDiscountAmount=b.maxDiscountAmount===null||b.maxDiscountAmount===''?null:Math.max(0,Number(b.maxDiscountAmount)); if (b.startsAt !== undefined) data.startsAt=b.startsAt?new Date(b.startsAt):null; if (b.endsAt !== undefined) data.endsAt=b.endsAt?new Date(b.endsAt):null; if (b.happyHour !== undefined) data.happyHour=!!b.happyHour; if (b.active !== undefined) data.active=!!b.active;
+  if (b.name !== undefined) data.name=b.name.trim();
+  if (b.code !== undefined) {
+    data.code = b.code?.trim() || null;
+    if (data.code) {
+      const codeConflict = await prisma.promotion.findFirst({ where: { restaurantId, id: { not: id }, code: data.code } });
+      if (codeConflict) return sendError(res, 'Promotion code already exists for this restaurant', undefined, 409);
+    }
+  }
+  if (data.menuItemId) {
+    const mi = await prisma.menuItem.findFirst({ where: { id: data.menuItemId, restaurantId } });
+    if (!mi) return sendError(res, 'Selected menu item does not exist');
+  }
+  if (data.customerId) {
+    const c = await prisma.customer.findFirst({ where: { id: data.customerId, restaurantId } });
+    if (!c) return sendError(res, 'Selected customer does not exist');
+  }
+  if (data.branchId) {
+    const br = await prisma.branch.findFirst({ where: { id: data.branchId, restaurantId } });
+    if (!br) return sendError(res, 'Selected branch does not exist');
+  }
+  if (b.value !== undefined) data.value=Number(b.value); if (b.minSubtotal !== undefined) data.minSubtotal=Math.max(0,Number(b.minSubtotal)||0); if (b.maxDiscountAmount !== undefined) data.maxDiscountAmount=b.maxDiscountAmount===null||b.maxDiscountAmount===''?null:Math.max(0,Number(b.maxDiscountAmount)); if (b.startsAt !== undefined) data.startsAt=b.startsAt?new Date(b.startsAt):null; if (b.endsAt !== undefined) data.endsAt=b.endsAt?new Date(b.endsAt):null; if (b.happyHour !== undefined) data.happyHour=!!b.happyHour; if (b.active !== undefined) data.active=!!b.active;
   if (data.discountType==='PERCENTAGE' && data.value>100) return sendError(res,'Percentage discount cannot exceed 100%');
   const promotion=await prisma.promotion.update({where:{id},data}); await createAuditLog(restaurantId,userId,'UPDATE','Promotion',id,`Updated promotion ${promotion.name}`); return sendResponse(res,true,'Promotion updated successfully',promotion);
 };
-export const deletePromotion = async (req: AuthRequest,res:ExpressResponse)=>{const restaurantId=req.user!.restaurantId,userId=req.user!.id,id=req.params.id;const p=await prisma.promotion.findFirst({where:{id,restaurantId}});if(!p)return sendError(res,'Promotion not found',undefined,404);await prisma.promotion.delete({where:{id}});await createAuditLog(restaurantId,userId,'DELETE','Promotion',id,`Deleted promotion ${p.name}`);return sendResponse(res,true,'Promotion deleted successfully');};
+
+export const deletePromotion = async (req: AuthRequest, res: ExpressResponse) => {
+  const restaurantId = req.user!.restaurantId; const userId = req.user!.id; const id = req.params.id;
+  const p = await prisma.promotion.findFirst({ where: { id, restaurantId } });
+  if (!p) return sendError(res, 'Promotion not found', undefined, 404);
+
+  const saleCount = await prisma.sale.count({ where: { promotionId: id } });
+  if (saleCount > 0) {
+    await prisma.promotion.update({ where: { id }, data: { active: false } });
+    await createAuditLog(restaurantId, userId, 'DEACTIVATE', 'Promotion', id, `Deactivated promotion ${p.name} (used in ${saleCount} sales)`);
+    return sendResponse(res, true, 'Promotion was used in past sales and was safely deactivated', { deactivated: true });
+  }
+
+  await prisma.promotion.delete({ where: { id } });
+  await createAuditLog(restaurantId, userId, 'DELETE', 'Promotion', id, `Deleted promotion ${p.name}`);
+  return sendResponse(res, true, 'Promotion deleted successfully');
+};
 
 export const validatePromotion = async (promotionId:string, restaurantId:string, branchId:string, customerId:string|undefined, subtotal:number) => {
   const p=await prisma.promotion.findFirst({where:{id:promotionId,restaurantId,active:true}}); if(!p) throw new Error('Promotion is not active or does not exist');

@@ -6,9 +6,47 @@ import { uploadMenuImage } from './storageService';
 const DEFAULT_FILTERS=[{id:'dishes',label:'Signature Dishes'},{id:'cocktails',label:'Bar & Cocktails'},{id:'ambience',label:'Interior & Ambience'}];
 const DEFAULT_HOURS=JSON.stringify({mondayThursday:'11:30 AM – 10:30 PM',fridaySaturday:'11:30 AM – 11:30 PM',sunday:'10:00 AM – 09:00 PM'});
 export async function getWebsiteAdmin(req:AuthRequest,res:Response){const restaurantId=req.user!.restaurantId;let settings=await prisma.websiteSettings.findUnique({where:{restaurantId}});if(!settings)settings=await prisma.websiteSettings.create({data:{restaurantId,galleryFilters:JSON.stringify(DEFAULT_FILTERS)}});const [menuItems,gallery,testimonials,branches]=await Promise.all([prisma.menuItem.findMany({where:{restaurantId,status:'ACTIVE'},select:{id:true,name:true,sellingPrice:true,image:true},orderBy:[{displayOrder:'asc'},{name:'asc'}]}),prisma.websiteGalleryItem.findMany({where:{restaurantId},orderBy:[{displayOrder:'asc'},{createdAt:'asc'}]}),prisma.websiteTestimonial.findMany({where:{restaurantId},orderBy:[{displayOrder:'asc'},{createdAt:'asc'}]}),prisma.branch.findMany({where:{restaurantId},orderBy:{name:'asc'}})]);return sendResponse(res,true,'Website content retrieved',{settings,filters:JSON.parse(settings.galleryFilters||'[]'),socialLinks:JSON.parse(settings.socialLinks||'{}'),menuItems,gallery,testimonials,branches});}
-export async function updateWebsiteSettings(req:AuthRequest,res:Response){const restaurantId=req.user!.restaurantId,b=req.body||{},filters=Array.isArray(b.galleryFilters)?b.galleryFilters:DEFAULT_FILTERS;if(filters.length>6)return sendError(res,'A maximum of 6 gallery filters is allowed');const clean=filters.map((f:any)=>({id:String(f.id||'').trim().toLowerCase().replace(/[^a-z0-9_-]/g,'-'),label:String(f.label||'').trim()})).filter((f:any)=>f.id&&f.label);const settings=await prisma.websiteSettings.upsert({where:{restaurantId},create:{restaurantId,featuredMenuItemId:b.featuredMenuItemId||null,galleryFilters:JSON.stringify(clean),socialLinks:JSON.stringify(b.socialLinks||{})},update:{featuredMenuItemId:b.featuredMenuItemId||null,galleryFilters:JSON.stringify(clean),socialLinks:JSON.stringify(b.socialLinks||{})}});return sendResponse(res,true,'Website settings updated',{settings});}
-export async function createGalleryItem(req:AuthRequest,res:Response){const restaurantId=req.user!.restaurantId,b=req.body||{},file=(req as any).file as Express.Multer.File|undefined;if(!b.title||!b.category)return sendError(res,'Title and category are required');let image=String(b.image||'').trim();if(file){if(!['image/jpeg','image/png','image/webp','image/gif'].includes(file.mimetype))return sendError(res,'Only JPG, PNG, WEBP and GIF images are supported.');if(file.size>6*1024*1024)return sendError(res,'Image must be 6MB or smaller.');const ext=({'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif'} as Record<string,string>)[file.mimetype];image=await uploadMenuImage(`${restaurantId}/website-gallery/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`,file.buffer,file.mimetype);}if(!image)return sendError(res,'An image URL or image file is required');const count=await prisma.websiteGalleryItem.count({where:{restaurantId}});const item=await prisma.websiteGalleryItem.create({data:{restaurantId,branchId:b.branchId||null,title:String(b.title),category:String(b.category),image,description:b.description?String(b.description):null,displayOrder:Number(b.displayOrder||count)}});return sendResponse(res,true,'Gallery item added',item,201);}
-export async function updateGalleryItem(req:AuthRequest,res:Response){const restaurantId=req.user!.restaurantId,item=await prisma.websiteGalleryItem.findFirst({where:{id:req.params.id,restaurantId}});if(!item)return sendError(res,'Gallery item not found',undefined,404);const b=req.body||{};const updated=await prisma.websiteGalleryItem.update({where:{id:item.id},data:{branchId:b.branchId||null,title:String(b.title??item.title),category:String(b.category??item.category),image:String(b.image??item.image),description:b.description===undefined?item.description:String(b.description),displayOrder:Number(b.displayOrder??item.displayOrder),status:b.status==='INACTIVE'?'INACTIVE':'ACTIVE'}});return sendResponse(res,true,'Gallery item updated',updated);}
+export async function updateWebsiteSettings(req:AuthRequest,res:Response){
+  const restaurantId=req.user!.restaurantId,b=req.body||{},filters=Array.isArray(b.galleryFilters)?b.galleryFilters:DEFAULT_FILTERS;
+  if(filters.length>6)return sendError(res,'A maximum of 6 gallery filters is allowed');
+  if(b.featuredMenuItemId){
+    const feat=await prisma.menuItem.findFirst({where:{id:b.featuredMenuItemId,restaurantId,status:'ACTIVE'}});
+    if(!feat)return sendError(res,'Invalid featured menu item');
+  }
+  const clean=filters.map((f:any)=>({id:String(f.id||'').trim().toLowerCase().replace(/[^a-z0-9_-]/g,'-'),label:String(f.label||'').trim()})).filter((f:any)=>f.id&&f.label);
+  const settings=await prisma.websiteSettings.upsert({where:{restaurantId},create:{restaurantId,featuredMenuItemId:b.featuredMenuItemId||null,galleryFilters:JSON.stringify(clean),socialLinks:JSON.stringify(b.socialLinks||{})},update:{featuredMenuItemId:b.featuredMenuItemId||null,galleryFilters:JSON.stringify(clean),socialLinks:JSON.stringify(b.socialLinks||{})}});
+  return sendResponse(res,true,'Website settings updated',{settings});
+}
+export async function createGalleryItem(req:AuthRequest,res:Response){
+  const restaurantId=req.user!.restaurantId,b=req.body||{},file=(req as any).file as Express.Multer.File|undefined;
+  if(!b.title||!b.category)return sendError(res,'Title and category are required');
+  if(b.branchId){
+    const br=await prisma.branch.findFirst({where:{id:b.branchId,restaurantId}});
+    if(!br)return sendError(res,'Invalid branch');
+  }
+  let image=String(b.image||'').trim();
+  if(file){
+    if(!['image/jpeg','image/png','image/webp','image/gif'].includes(file.mimetype))return sendError(res,'Only JPG, PNG, WEBP and GIF images are supported.');
+    if(file.size>6*1024*1024)return sendError(res,'Image must be 6MB or smaller.');
+    const ext=({'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif'} as Record<string,string>)[file.mimetype];
+    image=await uploadMenuImage(`${restaurantId}/website-gallery/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`,file.buffer,file.mimetype);
+  }
+  if(!image)return sendError(res,'An image URL or image file is required');
+  const count=await prisma.websiteGalleryItem.count({where:{restaurantId}});
+  const item=await prisma.websiteGalleryItem.create({data:{restaurantId,branchId:b.branchId||null,title:String(b.title),category:String(b.category),image,description:b.description?String(b.description):null,displayOrder:Number(b.displayOrder||count)}});
+  return sendResponse(res,true,'Gallery item added',item,201);
+}
+export async function updateGalleryItem(req:AuthRequest,res:Response){
+  const restaurantId=req.user!.restaurantId,item=await prisma.websiteGalleryItem.findFirst({where:{id:req.params.id,restaurantId}});
+  if(!item)return sendError(res,'Gallery item not found',undefined,404);
+  const b=req.body||{};
+  if(b.branchId){
+    const br=await prisma.branch.findFirst({where:{id:b.branchId,restaurantId}});
+    if(!br)return sendError(res,'Invalid branch');
+  }
+  const updated=await prisma.websiteGalleryItem.update({where:{id:item.id},data:{branchId:b.branchId||null,title:String(b.title??item.title),category:String(b.category??item.category),image:String(b.image??item.image),description:b.description===undefined?item.description:String(b.description),displayOrder:Number(b.displayOrder??item.displayOrder),status:b.status==='INACTIVE'?'INACTIVE':'ACTIVE'}});
+  return sendResponse(res,true,'Gallery item updated',updated);
+}
 export async function deleteGalleryItem(req:AuthRequest,res:Response){const item=await prisma.websiteGalleryItem.findFirst({where:{id:req.params.id,restaurantId:req.user!.restaurantId}});if(!item)return sendError(res,'Gallery item not found',undefined,404);await prisma.websiteGalleryItem.delete({where:{id:item.id}});return sendResponse(res,true,'Gallery item removed');}
 export async function createTestimonial(req:AuthRequest,res:Response){const restaurantId=req.user!.restaurantId,b=req.body||{};if(!b.name||!b.text)return sendError(res,'Name and testimonial text are required');const count=await prisma.websiteTestimonial.count({where:{restaurantId}});const item=await prisma.websiteTestimonial.create({data:{restaurantId,name:String(b.name),role:b.role?String(b.role):null,rating:Math.max(1,Math.min(5,Number(b.rating||5))),text:String(b.text),dateLabel:b.dateLabel?String(b.dateLabel):null,displayOrder:Number(b.displayOrder||count)}});return sendResponse(res,true,'Testimonial added',item,201);}
 export async function updateTestimonial(req:AuthRequest,res:Response){const item=await prisma.websiteTestimonial.findFirst({where:{id:req.params.id,restaurantId:req.user!.restaurantId}});if(!item)return sendError(res,'Testimonial not found',undefined,404);const b=req.body||{};const updated=await prisma.websiteTestimonial.update({where:{id:item.id},data:{name:String(b.name??item.name),role:b.role===undefined?item.role:String(b.role),rating:Math.max(1,Math.min(5,Number(b.rating??item.rating))),text:String(b.text??item.text),dateLabel:b.dateLabel===undefined?item.dateLabel:String(b.dateLabel),displayOrder:Number(b.displayOrder??item.displayOrder),status:b.status==='INACTIVE'?'INACTIVE':'ACTIVE'}});return sendResponse(res,true,'Testimonial updated',updated);}

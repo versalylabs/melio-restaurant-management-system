@@ -33,10 +33,19 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
     const completedAt = new Date();
 
     if (current.tableId) {
-      await tx.table.update({
-        where: { id: current.tableId },
-        data: { status: 'CLEANING' },
+      const remainingActive = await tx.sale.count({
+        where: {
+          tableId: current.tableId,
+          id: { not: orderId },
+          status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] },
+        },
       });
+      if (remainingActive === 0) {
+        await tx.table.update({
+          where: { id: current.tableId },
+          data: { status: 'CLEANING' },
+        });
+      }
     }
 
     const updated = await tx.sale.update({

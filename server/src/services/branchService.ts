@@ -40,6 +40,85 @@ export const getStockTransfers = async (req: AuthRequest, res: ExpressResponse) 
   });
 };
 
+export const createBranch = async (req: AuthRequest, res: ExpressResponse) => {
+  const restaurantId = req.user!.restaurantId;
+  const { name, code, phone, email, address, city, callPhone, diningHours, status } = req.body || {};
+
+  const trimmedName = String(name || '').trim();
+  if (!trimmedName) return sendError(res, 'Branch name is required');
+
+  const trimmedCode = String(code || '').trim().toUpperCase();
+  if (!trimmedCode) return sendError(res, 'Branch code is required');
+
+  const duplicate = await prisma.branch.findUnique({
+    where: { restaurantId_code: { restaurantId, code: trimmedCode } },
+  });
+  if (duplicate) return sendError(res, 'Branch code already exists', undefined, 409);
+
+  const branch = await prisma.branch.create({
+    data: {
+      restaurantId,
+      name: trimmedName,
+      code: trimmedCode,
+      phone: phone ? String(phone).trim() : null,
+      email: email ? String(email).trim().toLowerCase() : null,
+      address: address ? String(address).trim() : null,
+      city: city ? String(city).trim() : null,
+      callPhone: callPhone ? String(callPhone).trim() : null,
+      diningHours: diningHours ? (typeof diningHours === 'object' ? JSON.stringify(diningHours) : String(diningHours)) : null,
+      status: status || 'ACTIVE',
+    },
+  });
+
+  await createAuditLog(restaurantId, req.user!.id, 'CREATE', 'Branch', branch.id, `Created branch ${branch.name} (${branch.code})`);
+  return sendResponse(res, true, 'Branch created successfully', branch, 201);
+};
+
+export const updateBranch = async (req: AuthRequest, res: ExpressResponse) => {
+  const { id } = req.params;
+  const restaurantId = req.user!.restaurantId;
+  const existing = await prisma.branch.findFirst({ where: { id, restaurantId } });
+  if (!existing) return sendError(res, 'Branch not found', undefined, 404);
+
+  const { name, code, phone, email, address, city, callPhone, diningHours, status } = req.body || {};
+
+  let trimmedName = existing.name;
+  if (name !== undefined) {
+    trimmedName = String(name).trim();
+    if (!trimmedName) return sendError(res, 'Branch name cannot be empty');
+  }
+
+  let trimmedCode = existing.code;
+  if (code !== undefined) {
+    trimmedCode = String(code).trim().toUpperCase();
+    if (!trimmedCode) return sendError(res, 'Branch code cannot be empty');
+    if (trimmedCode !== existing.code) {
+      const duplicate = await prisma.branch.findUnique({
+        where: { restaurantId_code: { restaurantId, code: trimmedCode } },
+      });
+      if (duplicate) return sendError(res, 'Branch code already exists', undefined, 409);
+    }
+  }
+
+  const branch = await prisma.branch.update({
+    where: { id },
+    data: {
+      name: trimmedName,
+      code: trimmedCode,
+      phone: phone !== undefined ? (phone ? String(phone).trim() : null) : existing.phone,
+      email: email !== undefined ? (email ? String(email).trim().toLowerCase() : null) : existing.email,
+      address: address !== undefined ? (address ? String(address).trim() : null) : existing.address,
+      city: city !== undefined ? (city ? String(city).trim() : null) : existing.city,
+      callPhone: callPhone !== undefined ? (callPhone ? String(callPhone).trim() : null) : existing.callPhone,
+      diningHours: diningHours !== undefined ? (typeof diningHours === 'object' ? JSON.stringify(diningHours) : String(diningHours)) : existing.diningHours,
+      status: status !== undefined ? status : existing.status,
+    },
+  });
+
+  await createAuditLog(restaurantId, req.user!.id, 'UPDATE', 'Branch', branch.id, `Updated branch ${branch.name}`);
+  return sendResponse(res, true, 'Branch updated successfully', branch);
+};
+
 export const createStockTransfer = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
   const fromBranchId = req.user!.branchId;
@@ -48,20 +127,33 @@ export const createStockTransfer = async (req: AuthRequest, res: ExpressResponse
   if (!toBranchId || toBranchId === fromBranchId) return sendError(res, 'Select a different destination branch');
   if (!Array.isArray(items) || !items.length) return sendError(res, 'At least one ingredient is required');
 
+  const uniqueItemsMap = new Map<string, any>();
+  for (const i of items) {
+    const qty = Number(i.quantity);
+    if (qty <= 0) continue;
+    if (uniqueItemsMap.has(i.ingredientId)) {
+      uniqueItemsMap.get(i.ingredientId).quantity += qty;
+    } else {
+      uniqueItemsMap.set(i.ingredientId, { ...i, quantity: qty });
+    }
+  }
+  const deduplicatedItems = Array.from(uniqueItemsMap.values());
+  if (!deduplicatedItems.length) return sendError(res, 'At least one valid ingredient quantity is required');
+
   const destination = await prisma.branch.findFirst({ where: { id: toBranchId, restaurantId, status: 'ACTIVE' } });
   if (!destination) return sendError(res, 'Destination branch not found', undefined, 404);
 
   const ingredients = await prisma.ingredient.findMany({
-    where: { restaurantId, id: { in: items.map((i: any) => i.ingredientId) }, status: 'ACTIVE' },
+    where: { restaurantId, id: { in: deduplicatedItems.map((i: any) => i.ingredientId) }, status: 'ACTIVE' },
     select: { id: true, unit: true },
   });
-  if (ingredients.length !== items.length) return sendError(res, 'One or more ingredients are invalid');
+  if (ingredients.length !== deduplicatedItems.length) return sendError(res, 'One or more ingredients are invalid');
 
   const reference = `TRF-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.random().toString(36).slice(2,7).toUpperCase()}`;
   const transfer = await prisma.stockTransfer.create({
     data: {
       restaurantId, fromBranchId, toBranchId, reference, notes, createdBy: req.user!.id,
-      items: { create: items.map((i: any) => ({ ingredientId: i.ingredientId, quantity: Number(i.quantity), unit: i.unit })) },
+      items: { create: deduplicatedItems.map((i: any) => ({ ingredientId: i.ingredientId, quantity: Number(i.quantity), unit: i.unit })) },
     },
     include: { items: true, fromBranch: true, toBranch: true },
   });

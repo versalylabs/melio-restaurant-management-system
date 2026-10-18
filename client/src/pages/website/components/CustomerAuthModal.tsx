@@ -17,6 +17,7 @@ import {
 import { useCustomerAuth } from '../../../contexts/CustomerAuthContext';
 import { useAuth } from '../../../contexts/AuthContext';
 import { authApi } from '../../../services/api';
+import { getDefaultRouteForRole } from '../../../App';
 
 interface CustomerAuthModalProps {
   isOpen: boolean;
@@ -63,9 +64,10 @@ export default function CustomerAuthModal({
         const staffEmail = identifier || email;
         const res = await authApi.login(staffEmail, password);
         if (res.data.success && res.data.data) {
-          staffLogin(res.data.data.token, res.data.data.user);
+          const staffUser = res.data.data.user;
+          staffLogin(res.data.data.token, staffUser);
           onClose();
-          navigate('/dashboard');
+          navigate(getDefaultRouteForRole(staffUser?.roleName));
           return;
         } else {
           setError(res.data.message || 'Invalid staff credentials');
@@ -83,9 +85,10 @@ export default function CustomerAuthModal({
             try {
               const staffRes = await authApi.login(identifier, password);
               if (staffRes.data.success && staffRes.data.data) {
-                staffLogin(staffRes.data.data.token, staffRes.data.data.user);
+                const staffUser = staffRes.data.data.user;
+                staffLogin(staffRes.data.data.token, staffUser);
                 onClose();
-                navigate('/dashboard');
+                navigate(getDefaultRouteForRole(staffUser?.roleName));
                 return;
               }
             } catch {

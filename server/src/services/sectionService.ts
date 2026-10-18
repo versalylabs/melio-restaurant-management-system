@@ -64,17 +64,34 @@ export const createSection = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
   const branchId = req.user!.branchId || String(req.body?.branchId || '');
 
+  const trimmedName = name ? String(name).trim() : '';
+  if (!trimmedName) {
+    return sendError(res, 'Section name is required');
+  }
+
   const branch = await prisma.branch.findFirst({ where: { id: branchId, restaurantId } });
   if (!branch) {
     return sendError(res, 'Invalid branch');
+  }
+
+  const existingSections = await prisma.section.findMany({
+    where: {
+      branchId,
+      restaurantId,
+      status: { not: 'INACTIVE' },
+    },
+    select: { id: true, name: true },
+  });
+  if (existingSections.some((s) => s.name.toLowerCase() === trimmedName.toLowerCase())) {
+    return sendError(res, 'A section with this name already exists in this branch', undefined, 409);
   }
 
   const section = await prisma.section.create({
     data: {
       restaurantId,
       branchId,
-      name,
-      description,
+      name: trimmedName,
+      description: description ? String(description).trim() : null,
       displayOrder: displayOrder ?? 0,
       status: status || 'ACTIVE',
     },
@@ -102,9 +119,35 @@ export const updateSection = async (req: AuthRequest, res: ExpressResponse) => {
     return sendError(res, 'Section not found', undefined, 404);
   }
 
+  let trimmedName = existing.name;
+  if (name !== undefined) {
+    trimmedName = String(name).trim();
+    if (!trimmedName) {
+      return sendError(res, 'Section name cannot be empty');
+    }
+
+    const existingSections = await prisma.section.findMany({
+      where: {
+        branchId: existing.branchId,
+        restaurantId,
+        id: { not: id },
+        status: { not: 'INACTIVE' },
+      },
+      select: { id: true, name: true },
+    });
+    if (existingSections.some((s) => s.name.toLowerCase() === trimmedName.toLowerCase())) {
+      return sendError(res, 'A section with this name already exists in this branch', undefined, 409);
+    }
+  }
+
   const section = await prisma.section.update({
     where: { id },
-    data: { name, description, displayOrder, status },
+    data: {
+      name: trimmedName,
+      description: description !== undefined ? (description ? String(description).trim() : null) : undefined,
+      displayOrder: displayOrder !== undefined ? displayOrder : undefined,
+      status: status !== undefined ? status : undefined,
+    },
   });
 
   await createAuditLog(
@@ -126,6 +169,13 @@ export const deleteSection = async (req: AuthRequest, res: ExpressResponse) => {
   const existing = await prisma.section.findFirst({ where: { id, restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) } });
   if (!existing) {
     return sendError(res, 'Section not found', undefined, 404);
+  }
+
+  const activeTables = await prisma.table.count({
+    where: { sectionId: id, status: { not: 'INACTIVE' } },
+  });
+  if (activeTables > 0) {
+    return sendError(res, `Cannot deactivate section with ${activeTables} active table(s). Please reassign or delete the tables first.`, undefined, 400);
   }
 
   await prisma.section.update({ where: { id }, data: { status: 'INACTIVE' } });

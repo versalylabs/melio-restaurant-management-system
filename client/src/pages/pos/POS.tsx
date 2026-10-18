@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft } from 'lucide-react';
+import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Clock, CheckCircle, AlertCircle, UtensilsCrossed } from 'lucide-react';
 import { orderApi, customerApi, promotionApi, restaurantApi, branchApi } from '../../services/api';
 import type { PosCategory, PosMenuItem, PosTable, SaleItem, SaleItemModifier } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
@@ -27,6 +27,7 @@ export default function POS() {
   const [loading, setLoading] = useState(true);
   const [mobileTab, setMobileTab] = useState<'menu' | 'cart'>('menu');
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -43,8 +44,13 @@ export default function POS() {
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
   const [showModifierModal, setShowModifierModal] = useState(false);
+  const [modifierError, setModifierError] = useState('');
   const [showTableModal, setShowTableModal] = useState(false);
   const [showOrderTypeModal, setShowOrderTypeModal] = useState(false);
+  const [showHeldOrdersModal, setShowHeldOrdersModal] = useState(false);
+  const [heldOrders, setHeldOrders] = useState<any[]>([]);
+  const [loadingHeld, setLoadingHeld] = useState(false);
+  const [submittingHeldId, setSubmittingHeldId] = useState<string | null>(null);
   const [selectedMenuItem, setSelectedMenuItem] = useState<PosMenuItem | null>(null);
   const [itemNotes, setItemNotes] = useState('');
   const [selectedModifiers, setSelectedModifiers] = useState<SaleItemModifier[]>([]);
@@ -130,6 +136,82 @@ export default function POS() {
     return Math.min(subtotal, manualDiscountType === 'PERCENTAGE' ? subtotal*d/100 : d);
   };
 
+  const handleDiscountChange = (val: number) => {
+    const subtotal = calculateCartTotal();
+    const cleanVal = isNaN(val) ? 0 : Math.max(0, val);
+    if (manualDiscountType === 'PERCENTAGE') {
+      setManualDiscount(Math.min(100, cleanVal));
+    } else {
+      setManualDiscount(Math.min(subtotal, cleanVal));
+    }
+  };
+
+  const fetchHeldOrders = async () => {
+    setLoadingHeld(true);
+    try {
+      const activeBranchId = getActiveBranchId(user);
+      const res = await orderApi.getOrders({ status: 'HELD', limit: 50, ...(activeBranchId ? { branchId: activeBranchId } : {}) });
+      if (res.data.success) {
+        setHeldOrders(res.data.data?.orders || []);
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to fetch held orders');
+    } finally {
+      setLoadingHeld(false);
+    }
+  };
+
+  const submitHeldOrder = async (orderId: string) => {
+    setSubmittingHeldId(orderId);
+    setError('');
+    try {
+      await orderApi.submitOrder(orderId);
+      setSuccessMessage('Held order submitted to kitchen successfully!');
+      setTimeout(() => setSuccessMessage(''), 4000);
+      fetchHeldOrders();
+      fetchData();
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to submit held order');
+    } finally {
+      setSubmittingHeldId(null);
+    }
+  };
+
+  const resumeHeldOrder = (order: any) => {
+    try {
+      const newItems: CartItem[] = (order.items || []).map((item: any) => ({
+        id: `cart-${Date.now()}-${Math.random()}`,
+        menuItemId: item.menuItemId,
+        itemNameSnapshot: item.itemNameSnapshot,
+        unitPrice: item.unitPrice,
+        quantity: item.quantity,
+        subtotal: item.subtotal || item.unitPrice * item.quantity,
+        notes: item.notes || undefined,
+        modifiers: (item.modifiers || []).map((m: any) => ({
+          modifierOptionId: m.modifierOptionId,
+          optionNameSnapshot: m.optionNameSnapshot,
+          priceAdjustment: m.priceAdjustment,
+        })),
+      }));
+      setCart(newItems);
+      setOrderType(order.orderType || 'DINE_IN');
+      if (order.tableId) {
+        const matchingTable = tables.find((t) => t.id === order.tableId);
+        setSelectedTable(matchingTable || { id: order.tableId, tableNumber: order.tableNumber || '', capacity: 0, status: 'OCCUPIED', selectable: true });
+      } else {
+        setSelectedTable(null);
+      }
+      setCustomerName(order.customerName || '');
+      setSelectedCustomerId(order.customerId || '');
+      setOrderNotes(order.notes || '');
+      setShowHeldOrdersModal(false);
+      setSuccessMessage(`Order #${order.orderNumber} loaded into cart!`);
+      setTimeout(() => setSuccessMessage(''), 4000);
+    } catch (err: any) {
+      setError('Failed to load held order into cart');
+    }
+  };
+
   const getPreviewTotals = () => {
     const subtotal = calculateCartTotal(); const discount = getDiscountAmount(); const after = subtotal-discount;
     const tax = Math.round(after*taxRate)/100; const service = Math.round(after*serviceChargeRate)/100;
@@ -137,6 +219,7 @@ export default function POS() {
   };
 
   const handleAddItem = (item: PosMenuItem) => {
+    setModifierError('');
     const requiredModifiers = item.modifierGroups.filter((mg) => mg.isRequired);
     if (requiredModifiers.length > 0) {
       setSelectedMenuItem(item);
@@ -146,6 +229,19 @@ export default function POS() {
     } else {
       addToCart(item, [], '');
     }
+  };
+
+  const handleConfirmAddToCart = () => {
+    if (!selectedMenuItem) return;
+    const unfulfilledRequired = selectedMenuItem.modifierGroups.filter(
+      (mg) => mg.isRequired && !selectedModifiers.some((sm) => mg.options.some((opt) => opt.id === sm.modifierOptionId))
+    );
+    if (unfulfilledRequired.length > 0) {
+      setModifierError(`Please select required option(s) for: ${unfulfilledRequired.map((g) => g.name).join(', ')}`);
+      return;
+    }
+    setModifierError('');
+    addToCart(selectedMenuItem, selectedModifiers, itemNotes);
   };
 
   const addToCart = (item: PosMenuItem, modifiers: SaleItemModifier[], notes: string) => {
@@ -193,6 +289,7 @@ export default function POS() {
 
   const handleSubmitOrder = async () => {
     if (cart.length === 0) return;
+    setError('');
     if (orderType === 'DINE_IN' && !selectedTable) {
       setShowTableModal(true);
       return;
@@ -225,6 +322,9 @@ export default function POS() {
       });
 
       if (response.data.success) {
+        const orderNum = response.data.data?.orderNumber || 'New';
+        setSuccessMessage(`Order #${orderNum} submitted to kitchen!`);
+        setTimeout(() => setSuccessMessage(''), 4000);
         setCart([]);
         setCustomerName('');
         setSelectedCustomerId('');
@@ -243,6 +343,7 @@ export default function POS() {
 
   const handleHoldOrder = async () => {
     if (cart.length === 0) return;
+    setError('');
     setSubmitting(true);
     try {
       const response = await orderApi.createOrder({
@@ -267,6 +368,9 @@ export default function POS() {
       });
 
       if (response.data.success) {
+        const orderNum = response.data.data?.orderNumber || 'Held';
+        setSuccessMessage(`Order #${orderNum} held successfully`);
+        setTimeout(() => setSuccessMessage(''), 4000);
         setCart([]);
         setCustomerName('');
         setSelectedCustomerId('');
@@ -319,6 +423,14 @@ export default function POS() {
           </div>
 
           <button
+            onClick={() => { setShowHeldOrdersModal(true); fetchHeldOrders(); }}
+            className="inline-flex items-center gap-1.5 sm:gap-2 rounded-xl border border-orange-500/20 bg-white/80 dark:bg-[#121218]/80 backdrop-blur-md px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-gray-800 dark:text-gray-100 shadow-sm hover:border-orange-500/40 hover:bg-orange-50/80 dark:hover:bg-white/5 transition-all liquid-glass-card"
+          >
+            <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-orange-500 shrink-0" />
+            <span>Held Orders</span>
+          </button>
+
+          <button
             onClick={() => setShowOrderTypeModal(true)}
             className="inline-flex items-center gap-1.5 sm:gap-2 rounded-xl border border-orange-500/20 bg-white/80 dark:bg-[#121218]/80 backdrop-blur-md px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-gray-800 dark:text-gray-100 shadow-sm hover:border-orange-500/40 hover:bg-orange-50/80 dark:hover:bg-white/5 transition-all liquid-glass-card"
           >
@@ -329,9 +441,27 @@ export default function POS() {
         </div>
       </div>
 
+      {successMessage && (
+        <div className="mx-4 mt-3 bg-emerald-500/10 border border-emerald-500/20 backdrop-blur-md text-emerald-600 dark:text-emerald-400 px-4 py-2.5 rounded-2xl text-xs sm:text-sm shadow-sm flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 text-emerald-500" />
+            <span>{successMessage}</span>
+          </div>
+          <button onClick={() => setSuccessMessage('')} className="text-emerald-500 hover:text-emerald-700">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {error && (
-        <div className="mx-4 mt-3 bg-red-500/10 border border-red-500/20 backdrop-blur-md text-red-600 dark:text-red-400 px-4 py-2.5 rounded-2xl text-xs sm:text-sm shadow-sm flex-shrink-0">
-          {error}
+        <div className="mx-4 mt-3 bg-red-500/10 border border-red-500/20 backdrop-blur-md text-red-600 dark:text-red-400 px-4 py-2.5 rounded-2xl text-xs sm:text-sm shadow-sm flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-500" />
+            <span>{error}</span>
+          </div>
+          <button onClick={() => setError('')} className="text-red-500 hover:text-red-700">
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -405,8 +535,22 @@ export default function POS() {
                 </button>
               ))}
               {getFilteredItems().length === 0 && (
-                <div className="col-span-full text-center py-16 text-gray-500 dark:text-gray-400">
-                  <p className="text-sm">No items found in this category</p>
+                <div className="col-span-full text-center py-16 text-gray-500 dark:text-gray-400 flex flex-col items-center justify-center">
+                  <UtensilsCrossed className="h-10 w-10 text-orange-400/60 mb-2" />
+                  <p className="text-sm font-medium">No items found</p>
+                  <p className="text-xs text-gray-400 mt-1 max-w-xs">
+                    {search ? `No menu items match "${search}"` : 'No items available in this category'}
+                  </p>
+                  {search && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setSearch('')}
+                      className="mt-3 rounded-xl"
+                    >
+                      Clear Search
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -540,7 +684,7 @@ export default function POS() {
                 <select value={selectedPromotionId} onChange={e=>{setSelectedPromotionId(e.target.value);if(e.target.value)setManualDiscount(0)}} className="w-full rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-2 text-xs sm:text-sm bg-white/80 dark:bg-[#121218]/80 text-gray-900 dark:text-gray-100">
                   <option value="">No promotion</option>{promotions.map(p=><option key={p.id} value={p.id}>{p.name} — {p.discountType==='PERCENTAGE'?`${p.value}%`:`KES ${p.value}`}{p.customerId?' — Customer offer':''}</option>)}
                 </select>
-                {!selectedPromotionId && <div className="grid grid-cols-2 gap-2"><select value={manualDiscountType} onChange={e=>setManualDiscountType(e.target.value as any)} className="rounded-xl border border-orange-500/15 dark:border-white/10 px-2 py-1.5 text-xs bg-white dark:bg-[#121218]"><option value="FIXED">Fixed (KES)</option><option value="PERCENTAGE">Percent (%)</option></select><input type="number" min="0" value={manualDiscount||''} onChange={e=>setManualDiscount(Number(e.target.value))} placeholder="0" className="rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-1.5 text-xs bg-white dark:bg-[#121218]"/></div>}
+                {!selectedPromotionId && <div className="grid grid-cols-2 gap-2"><select value={manualDiscountType} onChange={e=>setManualDiscountType(e.target.value as any)} className="rounded-xl border border-orange-500/15 dark:border-white/10 px-2 py-1.5 text-xs bg-white dark:bg-[#121218]"><option value="FIXED">Fixed (KES)</option><option value="PERCENTAGE">Percent (%)</option></select><input type="number" min="0" value={manualDiscount||''} onChange={e=>handleDiscountChange(Number(e.target.value))} placeholder="0" className="rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-1.5 text-xs bg-white dark:bg-[#121218]"/></div>}
               </div>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Subtotal</span><span className="font-semibold text-gray-900 dark:text-gray-100">KES {getPreviewTotals().subtotal.toLocaleString()}</span></div>
@@ -635,9 +779,14 @@ export default function POS() {
                 placeholder="Any special requests..."
               />
             </div>
+            {modifierError && (
+              <p className="text-xs text-red-500 font-semibold bg-red-500/10 border border-red-500/20 p-2 rounded-xl">
+                {modifierError}
+              </p>
+            )}
             <div className="flex justify-end gap-3 pt-2">
               <Button variant="secondary" onClick={() => { setShowModifierModal(false); setSelectedMenuItem(null); }} className="rounded-xl">Cancel</Button>
-              <Button onClick={() => selectedMenuItem && addToCart(selectedMenuItem, selectedModifiers, itemNotes)} className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-500">Add to Order</Button>
+              <Button onClick={handleConfirmAddToCart} className="rounded-xl bg-gradient-to-r from-orange-500 to-amber-500">Add to Order</Button>
             </div>
           </div>
         </Modal>
@@ -697,6 +846,61 @@ export default function POS() {
                 <p className="text-xs text-gray-500 dark:text-gray-400">{type.requiresTable ? 'Requires table selection' : 'No table required'}</p>
               </button>
             ))}
+          </div>
+        </Modal>
+      )}
+
+      {showHeldOrdersModal && (
+        <Modal title="Held Orders" onClose={() => setShowHeldOrdersModal(false)}>
+          <div className="space-y-4">
+            {loadingHeld ? (
+              <div className="py-8 text-center text-gray-500">Loading held orders...</div>
+            ) : heldOrders.length === 0 ? (
+              <div className="py-8 text-center text-gray-500">
+                <Clock className="w-8 h-8 text-orange-400 mx-auto mb-2 opacity-60" />
+                <p className="text-sm">No held orders right now.</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {heldOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    className="p-3.5 border rounded-2xl border-orange-500/15 dark:border-white/10 bg-white/80 dark:bg-[#121218]/80 flex items-center justify-between gap-3"
+                  >
+                    <div>
+                      <p className="font-bold text-gray-900 dark:text-gray-100">Order #{order.orderNumber}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {order.orderType} {order.tableNumber ? `· Table ${order.tableNumber}` : ''} {order.customerName ? `· ${order.customerName}` : ''}
+                      </p>
+                      <p className="text-xs font-semibold text-orange-600 dark:text-orange-400 mt-0.5">
+                        KES {(order.totalAmount || 0).toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => resumeHeldOrder(order)}
+                        className="rounded-xl"
+                      >
+                        Resume
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={submittingHeldId === order.id}
+                        onClick={() => submitHeldOrder(order.id)}
+                        className="rounded-xl bg-orange-500 text-white hover:bg-orange-600"
+                      >
+                        {submittingHeldId === order.id ? 'Submitting...' : 'Submit to Kitchen'}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-end pt-2">
+              <Button variant="secondary" onClick={() => setShowHeldOrdersModal(false)} className="rounded-xl">Close</Button>
+            </div>
           </div>
         </Modal>
       )}

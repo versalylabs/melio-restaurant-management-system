@@ -26,13 +26,24 @@ schemaPaths.forEach((schemaPath) => {
   if (fs.existsSync(schemaPath)) {
     let content = fs.readFileSync(schemaPath, 'utf8');
     content = content.replace(
-      /datasource\s+db\s*\{[\s\S]*?provider\s*=\s*"[^"]+"[\s\S]*?\}/,
+      /datasource\s+db\s*\{[\s\S]*?\}/,
       `datasource db {\n  provider = "${provider}"\n  url      = env("DATABASE_URL")\n}`
     );
     fs.writeFileSync(schemaPath, content, 'utf8');
     console.log(`[DB Switch] Updated ${schemaPath} to provider: "${provider}"`);
   }
 });
+
+const envPath = path.resolve(__dirname, '../.env');
+if (fs.existsSync(envPath)) {
+  let envContent = fs.readFileSync(envPath, 'utf8');
+  if (provider === 'sqlite') {
+    envContent = envContent.replace(/^DATABASE_URL=.*$/m, 'DATABASE_URL="file:./dev.db"');
+    envContent = envContent.replace(/^DIRECT_URL=.*$/m, '# DIRECT_URL (disabled for sqlite)');
+  }
+  fs.writeFileSync(envPath, envContent, 'utf8');
+  console.log(`[DB Switch] Updated ${envPath} DATABASE_URL for ${provider}`);
+}
 
 console.log(`[DB Switch] Regenerating Prisma Client for ${provider}...`);
 try {

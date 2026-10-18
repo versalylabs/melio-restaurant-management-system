@@ -21,12 +21,18 @@ export default function Setup() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (formData.ownerPassword.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
     setLoading(true);
 
     try {
       const response = await authApi.setup(formData);
       if (response.data.success) {
-        navigate('/login');
+        navigate('/login', {
+          state: { message: 'Restaurant setup completed! Please sign in with your owner credentials.' },
+        });
       } else {
         setError(response.data.message || 'Setup failed');
       }

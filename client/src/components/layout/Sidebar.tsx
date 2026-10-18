@@ -12,8 +12,6 @@ import {
   Shield,
   Bell,
   ChevronDown,
-  Truck,
-  MessageSquare,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -33,7 +31,7 @@ interface NavItem {
 }
 
 const navigation: NavItem[] = [
-  { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','INVENTORY_MANAGER'] },
   { title: 'Operations', icon: CreditCard, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','DELIVERY'], children: [
     { title: 'POS', href: '/pos', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
     { title: 'Orders', href: '/orders', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
@@ -45,10 +43,14 @@ const navigation: NavItem[] = [
     { title: 'Branches', href: '/branches', roles: ['OWNER','ADMIN','MANAGER'] },
   ]},
   { title: 'Menu', icon: BookOpen, roles: ['OWNER','ADMIN','MANAGER'], children: [
-    { title: 'Menu Items', href: '/menu-items' }, { title: 'Categories', href: '/categories' },
+    { title: 'Menu Items', href: '/menu-items' },
+    { title: 'Categories', href: '/categories' },
+    { title: 'Menu Preview', href: '/menu-preview' },
   ]},
-  { title: 'Inventory', icon: Package, roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER'], children: [
-    { title: 'Inventory', href: '/inventory' }, { title: 'Suppliers', href: '/suppliers' }, { title: 'Purchases', href: '/purchases' },
+  { title: 'Inventory', icon: Package, roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER','CHEF'], children: [
+    { title: 'Inventory', href: '/inventory', roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER','CHEF'] },
+    { title: 'Suppliers', href: '/suppliers', roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER'] },
+    { title: 'Purchases', href: '/purchases', roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER'] },
   ]},
   { title: 'Customers', icon: Users, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'], children: [
     { title: 'Customers', href: '/customers' }, { title: 'Loyalty', href: '/loyalty' },
@@ -61,7 +63,7 @@ const navigation: NavItem[] = [
     { title: 'Reports', href: '/reports', roles: ['OWNER','ADMIN','MANAGER'] }, { title: 'Analytics', href: '/analytics', roles: ['OWNER','ADMIN','MANAGER'] },
     { title: 'Discounts & Promotions', href: '/promotions', roles: ['OWNER','ADMIN','MANAGER'] },
   ]},
-  { title: 'Notifications', href: '/notifications', icon: Bell, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','INVENTORY_MANAGER'] },
+  { title: 'Notifications', href: '/notifications', icon: Bell, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','INVENTORY_MANAGER','DELIVERY'] },
   { title: 'Administration', icon: Shield, roles: ['OWNER','ADMIN','MANAGER'], children: [
     { title: 'User Accounts', href: '/users', roles: ['OWNER','ADMIN','MANAGER'] },
     { title: 'Roles', href: '/roles', roles: ['OWNER','ADMIN'] },

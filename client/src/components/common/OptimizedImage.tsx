@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { resolveImageUrl } from '../../utils/imageUtils';
 
-interface OptimizedImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
+interface OptimizedImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> {
+  src?: string | null;
   fallbackIcon?: React.ReactNode;
   aspectRatio?: string;
   containerClassName?: string;
@@ -15,15 +17,27 @@ export function OptimizedImage({
   aspectRatio,
   ...props
 }: OptimizedImageProps) {
+  const [currentSrc, setCurrentSrc] = useState(() => resolveImageUrl(src, alt));
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    setCurrentSrc(resolveImageUrl(src, alt));
     setLoaded(false);
     setError(false);
-  }, [src]);
+  }, [src, alt]);
 
-  if (!src || error) {
+  const handleError = () => {
+    const localFallback = resolveImageUrl(null, alt);
+    if (localFallback && currentSrc !== localFallback) {
+      setCurrentSrc(localFallback);
+      setError(false);
+    } else {
+      setError(true);
+    }
+  };
+
+  if (!currentSrc || error) {
     return (
       <div
         className={`flex h-full w-full items-center justify-center bg-orange-500/5 dark:bg-white/5 text-orange-400 ${containerClassName}`}
@@ -45,12 +59,12 @@ export function OptimizedImage({
       )}
 
       <img
-        src={src}
+        src={currentSrc}
         alt={alt}
         loading="lazy"
         decoding="async"
         onLoad={() => setLoaded(true)}
-        onError={() => setError(true)}
+        onError={handleError}
         className={`${className} transition-opacity duration-300 ${
           loaded ? 'opacity-100' : 'opacity-0'
         }`}

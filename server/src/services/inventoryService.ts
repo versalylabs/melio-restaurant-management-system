@@ -46,10 +46,22 @@ export const createIngredientCategory = async (req: AuthRequest, res: ExpressRes
     return sendError(res, 'Name is required');
   }
 
+  const trimmedName = name.trim();
+  const existingCats = await prisma.ingredientCategory.findMany({
+    where: {
+      restaurantId,
+      status: { not: 'INACTIVE' },
+    },
+    select: { id: true, name: true },
+  });
+  if (existingCats.some((c) => c.name.toLowerCase() === trimmedName.toLowerCase())) {
+    return sendError(res, 'An ingredient category with this name already exists', undefined, 409);
+  }
+
   const category = await prisma.ingredientCategory.create({
     data: {
       restaurantId,
-      name: name.trim(),
+      name: trimmedName,
       description,
       displayOrder: displayOrder ?? 0,
       status: status || 'ACTIVE',
@@ -78,9 +90,28 @@ export const updateIngredientCategory = async (req: AuthRequest, res: ExpressRes
     return sendError(res, 'Ingredient category not found', undefined, 404);
   }
 
+  let trimmedName: string | undefined;
+  if (name !== undefined) {
+    if (typeof name !== 'string' || !name.trim()) {
+      return sendError(res, 'Name is required');
+    }
+    trimmedName = name.trim();
+    const existingCats = await prisma.ingredientCategory.findMany({
+      where: {
+        restaurantId,
+        id: { not: id },
+        status: { not: 'INACTIVE' },
+      },
+      select: { id: true, name: true },
+    });
+    if (existingCats.some((c) => c.name.toLowerCase() === trimmedName!.toLowerCase())) {
+      return sendError(res, 'An ingredient category with this name already exists', undefined, 409);
+    }
+  }
+
   const category = await prisma.ingredientCategory.update({
     where: { id },
-    data: { name, description, displayOrder, status },
+    data: { name: trimmedName ?? name, description, displayOrder, status },
   });
 
   await createAuditLog(
@@ -379,14 +410,34 @@ export const deleteIngredient = async (req: AuthRequest, res: ExpressResponse) =
     return sendError(res, 'Ingredient not found', undefined, 404);
   }
 
-  const historicalMovements = await prisma.stockMovement.count({
-    where: { ingredientId: id, restaurantId },
-  });
-  const historicalRecipes = await prisma.recipeIngredient.count({
-    where: { ingredientId: id },
-  });
+  const [
+    movements,
+    recipes,
+    purchaseOrderItems,
+    wastageRecords,
+    stocktakeItems,
+    stockTransferItems,
+    inventoryBatches,
+  ] = await Promise.all([
+    prisma.stockMovement.count({ where: { ingredientId: id, restaurantId } }),
+    prisma.recipeIngredient.count({ where: { ingredientId: id } }),
+    prisma.purchaseOrderItem.count({ where: { ingredientId: id } }),
+    prisma.wastageRecord.count({ where: { ingredientId: id, restaurantId } }),
+    prisma.stocktakeItem.count({ where: { ingredientId: id } }),
+    prisma.stockTransferItem.count({ where: { ingredientId: id } }),
+    prisma.inventoryBatch.count({ where: { ingredientId: id, restaurantId } }),
+  ]);
 
-  if (historicalMovements > 0 || historicalRecipes > 0) {
+  const hasHistoricalRecords =
+    movements > 0 ||
+    recipes > 0 ||
+    purchaseOrderItems > 0 ||
+    wastageRecords > 0 ||
+    stocktakeItems > 0 ||
+    stockTransferItems > 0 ||
+    inventoryBatches > 0;
+
+  if (hasHistoricalRecords) {
     await prisma.ingredient.update({
       where: { id },
       data: { status: 'INACTIVE', available: false },
@@ -931,8 +982,30 @@ export const createRecipe = async (req: AuthRequest, res: ExpressResponse) => {
     return sendError(res, 'Recipe already exists for this menu item', undefined, 409);
   }
 
+  let deduplicatedIngredients: any[] = [];
   if (ingredients && Array.isArray(ingredients) && ingredients.length > 0) {
-    const ids = ingredients.map((i: any) => i.ingredientId).filter(Boolean);
+    const map = new Map<string, any>();
+    for (const item of ingredients) {
+      if (!item?.ingredientId) continue;
+      const id = String(item.ingredientId);
+      const qty = Number(item.quantity) || 0;
+      if (map.has(id)) {
+        const prev = map.get(id);
+        prev.quantity = (Number(prev.quantity) || 0) + qty;
+        if (item.notes) prev.notes = prev.notes ? `${prev.notes}; ${item.notes}` : item.notes;
+      } else {
+        map.set(id, {
+          ingredientId: id,
+          quantity: qty,
+          unit: item.unit,
+          notes: item.notes,
+          sortOrder: item.sortOrder ?? 0,
+        });
+      }
+    }
+    deduplicatedIngredients = Array.from(map.values());
+
+    const ids = deduplicatedIngredients.map((i) => i.ingredientId);
     const valid = await prisma.ingredient.findMany({
       where: { id: { in: ids }, restaurantId },
       select: { id: true },
@@ -949,9 +1022,9 @@ export const createRecipe = async (req: AuthRequest, res: ExpressResponse) => {
       name: name || menuItem.name,
       description,
       servings: servings ?? 1,
-      ingredients: ingredients
+      ingredients: deduplicatedIngredients.length > 0
         ? {
-            create: ingredients.map((i: any) => ({
+            create: deduplicatedIngredients.map((i: any) => ({
               ingredientId: i.ingredientId,
               quantity: i.quantity,
               unit: i.unit,
@@ -980,7 +1053,7 @@ export const createRecipe = async (req: AuthRequest, res: ExpressResponse) => {
 
 export const updateRecipe = async (req: AuthRequest, res: ExpressResponse) => {
   const { menuItemId } = req.params;
-  const { name, description, servings, status } = req.body;
+  const { name, description, servings, status, ingredients } = req.body;
   const restaurantId = req.user!.restaurantId;
 
   const existing = await prisma.recipe.findFirst({ where: { menuItemId, restaurantId } });
@@ -988,9 +1061,63 @@ export const updateRecipe = async (req: AuthRequest, res: ExpressResponse) => {
     return sendError(res, 'Recipe not found', undefined, 404);
   }
 
+  let ingredientsData: any = undefined;
+  if (ingredients !== undefined && Array.isArray(ingredients)) {
+    const map = new Map<string, any>();
+    for (const item of ingredients) {
+      if (!item?.ingredientId) continue;
+      const id = String(item.ingredientId);
+      const qty = Number(item.quantity) || 0;
+      if (map.has(id)) {
+        const prev = map.get(id);
+        prev.quantity = (Number(prev.quantity) || 0) + qty;
+        if (item.notes) prev.notes = prev.notes ? `${prev.notes}; ${item.notes}` : item.notes;
+      } else {
+        map.set(id, {
+          ingredientId: id,
+          quantity: qty,
+          unit: item.unit,
+          notes: item.notes,
+          sortOrder: item.sortOrder ?? 0,
+        });
+      }
+    }
+    const deduplicated = Array.from(map.values());
+    const ids = deduplicated.map((i) => i.ingredientId);
+    if (ids.length > 0) {
+      const valid = await prisma.ingredient.findMany({
+        where: { id: { in: ids }, restaurantId },
+        select: { id: true },
+      });
+      if (valid.length !== ids.length) {
+        return sendError(res, 'One or more ingredients are invalid');
+      }
+    }
+
+    ingredientsData = {
+      deleteMany: {},
+      create: deduplicated.map((i) => ({
+        ingredientId: i.ingredientId,
+        quantity: i.quantity,
+        unit: i.unit,
+        notes: i.notes,
+        sortOrder: i.sortOrder ?? 0,
+      })),
+    };
+  }
+
   const recipe = await prisma.recipe.update({
     where: { id: existing.id },
-    data: { name, description, servings, status },
+    data: {
+      name,
+      description,
+      servings,
+      status,
+      ...(ingredientsData ? { ingredients: ingredientsData } : {}),
+    },
+    include: {
+      ingredients: { include: { ingredient: true } },
+    },
   });
 
   await createAuditLog(
@@ -1473,10 +1600,22 @@ export const createSupplier = async (req: AuthRequest, res: ExpressResponse) => 
     return sendError(res, 'Name is required');
   }
 
+  const trimmedName = name.trim();
+  const existingSuppliers = await prisma.supplier.findMany({
+    where: {
+      restaurantId,
+      status: { not: 'INACTIVE' },
+    },
+    select: { id: true, name: true },
+  });
+  if (existingSuppliers.some((s) => s.name.toLowerCase() === trimmedName.toLowerCase())) {
+    return sendError(res, 'A supplier with this name already exists', undefined, 409);
+  }
+
   const supplier = await prisma.supplier.create({
     data: {
       restaurantId,
-      name: name.trim(),
+      name: trimmedName,
       contactName,
       email,
       phone,
@@ -1511,9 +1650,39 @@ export const updateSupplier = async (req: AuthRequest, res: ExpressResponse) => 
     return sendError(res, 'Supplier not found', undefined, 404);
   }
 
+  let trimmedName: string | undefined;
+  if (name !== undefined) {
+    if (typeof name !== 'string' || !name.trim()) {
+      return sendError(res, 'Name is required');
+    }
+    trimmedName = name.trim();
+    const existingSuppliers = await prisma.supplier.findMany({
+      where: {
+        restaurantId,
+        id: { not: id },
+        status: { not: 'INACTIVE' },
+      },
+      select: { id: true, name: true },
+    });
+    if (existingSuppliers.some((s) => s.name.toLowerCase() === trimmedName!.toLowerCase())) {
+      return sendError(res, 'A supplier with this name already exists', undefined, 409);
+    }
+  }
+
   const updated = await prisma.supplier.update({
     where: { id },
-    data: { name, contactName, email, phone, address, city, taxNumber, businessRegNumber, notes, status },
+    data: {
+      name: trimmedName ?? name,
+      contactName,
+      email,
+      phone,
+      address,
+      city,
+      taxNumber,
+      businessRegNumber,
+      notes,
+      status,
+    },
   });
 
   await createAuditLog(
@@ -1537,13 +1706,17 @@ export const deleteSupplier = async (req: AuthRequest, res: ExpressResponse) => 
     return sendError(res, 'Supplier not found', undefined, 404);
   }
 
-  const poCount = await prisma.purchaseOrder.count({
-    where: { supplierId: id, restaurantId },
+  const activePoCount = await prisma.purchaseOrder.count({
+    where: {
+      supplierId: id,
+      restaurantId,
+      status: { in: ['DRAFT', 'SUBMITTED', 'APPROVED', 'PARTIALLY_RECEIVED'] },
+    },
   });
-  if (poCount > 0) {
+  if (activePoCount > 0) {
     return sendError(
       res,
-      `Cannot deactivate: supplier has ${poCount} purchase order(s)`
+      `Cannot deactivate: supplier has ${activePoCount} active purchase order(s)`
     );
   }
 

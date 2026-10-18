@@ -79,19 +79,29 @@ app.get(['/health', '/api/health'], async (_req, res) => {
 });
 
 app.use('/api', routes);
-app.use('/', routes);
 
-// In production the API can serve the built React website too, allowing the
-// complete restaurant platform to be deployed as a single Node service.
-if (isProduction) {
-  const clientDist = path.resolve(__dirname, '../../client/dist');
-  if (fs.existsSync(clientDist)) {
-    app.use(express.static(clientDist));
-    app.get('*', (req, res, next) => {
-      if (req.path.startsWith('/api/')) return next();
-      res.sendFile(path.join(clientDist, 'index.html'));
-    });
+// Serve the built React website so the entire platform runs as a unified service
+const clientDistCandidates = [
+  path.resolve(__dirname, '../../client/dist'),
+  path.resolve(__dirname, '../client/dist'),
+  path.resolve(process.cwd(), 'client/dist'),
+  path.resolve(process.cwd(), '../client/dist'),
+];
+
+let clientDistPath: string | null = null;
+for (const cand of clientDistCandidates) {
+  if (fs.existsSync(cand) && fs.existsSync(path.join(cand, 'index.html'))) {
+    clientDistPath = cand;
+    break;
   }
+}
+
+if (clientDistPath) {
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(clientDistPath!, 'index.html'));
+  });
 }
 
 if (!process.env.VERCEL) {

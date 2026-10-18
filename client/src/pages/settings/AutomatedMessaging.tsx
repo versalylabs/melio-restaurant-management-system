@@ -1,19 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Mail,
-  MessageSquare,
   Sparkles,
   Send,
   Eye,
   CheckCircle,
   AlertCircle,
   RefreshCw,
-  Sliders,
-  Bell,
-  Smartphone,
   Check,
   X,
-  ChevronDown,
   Info,
 } from 'lucide-react';
 import { automatedMessagingApi } from '../../services/api';

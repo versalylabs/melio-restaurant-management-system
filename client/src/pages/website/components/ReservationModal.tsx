@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Users, CheckCircle, Sparkles, AlertCircle, BookmarkCheck, Printer, CalendarPlus, Copy, Check } from 'lucide-react';
+import { X, Calendar, Clock, Users, CheckCircle, Sparkles, AlertCircle, Printer, CalendarPlus, Copy, Check } from 'lucide-react';
 import { publicOrderingApi } from '../../../services/api';
 import { printReservationReceipt, downloadReservationIcs } from '../../../utils/reservationReceipt';
 
@@ -291,6 +291,7 @@ export default function ReservationModal({
                   <input
                     type="date"
                     required
+                    min={new Date().toISOString().slice(0, 10)}
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
                     className="w-full rounded-xl bg-zinc-900 border border-white/10 pl-10 pr-4 py-2 text-sm text-white focus:border-orange-500 focus:outline-none"

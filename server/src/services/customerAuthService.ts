@@ -161,6 +161,10 @@ export const loginCustomer = async (req: Request, res: Response) => {
     return sendError(res, 'Invalid credentials or no password registered yet', undefined, 401);
   }
 
+  if (customer.status !== 'ACTIVE') {
+    return sendError(res, 'Customer account is inactive. Please contact support.', undefined, 403);
+  }
+
   const match = await bcrypt.compare(password, customer.password);
   if (!match) {
     return sendError(res, 'Invalid email/phone or password', undefined, 401);

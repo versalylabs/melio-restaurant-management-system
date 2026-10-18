@@ -70,16 +70,34 @@ export const createKitchenStation = async (req: AuthRequest, res: ExpressRespons
   const userId = req.user!.id;
   const { name, description, displayOrder, status, branchId } = req.body;
 
-  if (!name || !branchId) {
-    return sendError(res, 'Name and branch are required');
+  const trimmedName = name ? String(name).trim() : '';
+  if (!trimmedName || !branchId) {
+    return sendError(res, 'Station name and branch are required');
+  }
+
+  const branch = await prisma.branch.findFirst({ where: { id: branchId, restaurantId } });
+  if (!branch) {
+    return sendError(res, 'Invalid branch');
+  }
+
+  const existingStations = await prisma.kitchenStation.findMany({
+    where: {
+      branchId,
+      restaurantId,
+      status: { not: 'INACTIVE' },
+    },
+    select: { id: true, name: true },
+  });
+  if (existingStations.some((s) => s.name.toLowerCase() === trimmedName.toLowerCase())) {
+    return sendError(res, 'A kitchen station with this name already exists in this branch', undefined, 409);
   }
 
   const station = await prisma.kitchenStation.create({
     data: {
       restaurantId,
       branchId,
-      name,
-      description: description || null,
+      name: trimmedName,
+      description: description ? String(description).trim() : null,
       displayOrder: displayOrder || 0,
       status: status || 'ACTIVE',
     },
@@ -101,11 +119,29 @@ export const updateKitchenStation = async (req: AuthRequest, res: ExpressRespons
 
   const { name, description, displayOrder, status } = req.body;
 
+  let trimmedName = existing.name;
+  if (name !== undefined) {
+    trimmedName = String(name).trim();
+    if (!trimmedName) return sendError(res, 'Station name cannot be empty');
+    const existingStations = await prisma.kitchenStation.findMany({
+      where: {
+        branchId: existing.branchId,
+        restaurantId,
+        id: { not: id },
+        status: { not: 'INACTIVE' },
+      },
+      select: { id: true, name: true },
+    });
+    if (existingStations.some((s) => s.name.toLowerCase() === trimmedName.toLowerCase())) {
+      return sendError(res, 'A kitchen station with this name already exists in this branch', undefined, 409);
+    }
+  }
+
   const station = await prisma.kitchenStation.update({
     where: { id },
     data: {
-      name: name || existing.name,
-      description: description !== undefined ? description : existing.description,
+      name: trimmedName,
+      description: description !== undefined ? (description ? String(description).trim() : null) : existing.description,
       displayOrder: displayOrder !== undefined ? displayOrder : existing.displayOrder,
       status: status || existing.status,
     },
@@ -123,6 +159,13 @@ export const deleteKitchenStation = async (req: AuthRequest, res: ExpressRespons
   const existing = await prisma.kitchenStation.findFirst({ where: { id, restaurantId } });
   if (!existing) {
     return sendError(res, 'Kitchen station not found', undefined, 404);
+  }
+
+  const activeTicketCount = await prisma.kitchenTicket.count({
+    where: { stationId: id, status: { in: ['SUBMITTED', 'PREPARING'] } },
+  });
+  if (activeTicketCount > 0) {
+    return sendError(res, `Cannot deactivate kitchen station with ${activeTicketCount} active ticket(s)`, undefined, 400);
   }
 
   await prisma.kitchenStation.update({

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import AppShell from './components/layout/AppShell';
 
@@ -15,7 +15,6 @@ const Categories = lazy(() => import('./pages/categories/Categories'));
 const MenuPreview = lazy(() => import('./pages/menu-preview/MenuPreview'));
 const FloorPlan = lazy(() => import('./pages/tables/FloorPlan'));
 const Sections = lazy(() => import('./pages/sections/Sections'));
-const TableCombinations = lazy(() => import('./pages/table-combinations/TableCombinations'));
 const POS = lazy(() => import('./pages/pos/POS'));
 const Orders = lazy(() => import('./pages/orders/Orders'));
 const KitchenDisplay = lazy(() => import('./pages/kitchen/KitchenDisplay'));
@@ -50,6 +49,13 @@ const PageLoader = () => (
   </div>
 );
 
+export const getDefaultRouteForRole = (roleName?: string) => {
+  if (roleName === 'DELIVERY') return '/deliveries';
+  if (roleName === 'CHEF') return '/kitchen';
+  if (roleName === 'INVENTORY_MANAGER') return '/inventory';
+  return '/dashboard';
+};
+
 const permissionForPath = (path: string) => {
   if (path === '/users' || path === '/staff') return 'users.view';
   if (path === '/roles') return 'roles.manage';
@@ -60,14 +66,14 @@ const permissionForPath = (path: string) => {
   if (path === '/shifts') return 'shifts.view';
   if (path === '/expenses') return 'expenses.view';
   if (path === '/inventory' || path === '/suppliers' || path === '/purchases') return 'inventory.view';
-  if (path === '/menu-items' || path === '/categories') return 'menu.view';
+  if (path === '/menu-items' || path === '/categories' || path === '/menu-preview') return 'menu.view';
   if (path.startsWith('/customers') || path === '/loyalty') return 'customers.view';
   if (path === '/orders') return 'orders.view';
   if (path === '/kitchen') return 'kitchen.view';
   if (path === '/reservations') return 'reservations.view';
   if (path === '/branches') return 'inventory.view';
   if (path === '/pos') return 'pos.use';
-  if (path === '/tables' || path === '/sections' || path === '/table-combinations') return 'tables.view';
+  if (path === '/tables' || path === '/sections') return 'tables.view';
   if (path === '/website-management' || path === '/website_management') return 'dashboard.view';
   if (path === '/notifications') return 'dashboard.view';
   if (path === '/deliveries') return 'orders.view';
@@ -78,13 +84,14 @@ const permissionForPath = (path: string) => {
 
 function ProtectedRoute({ children, allowedRoles, requiredPermission }: { children: React.ReactNode; allowedRoles?: string[]; requiredPermission?: string }) {
   const { isAuthenticated, isLoading, user } = useAuth();
-  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="text-gray-500">Loading...</div></div>;
+  const location = useLocation();
+  if (isLoading) return <PageLoader />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  const permission = requiredPermission || permissionForPath(window.location.pathname);
+  const permission = requiredPermission || permissionForPath(location.pathname);
   const roleAllowed = !allowedRoles || !user || allowedRoles.includes(user.roleName);
   const permissionAllowed = !!user && (!!permission && (user.permissions?.includes('*') || user.permissions?.includes(permission)));
   if (allowedRoles && user && !roleAllowed && !permissionAllowed) {
-    return <Navigate to={user.roleName === 'DELIVERY' ? '/deliveries' : '/dashboard'} replace />;
+    return <Navigate to={getDefaultRouteForRole(user.roleName)} replace />;
   }
   return <AppShell>{children}</AppShell>;
 }
@@ -116,29 +123,96 @@ class ReportsErrorBoundary extends React.Component<React.PropsWithChildren, { ha
   }
 }
 
+const ROUTE_TITLES: Record<string, string> = {
+  '/': 'Melio — Fine Dining & Restaurant Management',
+  '/order-online': 'Order Online — Melio',
+  '/account': 'Customer Account — Melio',
+  '/login': 'Staff Login — Melio',
+  '/setup': 'System Setup — Melio',
+  '/dashboard': 'Dashboard — Melio',
+  '/deliveries': 'Deliveries — Melio',
+  '/delivery': 'Deliveries — Melio',
+  '/automated-messaging': 'Automated Messaging — Melio',
+  '/pos': 'Point of Sale — Melio',
+  '/orders': 'Orders Management — Melio',
+  '/kitchen': 'Kitchen Display System — Melio',
+  '/tables': 'Floor Plan & Tables — Melio',
+  '/floor-plan': 'Floor Plan & Tables — Melio',
+  '/sections': 'Dining Sections — Melio',
+  '/reservations': 'Reservations — Melio',
+  '/menu-items': 'Menu Items — Melio',
+  '/menu/items': 'Menu Items — Melio',
+  '/categories': 'Menu Categories — Melio',
+  '/menu/categories': 'Menu Categories — Melio',
+  '/menu-preview': 'Digital Menu Preview — Melio',
+  '/menu/preview': 'Digital Menu Preview — Melio',
+  '/inventory': 'Inventory & Stock — Melio',
+  '/customers': 'Customer CRM — Melio',
+  '/loyalty': 'Loyalty Program — Melio',
+  '/promotions': 'Promotions & Discounts — Melio',
+  '/payments': 'Payments & Receipts — Melio',
+  '/expenses': 'Expenses — Melio',
+  '/reports': 'Financial Reports — Melio',
+  '/analytics': 'Business Analytics — Melio',
+  '/shifts': 'Shift Management — Melio',
+  '/branches': 'Branch Management — Melio',
+  '/users': 'Staff & Users — Melio',
+  '/roles': 'Roles & Permissions — Melio',
+  '/settings': 'Restaurant Settings — Melio',
+  '/website-management': 'Website Management — Melio',
+  '/website_management': 'Website Management — Melio',
+  '/notifications': 'Notifications — Melio',
+  '/audit-log': 'Audit Trail — Melio',
+};
+
+function TitleAndFaviconUpdater() {
+  const location = useLocation();
+
+  React.useEffect(() => {
+    const path = location.pathname;
+    let title = ROUTE_TITLES[path];
+    if (!title) {
+      if (path.startsWith('/customers/')) title = 'Customer Details — Melio';
+      else if (path.startsWith('/online-order/')) title = 'Order Tracking — Melio';
+      else title = 'Melio — Restaurant Management';
+    }
+    document.title = title;
+
+    let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.getElementsByTagName('head')[0].appendChild(link);
+    }
+    link.type = 'image/svg+xml';
+    link.href = '/favicon.svg';
+  }, [location.pathname]);
+
+  return null;
+}
+
 function App() {
   const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-500">Loading...</div>
-      </div>
-    );
+    return <PageLoader />;
   }
 
   return (
     <Suspense fallback={<PageLoader />}>
+      <TitleAndFaviconUpdater />
       <Routes>
         <Route path="/order-online" element={<OnlineOrdering />} />
         <Route path="/online-order/:trackingToken" element={<OnlineOrderTracking />} />
         <Route path="/account" element={<CustomerAccount />} />
-        <Route path="/login" element={isAuthenticated ? (user?.roleName === 'DELIVERY' ? <Navigate to="/deliveries" replace /> : <Navigate to="/dashboard" replace />) : <Login />} />
+        <Route path="/customer/login" element={<Navigate to="/account" replace />} />
+        <Route path="/customer/account" element={<Navigate to="/account" replace />} />
+        <Route path="/login" element={isAuthenticated ? <Navigate to={getDefaultRouteForRole(user?.roleName)} replace /> : <Login />} />
         <Route path="/setup" element={<Setup />} />
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'CHEF', 'INVENTORY_MANAGER']}>
               <Dashboard />
             </ProtectedRoute>
           }
@@ -151,6 +225,7 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/delivery" element={<Navigate to="/deliveries" replace />} />
         <Route
           path="/automated-messaging"
           element={
@@ -206,6 +281,7 @@ function App() {
             <FloorPlan />
           </ProtectedRoute>
         } />
+        <Route path="/floor-plan" element={<Navigate to="/tables" replace />} />
         <Route path="/sections" element={
           <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
             <Sections />
@@ -224,12 +300,19 @@ function App() {
             <MenuItems />
           </ProtectedRoute>
         } />
+        <Route path="/menu/items" element={<Navigate to="/menu-items" replace />} />
         <Route path="/categories" element={
           <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
             <Categories />
           </ProtectedRoute>
         } />
-        <Route path="/menu-preview" element={<MenuPreview />} />
+        <Route path="/menu/categories" element={<Navigate to="/categories" replace />} />
+        <Route path="/menu-preview" element={
+          <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'CHEF']}>
+            <MenuPreview />
+          </ProtectedRoute>
+        } />
+        <Route path="/menu/preview" element={<Navigate to="/menu-preview" replace />} />
         <Route path="/website-management" element={
           <ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}>
             <WebsiteManagement />
@@ -267,6 +350,7 @@ function App() {
         <Route path="/reports" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><ReportsErrorBoundary><Reports /></ReportsErrorBoundary></ProtectedRoute>} />
         {/* Public landing page: visiting localhost:5173 always opens the Melio website. */}
         <Route path="/" element={<RestaurantWebsite />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
   );

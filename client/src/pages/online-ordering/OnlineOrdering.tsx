@@ -67,21 +67,10 @@ type CartLine = MenuItem & { quantity: number };
 const money = (value: number, currency = 'KES') =>
   new Intl.NumberFormat('en-KE', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
 
-const SUPABASE_PUBLIC_BASE = 'https://czqznpcgyhcntlpsecla.supabase.co/storage/v1/object/public/menu-images';
-const supabaseImage = (filename: string) => `${SUPABASE_PUBLIC_BASE}/${encodeURIComponent(filename)}`;
-const SUPABASE_MENU_FILENAMES: Record<string, string> = {
-  'Samosa': 'Samosa.jpg',
-  'Chicken Wings': 'Chicken Wings.jpg',
-  'Grilled Chicken': 'Grilled Chicken.jpg',
-  'Beef Steak': 'Beef Steak.jpg',
-  'Chicken Burger': 'Chicken Burger.jpg',
-  'Beef Burger': 'Beef Burger.jpg',
-  'Coke': 'Coke.jpg',
-  'Fresh Passion Juice': 'Passion Juice.jpg',
-  'Chocolate Cake': 'Chocolate Cake.jpg',
-};
+import { resolveImageUrl } from '../../utils/imageUtils';
+
 const menuImage = (item?: Pick<MenuItem, 'name' | 'image'> | null) =>
-  item?.image || (item?.name && SUPABASE_MENU_FILENAMES[item.name] ? supabaseImage(SUPABASE_MENU_FILENAMES[item.name]) : '');
+  resolveImageUrl(item?.image, item?.name);
 
 export default function OnlineOrdering() {
   const navigate = useNavigate();
@@ -511,7 +500,7 @@ export default function OnlineOrdering() {
                 <span>{error}</span>
               </div>
               <button
-                onClick={loadMenu}
+                onClick={() => loadMenu()}
                 className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/40 text-red-200 hover:bg-red-500/30 flex items-center gap-1.5 font-bold uppercase text-[10px] shrink-0"
               >
                 <RefreshCw size={12} /> Retry

@@ -12,9 +12,11 @@ import { compressImage } from '../utils/imageCompressor';
 export { invalidateCache };
 
 export const api = axios.create({
-  baseURL: import.meta.env.DEV
-    ? '/api'
-    : (import.meta.env.VITE_API_URL || 'https://melio-restaurant-management-system.vercel.app/api'),
+  baseURL: import.meta.env.VITE_API_URL || (
+    typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')
+      ? 'https://melio-restaurant-management-system.vercel.app/api'
+      : '/api'
+  ),
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',

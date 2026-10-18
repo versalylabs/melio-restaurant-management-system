@@ -23,6 +23,7 @@ import { useCustomerAuth } from '../../contexts/CustomerAuthContext';
 import { customerPortalApi, publicOrderingApi } from '../../services/api';
 import { GlassIcon, SpotlightCard, ShinyText, CountUp } from '../../components/react-bits';
 import { printReservationReceipt, downloadReservationIcs } from '../../utils/reservationReceipt';
+import CustomerAuthModal from '../website/components/CustomerAuthModal';
 
 const money = (val: number, currency = 'KES') =>
   new Intl.NumberFormat('en-KE', { style: 'currency', currency, maximumFractionDigits: 0 }).format(val);
@@ -43,18 +44,14 @@ export default function CustomerAccount() {
   });
   const [menuItems, setMenuItems] = useState<any[]>([]);
   const [restaurant, setRestaurant] = useState<any>(null);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
 
   // Profile Form state
   const [profileForm, setProfileForm] = useState({ name: '', phone: '', email: '', address: '' });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState(false);
   const [profileError, setProfileError] = useState('');
-
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      navigate('/');
-    }
-  }, [isLoading, isAuthenticated, navigate]);
 
   useEffect(() => {
     if (customer) {
@@ -68,24 +65,7 @@ export default function CustomerAccount() {
   }, [customer]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
-
-    // Load orders
-    customerPortalApi.getOrders().then((res) => {
-      if (res.data?.success) setOrders(res.data.data?.orders || []);
-    }).catch(() => {});
-
-    // Load reservations
-    customerPortalApi.getReservations().then((res) => {
-      if (res.data?.success) setReservations(res.data.data?.reservations || []);
-    }).catch(() => {});
-
-    // Load loyalty
-    customerPortalApi.getLoyalty().then((res) => {
-      if (res.data?.success) setLoyalty(res.data.data || { balance: 0, tier: 'Bronze', transactions: [] });
-    }).catch(() => {});
-
-    // Load restaurant menu for favorites
+    // Always load restaurant metadata for branding and auth modal
     publicOrderingApi.getRestaurants().then((res) => {
       const first = res.data.data?.restaurants?.[0];
       if (first) {
@@ -98,6 +78,30 @@ export default function CustomerAccount() {
         }
       }
     }).catch(() => {});
+
+    if (!isAuthenticated) {
+      setDataLoading(false);
+      return;
+    }
+
+    setDataLoading(true);
+    Promise.allSettled([
+      customerPortalApi.getOrders(),
+      customerPortalApi.getReservations(),
+      customerPortalApi.getLoyalty(),
+    ]).then(([ordersRes, resRes, loyaltyRes]) => {
+      if (ordersRes.status === 'fulfilled' && ordersRes.value.data?.success) {
+        setOrders(ordersRes.value.data.data?.orders || []);
+      }
+      if (resRes.status === 'fulfilled' && resRes.value.data?.success) {
+        setReservations(resRes.value.data.data?.reservations || []);
+      }
+      if (loyaltyRes.status === 'fulfilled' && loyaltyRes.value.data?.success) {
+        setLoyalty(loyaltyRes.value.data.data || { balance: 0, tier: 'Bronze', transactions: [] });
+      }
+    }).finally(() => {
+      setDataLoading(false);
+    });
   }, [isAuthenticated]);
 
   const handleProfileSave = async (e: React.FormEvent) => {
@@ -117,22 +121,90 @@ export default function CustomerAccount() {
     }
   };
 
-  const handleReorder = (_order?: any) => {
-    // Navigate to online ordering
-    navigate('/order-online');
+  const handleReorder = (order?: any) => {
+    const firstItemId = order?.items?.[0]?.menuItemId;
+    if (firstItemId) {
+      navigate(`/order-online?addItem=${firstItemId}`);
+    } else {
+      navigate('/order-online');
+    }
   };
 
   const favoriteDishes = menuItems.filter((item) =>
     (customer?.favoriteItemIds || []).includes(item.id)
   );
 
-  if (isLoading) {
+  if (isLoading || dataLoading) {
     return (
       <div className="min-h-screen grid place-items-center bg-[#0d0d11] text-orange-400">
         <div className="flex flex-col items-center gap-3">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-orange-500 border-t-transparent" />
           <span className="text-sm font-serif tracking-widest uppercase text-gray-300">Loading Diners Hub...</span>
         </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[#0b0b0f] text-gray-100 flex flex-col justify-between p-4 selection:bg-orange-500 selection:text-white relative overflow-hidden">
+        <div className="pointer-events-none fixed -top-40 -right-40 h-96 w-96 rounded-full bg-orange-500/15 blur-[140px]" />
+        <div className="pointer-events-none fixed top-1/2 -left-40 h-96 w-96 rounded-full bg-amber-500/10 blur-[140px]" />
+
+        <header className="mx-auto w-full max-w-6xl flex items-center justify-between py-4">
+          <Link to="/" className="flex items-center gap-3 group">
+            <div className="grid h-10 w-10 place-items-center rounded-xl bg-orange-500 text-white shadow-lg shadow-orange-500/25 group-hover:scale-105 transition">
+              <UtensilsCrossed size={20} />
+            </div>
+            <div>
+              <div className="font-serif font-extrabold text-lg text-white">Melio</div>
+              <div className="text-[10px] uppercase tracking-[0.2em] text-orange-400">Customer & Loyalty Portal</div>
+            </div>
+          </Link>
+          <Link to="/" className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-semibold text-gray-300 hover:text-white hover:bg-white/10 transition">
+            Back to Website
+          </Link>
+        </header>
+
+        <main className="mx-auto w-full max-w-md my-auto py-8">
+          <div className="rounded-3xl border border-white/10 bg-gradient-to-b from-white/10 to-white/5 backdrop-blur-2xl p-8 shadow-2xl text-center">
+            <div className="mx-auto w-16 h-16 rounded-2xl bg-orange-500/15 border border-orange-500/30 flex items-center justify-center text-orange-400 mb-4">
+              <Award size={32} />
+            </div>
+            <h1 className="font-serif text-2xl font-bold text-white mb-2">Welcome to Diners Hub</h1>
+            <p className="text-xs text-gray-400 mb-6 leading-relaxed">
+              Track your live food orders, view table reservations, redeem loyalty rewards, and save your favourite artisanal dishes.
+            </p>
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => setAuthModalOpen(true)}
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-orange-500 py-3.5 text-xs font-bold uppercase tracking-wider text-white shadow-xl shadow-orange-500/25 hover:bg-orange-600 transition"
+              >
+                <User size={16} /> Sign In / Create Account
+              </button>
+              <Link
+                to="/order-online"
+                className="w-full flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 py-3 text-xs font-semibold text-gray-300 hover:bg-white/10 transition"
+              >
+                <ShoppingBag size={15} /> Order Online as Guest
+              </Link>
+            </div>
+          </div>
+        </main>
+
+        <footer className="mx-auto w-full max-w-6xl py-4 text-center text-xs text-gray-500">
+          © {new Date().getFullYear()} Melio Restaurant. All rights reserved.
+        </footer>
+
+        {authModalOpen && (
+          <CustomerAuthModal
+            isOpen={authModalOpen}
+            onClose={() => setAuthModalOpen(false)}
+            restaurantId={restaurant?.id || ''}
+            initialTab="CUSTOMER"
+          />
+        )}
       </div>
     );
   }

@@ -1,6 +1,7 @@
 export interface ReservationReceiptData {
+  id?: string;
   reservationId?: string;
-  reservationCode: string;
+  reservationCode?: string;
   customerName: string;
   partySize: number;
   date?: string;
@@ -9,6 +10,7 @@ export interface ReservationReceiptData {
   endAt?: string;
   status?: string;
   tableNumber?: string | number | null;
+  table?: { tableNumber?: string | number | null; name?: string | null };
   notes?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -22,7 +24,7 @@ export interface ReservationReceiptData {
 }
 
 export function printReservationReceipt(data: ReservationReceiptData) {
-  const code = data.reservationCode || `RES-${(data.reservationId || '').slice(-6).toUpperCase()}`;
+  const code = data.reservationCode || `RES-${(data.reservationId || data.id || '').slice(-6).toUpperCase()}`;
   const restaurantName = data.restaurantName || 'Melio Fine Dining';
   const branchName = data.branch?.name || 'Main Branch';
   const branchAddress = [data.branch?.address, data.branch?.city].filter(Boolean).join(', ') || 'Melio Restaurant';

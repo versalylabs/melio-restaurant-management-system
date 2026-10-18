@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { authApi } from '../../services/api';
+import { getDefaultRouteForRole } from '../../App';
 import {
   Lock,
   Mail,
@@ -9,6 +10,7 @@ import {
   ArrowRight,
   UtensilsCrossed,
   AlertCircle,
+  CheckCircle2,
   Home
 } from 'lucide-react';
 
@@ -19,6 +21,8 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const setupMessage = (location.state as { message?: string } | null)?.message || '';
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -28,8 +32,9 @@ export default function Login() {
     try {
       const response = await authApi.login(email, password);
       if (response.data.success && response.data.data) {
-        login(response.data.data.token, response.data.data.user);
-        navigate('/dashboard');
+        const loggedUser = response.data.data.user;
+        login(response.data.data.token, loggedUser);
+        navigate(getDefaultRouteForRole(loggedUser?.roleName));
       } else {
         setError(response.data.message || 'Invalid email or password.');
       }
@@ -75,6 +80,13 @@ export default function Login() {
             <h1 className="text-2xl font-serif font-bold text-white tracking-tight">Staff Sign In</h1>
             <p className="mt-1 text-xs text-gray-400">Access Point of Sale, Kitchen Display & Analytics</p>
           </div>
+
+          {setupMessage && !error && (
+            <div className="mb-5 flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/60 p-3.5 text-xs text-emerald-200">
+              <CheckCircle2 size={16} className="shrink-0 text-emerald-400" />
+              <span>{setupMessage}</span>
+            </div>
+          )}
 
           {error && (
             <div className="mb-5 flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-950/60 p-3.5 text-xs text-red-200">

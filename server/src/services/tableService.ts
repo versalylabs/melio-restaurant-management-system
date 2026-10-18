@@ -18,6 +18,8 @@ export const getTables = async (req: AuthRequest, res: ExpressResponse) => {
   }
   if (status) {
     where.status = status as string;
+  } else {
+    where.status = { not: 'INACTIVE' };
   }
   if (search) {
     where.tableNumber = { contains: search as string };
@@ -116,7 +118,7 @@ export const createTable = async (req: AuthRequest, res: ExpressResponse) => {
     }
   }
 
-  const existing = await prisma.table.findFirst({ where: { branchId, tableNumber } });
+  const existing = await prisma.table.findFirst({ where: { branchId, tableNumber, status: { not: 'INACTIVE' } } });
   if (existing) {
     return sendError(res, 'Table number already exists in this branch');
   }
@@ -197,7 +199,14 @@ export const updateTable = async (req: AuthRequest, res: ExpressResponse) => {
   }
 
   if (tableNumber && tableNumber !== existing.tableNumber) {
-    const duplicate = await prisma.table.findFirst({ where: { branchId: targetBranchId, tableNumber } });
+    const duplicate = await prisma.table.findFirst({
+      where: {
+        branchId: targetBranchId,
+        tableNumber,
+        status: { not: 'INACTIVE' },
+        id: { not: id },
+      },
+    });
     if (duplicate) {
       return sendError(res, 'Table number already exists in this branch');
     }
@@ -301,7 +310,25 @@ export const deleteTable = async (req: AuthRequest, res: ExpressResponse) => {
     return sendError(res, 'Table not found', undefined, 404);
   }
 
-  await prisma.table.update({ where: { id }, data: { status: 'INACTIVE' } });
+  if (existing.status === 'OCCUPIED') {
+    return sendError(res, 'Cannot deactivate an occupied table', undefined, 400);
+  }
+
+  const activeOrdersCount = await prisma.sale.count({
+    where: {
+      tableId: id,
+      status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] },
+    },
+  });
+  if (activeOrdersCount > 0) {
+    return sendError(res, `Cannot deactivate table with ${activeOrdersCount} active order(s)`, undefined, 400);
+  }
+
+  const suffixedTableNumber = `${existing.tableNumber}__INACTIVE_${Date.now().toString().slice(-6)}`;
+  await prisma.table.update({
+    where: { id },
+    data: { status: 'INACTIVE', tableNumber: suffixedTableNumber },
+  });
 
   await createAuditLog(
     restaurantId,

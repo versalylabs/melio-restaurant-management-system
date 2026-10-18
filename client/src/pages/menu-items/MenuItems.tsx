@@ -1,5 +1,22 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Edit, Trash2, Copy, Eye, Upload, Image as ImageIcon, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import {
+  Plus,
+  Search,
+  Edit,
+  Trash2,
+  Copy,
+  Eye,
+  Upload,
+  Image as ImageIcon,
+  X,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
+  Sliders,
+  UtensilsCrossed,
+  ExternalLink,
+} from 'lucide-react';
 import { menuItemApi, categoryApi, modifierGroupApi, branchApi } from '../../services/api';
 import type { MenuItem, Category, ModifierGroup } from '../../types';
 import Button from '../../components/ui/Button';
@@ -14,13 +31,19 @@ export default function MenuItems() {
   const [items, setItems] = useState<MenuItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
-  const [branches, setBranches] = useState<Array<{id:string; name:string; code:string; status?:string}>>([]);
-  const [loading, setLoading] = useState(true);
+  const [branches, setBranches] = useState<Array<{ id: string; name: string; code: string; status?: string }>>([]);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [actingId, setActingId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [modalError, setModalError] = useState('');
+  const [success, setSuccess] = useState('');
   const [search, setSearch] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [showModifiersModal, setShowModifiersModal] = useState(false);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [viewingItem, setViewingItem] = useState<MenuItem | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -28,10 +51,24 @@ export default function MenuItems() {
   const [imageRemoved, setImageRemoved] = useState(false);
   const [imageUploading, setImageUploading] = useState(false);
   const [formData, setFormData] = useState({
-    name: '', description: '', image: '', sku: '', sellingPrice: '', costPrice: '', taxRate: '0', preparationTime: '', categoryId: '', available: true, status: 'ACTIVE', displayOrder: 0, branchIds: [] as string[], modifierGroupIds: [] as string[],
+    name: '',
+    description: '',
+    image: '',
+    sku: '',
+    sellingPrice: '',
+    costPrice: '',
+    taxRate: '0',
+    preparationTime: '',
+    categoryId: '',
+    available: true,
+    status: 'ACTIVE',
+    displayOrder: 0,
+    branchIds: [] as string[],
+    modifierGroupIds: [] as string[],
   });
 
   const fetchItems = async () => {
+    setFetching(true);
     try {
       const params: any = {};
       if (search) params.search = search;
@@ -46,20 +83,27 @@ export default function MenuItems() {
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load menu items');
     } finally {
-      setLoading(false);
+      setInitialLoading(false);
+      setFetching(false);
     }
   };
 
   const fetchFilters = async () => {
     try {
-      const [catRes, modRes, branchRes] = await Promise.all([categoryApi.getCategories(), modifierGroupApi.getModifierGroups(), branchApi.getBranches()]);
+      const [catRes, modRes, branchRes] = await Promise.all([
+        categoryApi.getCategories(),
+        modifierGroupApi.getModifierGroups(),
+        branchApi.getBranches(),
+      ]);
       if (catRes.data.success) setCategories(catRes.data.data?.categories || []);
       if (modRes.data.success) setModifierGroups(modRes.data.data?.groups || []);
-      setBranches((branchRes.data?.data?.branches || []).filter((b:any) => b.status !== 'INACTIVE'));
+      setBranches((branchRes.data?.data?.branches || []).filter((b: any) => b.status !== 'INACTIVE'));
     } catch {}
   };
 
-  useEffect(() => { fetchFilters(); }, []);
+  useEffect(() => {
+    fetchFilters();
+  }, []);
 
   useEffect(() => {
     fetchItems();
@@ -77,18 +121,18 @@ export default function MenuItems() {
     if (!file) return;
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
     if (!allowed.includes(file.type)) {
-      setError('Please choose a JPG, PNG, WEBP or GIF image.');
+      setModalError('Please choose a JPG, PNG, WEBP or GIF image.');
       return;
     }
     if (file.size > 6 * 1024 * 1024) {
-      setError('Image must be 6MB or smaller.');
+      setModalError('Image must be 6MB or smaller.');
       return;
     }
     if (imagePreview?.startsWith('blob:')) URL.revokeObjectURL(imagePreview);
     setImageFile(file);
     setImagePreview(URL.createObjectURL(file));
     setImageRemoved(false);
-    setError('');
+    setModalError('');
   };
 
   const removeSelectedImage = () => {
@@ -101,6 +145,10 @@ export default function MenuItems() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaving(true);
+    setModalError('');
+    setError('');
+    setSuccess('');
     try {
       setImageUploading(Boolean(imageFile));
       const data = {
@@ -126,43 +174,89 @@ export default function MenuItems() {
       setShowModal(false);
       setEditingItem(null);
       resetImageState();
-      setFormData({ name: '', description: '', image: '', sku: '', sellingPrice: '', costPrice: '', taxRate: '0', preparationTime: '', categoryId: '', available: true, status: 'ACTIVE', displayOrder: 0, branchIds: [], modifierGroupIds: [] });
+      setFormData({
+        name: '',
+        description: '',
+        image: '',
+        sku: '',
+        sellingPrice: '',
+        costPrice: '',
+        taxRate: '0',
+        preparationTime: '',
+        categoryId: '',
+        available: true,
+        status: 'ACTIVE',
+        displayOrder: 0,
+        branchIds: [],
+        modifierGroupIds: [],
+      });
+      setSuccess(editingItem ? `Updated "${data.name}" successfully.` : `Created "${data.name}" successfully.`);
       await fetchItems();
     } catch (err: any) {
-      setError(err.response?.data?.message || err.message || 'Failed to save menu item');
+      setModalError(err.response?.data?.message || err.message || 'Failed to save menu item');
     } finally {
+      setSaving(false);
       setImageUploading(false);
     }
   };
 
-  const handleDuplicate = async (id: string) => {
+  const handleDuplicate = async (id: string, name: string) => {
+    setActingId(id);
+    setError('');
+    setSuccess('');
     try {
       await menuItemApi.duplicateMenuItem(id, {});
-      fetchItems();
+      setSuccess(`Duplicated "${name}" successfully.`);
+      await fetchItems();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to duplicate menu item');
+    } finally {
+      setActingId(null);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to permanently delete this menu item?')) return;
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to permanently delete "${name}"?`)) return;
+    setActingId(id);
+    setError('');
+    setSuccess('');
     try {
       await menuItemApi.deleteMenuItem(id);
-      fetchItems();
+      setSuccess(`Deleted "${name}" successfully.`);
+      await fetchItems();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to delete menu item');
+    } finally {
+      setActingId(null);
     }
   };
 
   const openCreate = () => {
     setEditingItem(null);
     resetImageState();
-    setFormData({ name: '', description: '', image: '', sku: '', sellingPrice: '', costPrice: '', taxRate: '0', preparationTime: '', categoryId: '', available: true, status: 'ACTIVE', displayOrder: 0, branchIds: branches.map((b) => b.id), modifierGroupIds: [] });
+    setModalError('');
+    setFormData({
+      name: '',
+      description: '',
+      image: '',
+      sku: '',
+      sellingPrice: '',
+      costPrice: '',
+      taxRate: '0',
+      preparationTime: '',
+      categoryId: categories[0]?.id || '',
+      available: true,
+      status: 'ACTIVE',
+      displayOrder: 0,
+      branchIds: branches.map((b) => b.id),
+      modifierGroupIds: [],
+    });
     setShowModal(true);
   };
 
   const openEdit = (item: MenuItem) => {
     setEditingItem(item);
+    setModalError('');
     setFormData({
       name: item.name,
       description: item.description || '',
@@ -176,38 +270,61 @@ export default function MenuItems() {
       available: item.available,
       status: item.status,
       displayOrder: item.displayOrder,
-      branchIds: item.branches.filter((b) => b.available).map((b) => b.id),
-      modifierGroupIds: item.modifierGroups.map((mg) => mg.id),
+      branchIds: (item.branches || []).filter((b) => b.available).map((b) => b.id),
+      modifierGroupIds: (item.modifierGroups || []).map((mg) => mg.id),
     });
     resetImageState();
     setImagePreview(item.image || null);
     setShowModal(true);
   };
 
-  if (loading) {
+  if (initialLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500 dark:text-gray-400">Loading menu items...</div>
+      <div className="flex h-64 items-center justify-center">
+        <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+          <RefreshCw className="w-5 h-5 animate-spin text-orange-500" />
+          <span>Loading menu items...</span>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Menu Items</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Manage your menu</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Manage food, drinks, pricing, and modifier options</p>
         </div>
-        <Button onClick={openCreate} className="gap-2">
-          <Plus className="w-4 h-4" />
-          Add Item
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link to="/menu-preview">
+            <Button variant="secondary" className="gap-2">
+              <ExternalLink className="w-4 h-4" />
+              Preview Menu
+            </Button>
+          </Link>
+          <Button variant="secondary" onClick={() => setShowModifiersModal(true)} className="gap-2">
+            <Sliders className="w-4 h-4" />
+            Manage Modifiers
+          </Button>
+          <Button onClick={openCreate} className="gap-2">
+            <Plus className="w-4 h-4" />
+            Add Item
+          </Button>
+        </div>
       </div>
 
       {error && (
-        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm">
-          {error}
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {success && (
+        <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-400 px-4 py-3 rounded-md text-sm flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{success}</span>
         </div>
       )}
 
@@ -215,7 +332,7 @@ export default function MenuItems() {
         <div className="flex flex-col sm:flex-row gap-4 mb-4">
           <div className="relative flex-1">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
-            <Input placeholder="Search items..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10 pr-4" />
+            <Input placeholder="Search items by name or SKU..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10 pr-4" />
           </div>
           <div className="flex gap-2">
             <select
@@ -238,6 +355,11 @@ export default function MenuItems() {
               <option value="INACTIVE">Inactive</option>
               <option value="OUT_OF_STOCK">Out of Stock</option>
             </select>
+            {fetching && (
+              <div className="flex items-center px-2 text-orange-500">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              </div>
+            )}
           </div>
         </div>
 
@@ -256,7 +378,7 @@ export default function MenuItems() {
             </thead>
             <tbody className="bg-white dark:bg-[#111116] divide-y divide-gray-200 dark:divide-gray-700">
               {items.map((item) => (
-                <tr key={item.id}>
+                <tr key={item.id} className="hover:bg-[#faf9f7] dark:hover:bg-[#1a1a20]/30 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="h-12 w-12 overflow-hidden rounded-xl border border-orange-100 bg-orange-50 dark:border-gray-700 dark:bg-[#111116]">
                       <OptimizedImage
@@ -273,7 +395,7 @@ export default function MenuItems() {
                     {item.sku && <div className="text-xs text-gray-500 dark:text-gray-400">SKU: {item.sku}</div>}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{item.categoryName}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">KSh {(item.sellingPrice ?? 0).toLocaleString()}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900 dark:text-gray-100">KSh {(item.sellingPrice ?? 0).toLocaleString()}</td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <Badge variant={item.status === 'ACTIVE' ? 'success' : item.status === 'OUT_OF_STOCK' ? 'danger' : 'warning'}>{item.status}</Badge>
                   </td>
@@ -281,17 +403,51 @@ export default function MenuItems() {
                     <Badge variant={item.available ? 'success' : 'danger'}>{item.available ? 'Available' : 'Unavailable'}</Badge>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button onClick={() => setViewingItem(item)} className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 mr-3"><Eye className="w-4 h-4" /></button>
-                    <button onClick={() => openEdit(item)} className="text-orange-600 hover:text-orange-900 dark:text-orange-400 dark:hover:text-orange-300 mr-3"><Edit className="w-4 h-4" /></button>
-                    <button onClick={() => handleDuplicate(item.id)} className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300 mr-3"><Copy className="w-4 h-4" /></button>
-                    <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"><Trash2 className="w-4 h-4" /></button>
+                    <button
+                      onClick={() => setViewingItem(item)}
+                      className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 mr-3"
+                      title="View details"
+                    >
+                      <Eye className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => openEdit(item)}
+                      className="text-orange-600 hover:text-orange-900 dark:text-orange-400 dark:hover:text-orange-300 mr-3"
+                      title="Edit item"
+                    >
+                      <Edit className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDuplicate(item.id, item.name)}
+                      disabled={actingId === item.id}
+                      className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300 mr-3 disabled:opacity-50"
+                      title="Duplicate item"
+                    >
+                      {actingId === item.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                    <button
+                      onClick={() => handleDelete(item.id, item.name)}
+                      disabled={actingId === item.id}
+                      className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
+                      title="Delete item"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </td>
                 </tr>
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-                    No menu items found
+                  <td colSpan={7} className="px-6 py-12 text-center">
+                    <UtensilsCrossed className="w-12 h-12 mx-auto text-gray-400 mb-3 opacity-50" />
+                    <p className="text-base font-semibold text-gray-900 dark:text-gray-100">No menu items found</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 mb-4">
+                      {search || filterCategory || filterStatus ? 'Try changing your filters or search keywords.' : 'Add your first dish, drink or dessert to start selling.'}
+                    </p>
+                    <Button onClick={openCreate} className="gap-2 inline-flex">
+                      <Plus className="w-4 h-4" />
+                      Add First Item
+                    </Button>
                   </td>
                 </tr>
               )}
@@ -302,8 +458,14 @@ export default function MenuItems() {
 
       {showModal && (
         <Modal title={editingItem ? 'Edit Menu Item' : 'Add Menu Item'} onClose={() => { setShowModal(false); setEditingItem(null); resetImageState(); }}>
+          {modalError && (
+            <div className="mb-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{modalError}</span>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input id="name" label="Name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} required />
               <Input id="sku" label="SKU" value={formData.sku} onChange={(e) => setFormData({ ...formData, sku: e.target.value })} />
             </div>
@@ -338,7 +500,7 @@ export default function MenuItems() {
                 {imageUploading && <p className="mt-3 text-xs font-medium text-orange-600">Uploading photo...</p>}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
                 <select
@@ -353,17 +515,17 @@ export default function MenuItems() {
                   ))}
                 </select>
               </div>
-              <Input id="preparationTime" type="number" label="Prep Time (min)" value={formData.preparationTime} onChange={(e) => setFormData({ ...formData, preparationTime: e.target.value })} />
+              <Input id="preparationTime" type="number" min="0" label="Prep Time (min)" value={formData.preparationTime} onChange={(e) => setFormData({ ...formData, preparationTime: e.target.value })} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <Input id="sellingPrice" type="number" label="Selling Price (KSh)" value={formData.sellingPrice} onChange={(e) => setFormData({ ...formData, sellingPrice: e.target.value })} required step="0.01" />
-              <Input id="costPrice" type="number" label="Cost Price (KSh)" value={formData.costPrice} onChange={(e) => setFormData({ ...formData, costPrice: e.target.value })} step="0.01" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input id="sellingPrice" type="number" min="0" step="0.01" label="Selling Price (KSh)" value={formData.sellingPrice} onChange={(e) => setFormData({ ...formData, sellingPrice: e.target.value })} required />
+              <Input id="costPrice" type="number" min="0" step="0.01" label="Cost Price (KSh)" value={formData.costPrice} onChange={(e) => setFormData({ ...formData, costPrice: e.target.value })} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <Input id="taxRate" type="number" label="Tax Rate (%)" value={formData.taxRate} onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })} step="0.01" />
-              <Input id="displayOrder" type="number" label="Display Order" value={formData.displayOrder} onChange={(e) => setFormData({ ...formData, displayOrder: parseInt(e.target.value) || 0 })} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input id="taxRate" type="number" min="0" max="100" step="0.01" label="Tax Rate (%)" value={formData.taxRate} onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })} />
+              <Input id="displayOrder" type="number" min="0" label="Display Order" value={formData.displayOrder} onChange={(e) => setFormData({ ...formData, displayOrder: parseInt(e.target.value) || 0 })} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
                 <select
@@ -382,9 +544,9 @@ export default function MenuItems() {
                   type="checkbox"
                   checked={formData.available}
                   onChange={(e) => setFormData({ ...formData, available: e.target.checked })}
-                  className="rounded border-gray-300 dark:border-gray-600 dark:bg-[#111116]"
+                  className="rounded border-gray-300 dark:border-gray-600 dark:bg-[#111116] text-orange-600 focus:ring-orange-500"
                 />
-                <label htmlFor="available" className="text-sm text-gray-700 dark:text-gray-300">Available</label>
+                <label htmlFor="available" className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer">Available for order</label>
               </div>
             </div>
             <div>
@@ -392,10 +554,10 @@ export default function MenuItems() {
               <div className="space-y-2 max-h-32 overflow-y-auto border border-orange-100 dark:border-gray-700 rounded-md p-2">
                 {branches.length === 0 && <p className="text-sm text-gray-500 dark:text-gray-400">No branches available</p>}
                 {branches.map((branch) => (
-                  <label key={branch.id} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <label key={branch.id} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
                     <input
                       type="checkbox"
-                      className="rounded border-gray-300 dark:border-gray-600 dark:bg-[#111116]"
+                      className="rounded border-gray-300 dark:border-gray-600 dark:bg-[#111116] text-orange-600"
                       checked={formData.branchIds.includes(branch.id)}
                       onChange={(e) => {
                         const newBranches = e.target.checked ? [...formData.branchIds, branch.id] : formData.branchIds.filter((id) => id !== branch.id);
@@ -408,27 +570,39 @@ export default function MenuItems() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Modifier Groups</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Modifier Groups</label>
+                <button
+                  type="button"
+                  onClick={() => setShowModifiersModal(true)}
+                  className="text-xs text-orange-600 dark:text-orange-400 hover:underline"
+                >
+                  + Add/Edit Groups
+                </button>
+              </div>
               <div className="space-y-2 max-h-32 overflow-y-auto border border-orange-100 dark:border-gray-700 rounded-md p-2">
+                {modifierGroups.length === 0 && <p className="text-sm text-gray-500 dark:text-gray-400">No modifier groups created yet</p>}
                 {modifierGroups.map((mg) => (
-                  <label key={mg.id} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <label key={mg.id} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
                     <input
                       type="checkbox"
-                      className="rounded border-gray-300 dark:border-gray-600 dark:bg-[#111116]"
+                      className="rounded border-gray-300 dark:border-gray-600 dark:bg-[#111116] text-orange-600"
                       checked={formData.modifierGroupIds.includes(mg.id)}
                       onChange={(e) => {
                         const newMods = e.target.checked ? [...formData.modifierGroupIds, mg.id] : formData.modifierGroupIds.filter((id) => id !== mg.id);
                         setFormData({ ...formData, modifierGroupIds: newMods });
                       }}
                     />
-                    {mg.name}
+                    {mg.name} <span className="text-xs text-gray-400">({mg.selectionType}, {mg.options?.length || 0} options)</span>
                   </label>
                 ))}
               </div>
             </div>
-            <div className="flex justify-end gap-3">
+            <div className="flex justify-end gap-3 pt-3 border-t border-gray-100 dark:border-gray-700">
               <Button type="button" variant="secondary" onClick={() => { setShowModal(false); setEditingItem(null); resetImageState(); }}>Cancel</Button>
-              <Button type="submit">{editingItem ? 'Update' : 'Create'}</Button>
+              <Button type="submit" loading={saving || imageUploading} disabled={saving || imageUploading}>
+                {saving || imageUploading ? 'Saving...' : editingItem ? 'Update' : 'Create'}
+              </Button>
             </div>
           </form>
         </Modal>
@@ -475,14 +649,14 @@ export default function MenuItems() {
             <div>
               <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">Branches</p>
               <div className="flex flex-wrap gap-2 mt-1">
-                {viewingItem.branches.map((b) => (
+                {(viewingItem.branches || []).map((b) => (
                   <Badge key={b.id} variant={b.available ? 'success' : 'danger'}>
                     {b.available ? '✓' : '✗'} {b.name}
                   </Badge>
                 ))}
               </div>
             </div>
-            {viewingItem.modifierGroups.length > 0 && (
+            {(viewingItem.modifierGroups || []).length > 0 && (
               <div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">Modifiers</p>
                 <div className="flex flex-wrap gap-2 mt-1">
@@ -495,6 +669,226 @@ export default function MenuItems() {
           </div>
         </Modal>
       )}
+
+      {showModifiersModal && (
+        <ModifierGroupsManagerModal
+          groups={modifierGroups}
+          onClose={() => setShowModifiersModal(false)}
+          onRefresh={async () => {
+            const res = await modifierGroupApi.getModifierGroups();
+            if (res.data.success) setModifierGroups(res.data.data?.groups || []);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function ModifierGroupsManagerModal({
+  groups,
+  onClose,
+  onRefresh,
+}: {
+  groups: ModifierGroup[];
+  onClose: () => void;
+  onRefresh: () => Promise<void>;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [selectionType, setSelectionType] = useState('SINGLE');
+  const [isRequired, setIsRequired] = useState(false);
+  const [options, setOptions] = useState<Array<{ name: string; priceAdjustment: number }>>([
+    { name: '', priceAdjustment: 0 },
+  ]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const addOptionRow = () => {
+    setOptions([...options, { name: '', priceAdjustment: 0 }]);
+  };
+
+  const removeOptionRow = (idx: number) => {
+    setOptions(options.filter((_, i) => i !== idx));
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    const validOptions = options.filter((o) => o.name.trim() !== '');
+    if (validOptions.length === 0) {
+      setError('Please provide at least one modifier option.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+    try {
+      await modifierGroupApi.createModifierGroup({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        selectionType,
+        isRequired,
+        options: validOptions.map((opt, i) => ({
+          name: opt.name.trim(),
+          priceAdjustment: Number(opt.priceAdjustment || 0),
+          displayOrder: i,
+        })),
+      });
+      setName('');
+      setDescription('');
+      setOptions([{ name: '', priceAdjustment: 0 }]);
+      await onRefresh();
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to create modifier group');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string, groupName: string) => {
+    if (!confirm(`Deactivate modifier group "${groupName}"?`)) return;
+    setDeletingId(id);
+    setError('');
+    try {
+      await modifierGroupApi.deleteModifierGroup(id);
+      await onRefresh();
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to delete modifier group');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <Modal title="Manage Modifier Groups" onClose={onClose}>
+      <div className="space-y-6 max-h-[80vh] overflow-y-auto pr-1">
+        {error && (
+          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleCreate} className="space-y-4 rounded-xl border border-orange-100 dark:border-gray-700 p-4 bg-[#faf9f7] dark:bg-[#111116]/60">
+          <h3 className="font-semibold text-sm text-gray-900 dark:text-gray-100">Create New Modifier Group</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input id="mg-name" label="Group Name (e.g. Size, Milk, Toppings)" value={name} onChange={(e) => setName(e.target.value)} required />
+            <Input id="mg-desc" label="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Selection Type</label>
+              <select
+                value={selectionType}
+                onChange={(e) => setSelectionType(e.target.value)}
+                className="h-10 w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm"
+              >
+                <option value="SINGLE">Single Choice (Radio)</option>
+                <option value="MULTIPLE">Multiple Choices (Checkboxes)</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2 pt-6">
+              <input
+                id="mg-required"
+                type="checkbox"
+                checked={isRequired}
+                onChange={(e) => setIsRequired(e.target.checked)}
+                className="rounded border-gray-300 text-orange-600"
+              />
+              <label htmlFor="mg-required" className="text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                Customer must choose at least one option
+              </label>
+            </div>
+          </div>
+
+          <div className="space-y-2 pt-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Options</label>
+              <button type="button" onClick={addOptionRow} className="text-xs text-orange-600 font-semibold hover:underline">
+                + Add Option
+              </button>
+            </div>
+            {options.map((opt, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Option name (e.g. Large, Oat Milk)"
+                  value={opt.name}
+                  onChange={(e) => {
+                    const arr = [...options];
+                    arr[idx].name = e.target.value;
+                    setOptions(arr);
+                  }}
+                  className="flex-1 h-9 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm"
+                  required
+                />
+                <div className="relative w-36">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">+KSh</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={opt.priceAdjustment}
+                    onChange={(e) => {
+                      const arr = [...options];
+                      arr[idx].priceAdjustment = parseFloat(e.target.value) || 0;
+                      setOptions(arr);
+                    }}
+                    className="w-full h-9 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] pl-12 pr-2 text-sm"
+                  />
+                </div>
+                {options.length > 1 && (
+                  <button type="button" onClick={() => removeOptionRow(idx)} className="p-1.5 text-red-500 hover:text-red-700">
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button type="submit" loading={saving} disabled={saving} size="sm">
+              Create Modifier Group
+            </Button>
+          </div>
+        </form>
+
+        <div className="space-y-3">
+          <h3 className="font-semibold text-sm text-gray-900 dark:text-gray-100">Existing Modifier Groups ({groups.length})</h3>
+          {groups.length === 0 ? (
+            <p className="text-sm text-gray-500 py-4 text-center">No modifier groups created yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {groups.map((mg) => (
+                <div key={mg.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#111116]">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm text-gray-900 dark:text-gray-100">{mg.name}</span>
+                      <Badge variant={mg.isRequired ? 'warning' : 'default'}>{mg.isRequired ? 'Required' : 'Optional'}</Badge>
+                      <Badge variant="info">{mg.selectionType}</Badge>
+                    </div>
+                    {mg.options && mg.options.length > 0 && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Options: {mg.options.map((o) => `${o.name}${o.priceAdjustment > 0 ? ` (+KSh ${o.priceAdjustment})` : ''}`).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => handleDelete(mg.id, mg.name)}
+                    disabled={deletingId === mg.id}
+                    className="p-1.5 text-red-600 hover:text-red-800 disabled:opacity-50"
+                    title="Delete group"
+                  >
+                    {deletingId === mg.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
   );
 }

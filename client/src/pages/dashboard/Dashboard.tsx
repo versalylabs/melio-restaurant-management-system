@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { ArrowUpRight, CalendarDays, ChefHat, ClipboardList, CreditCard, LayoutGrid, Package, RefreshCw, ShoppingBag, Users, UtensilsCrossed, CircleDollarSign, Clock3 } from 'lucide-react';
 import { dashboardApi } from '../../services/api';
 import type { DashboardMetrics } from '../../types';
@@ -117,11 +118,12 @@ export default function Dashboard() {
   const { user } = useAuth();
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
 
   const fetchMetrics = async (isManual = false) => {
     setError('');
-    if (isManual) setLoading(true);
+    if (isManual) setRefreshing(true);
     try {
       const response = await dashboardApi.getMetrics({ refresh: isManual });
       if (response.data.success) {
@@ -137,6 +139,7 @@ export default function Dashboard() {
       setError(err.response?.data?.message || 'Failed to load dashboard');
     } finally {
       setLoading(false);
+      if (isManual) setRefreshing(false);
     }
   };
 
@@ -197,8 +200,13 @@ export default function Dashboard() {
               <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Today</div>
               <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</div>
             </div>
-            <button onClick={fetchMetrics} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition hover:from-orange-600 hover:to-amber-600">
-              <RefreshCw className="h-4 w-4" /> Refresh
+            <button
+              onClick={() => fetchMetrics(true)}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition hover:from-orange-600 hover:to-amber-600 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
         </section>
@@ -238,7 +246,12 @@ export default function Dashboard() {
                   <div className="mb-2 flex justify-between text-xs"><span className="font-medium text-gray-700 dark:text-gray-300">{row.type.replace(/_/g, ' ')}</span><span className="text-gray-400">{row.count} orders</span></div>
                   <div className="h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-orange-500 to-amber-500" style={{ width: `${Math.max((row.count / maxOrderType) * 100, 8)}%` }} /></div>
                 </div>
-              )) : <div className="py-12 text-center text-sm text-gray-400">No orders in this period yet.</div>}
+              )) : (
+                <div className="py-10 text-center text-sm text-gray-400 flex flex-col items-center justify-center">
+                  <ShoppingBag className="h-7 w-7 text-orange-400/60 mb-2" />
+                  <span>No orders in this period yet.</span>
+                </div>
+              )}
             </div>
             <div className="relative z-10 mt-7 grid grid-cols-3 gap-2 border-t border-orange-500/10 pt-4 dark:border-white/10">
               <div><p className="text-[10px] uppercase tracking-wider text-gray-400">Available tables</p><p className="mt-1 text-lg font-bold text-gray-900 dark:text-white">{data?.availableTables || 0}</p></div>
@@ -251,13 +264,18 @@ export default function Dashboard() {
         <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
           <div className="xl:col-span-7 relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/15 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)] liquid-glass-card">
             <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-orange-400/40 dark:via-white/20 to-transparent pointer-events-none" />
-            <div className="relative z-10 flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Recent orders</h2><p className="text-xs text-gray-500 dark:text-gray-400">The latest activity from your POS and kitchen flow</p></div><a href="/orders" className="text-xs font-semibold text-orange-600 hover:text-orange-700">View all</a></div>
+            <div className="relative z-10 flex items-center justify-between"><div><h2 className="font-semibold text-gray-900 dark:text-white">Recent orders</h2><p className="text-xs text-gray-500 dark:text-gray-400">The latest activity from your POS and kitchen flow</p></div><Link to="/orders" className="text-xs font-semibold text-orange-600 hover:text-orange-700">View all</Link></div>
             <div className="relative z-10 mt-4 overflow-x-auto">
               <table className="w-full min-w-[620px] text-left text-sm">
                 <thead className="text-[10px] uppercase tracking-wider text-gray-400"><tr className="border-b border-orange-500/10 dark:border-white/10"><th className="pb-3 font-medium">Order</th><th className="pb-3 font-medium">Items</th><th className="pb-3 font-medium">Type</th><th className="pb-3 font-medium">Amount</th><th className="pb-3 text-right font-medium">Status</th></tr></thead>
                 <tbody>{(metrics?.recentOrders || []).map((order) => <tr key={order.id} className="border-b border-orange-500/5 last:border-0 dark:border-white/5"><td className="py-4"><div className="font-semibold text-gray-800 dark:text-gray-200">{order.orderNumber}</div><div className="mt-0.5 text-xs text-gray-400">{order.customerName || 'Walk-in customer'}</div></td><td className="py-4 text-xs text-gray-500 dark:text-gray-400">{order.items.map((i) => `${i.quantity}× ${i.itemNameSnapshot}`).join(', ') || '—'}</td><td className="py-4 text-xs text-gray-500 dark:text-gray-400">{order.orderType.replace(/_/g, ' ')}</td><td className="py-4 font-semibold text-gray-800 dark:text-gray-200">{money(order.totalAmount)}</td><td className="py-4 text-right"><span className={`rounded-md px-2 py-1 text-[10px] font-semibold ${statusClass(order.status)}`}>{order.status}</span></td></tr>)}</tbody>
               </table>
-              {!metrics?.recentOrders?.length && <div className="py-12 text-center text-sm text-gray-400">No recent orders yet.</div>}
+              {!metrics?.recentOrders?.length && (
+                <div className="py-12 text-center text-sm text-gray-400 flex flex-col items-center justify-center">
+                  <ClipboardList className="h-7 w-7 text-orange-400/60 mb-2" />
+                  <span>No recent orders yet.</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -284,7 +302,12 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-            {!metrics?.topMenuItems?.length && <div className="py-10 text-center text-sm text-gray-400">Complete some orders to see menu trends.</div>}
+            {!metrics?.topMenuItems?.length && (
+              <div className="py-10 text-center text-sm text-gray-400 flex flex-col items-center justify-center">
+                <ChefHat className="h-7 w-7 text-orange-400/60 mb-2" />
+                <span>Complete some orders to see menu trends.</span>
+              </div>
+            )}
           </div>
         </section>
 

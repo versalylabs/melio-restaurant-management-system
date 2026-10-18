@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Navigation, MapPin, ExternalLink, Compass } from 'lucide-react';
@@ -148,7 +148,7 @@ export default function DeliveryMapViewer({
     `);
 
     // Polyline connecting branch to customer destination
-    const pathLine = L.polyline(
+    L.polyline(
       [
         [branchCoords.lat, branchCoords.lng],
         [destCoords.lat, destCoords.lng],
@@ -184,7 +184,6 @@ export default function DeliveryMapViewer({
   }, [destCoords.lat, destCoords.lng, branchCoords.lat, branchCoords.lng]);
 
   const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${destCoords.lat},${destCoords.lng}`;
-  const osmUrl = `https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${branchCoords.lat},${branchCoords.lng}%3B${destCoords.lat},${destCoords.lng}`;
 
   const cleanText = safeAddress.replace(/\s*\[geo:[-\d.]+,\s*[-\d.]+\]/, '');
 

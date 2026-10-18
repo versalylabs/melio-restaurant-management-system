@@ -82,23 +82,35 @@ export const openShift = async (req: AuthRequest, res: Response) => {
   const openingCash = Number(req.body.openingCash ?? 0);
   if (!branchId) return sendError(res, 'Select an active branch before opening a shift');
   if (!Number.isFinite(openingCash) || openingCash < 0) return sendError(res, 'Opening cash must be zero or greater');
-  const existing = await prisma.shift.findFirst({
-    where: { restaurantId: req.user!.restaurantId, branchId, userId: req.user!.id, status: 'OPEN' },
-  });
-  if (existing) return sendError(res, 'You already have an open shift', undefined, 409);
 
-  const shift = await prisma.shift.create({
-    data: {
-      restaurantId: req.user!.restaurantId,
-      branchId,
-      userId: req.user!.id,
-      createdBy: req.user!.id,
-      openingCash,
-      notes: req.body.notes || undefined,
-    },
-  });
-  await createAuditLog(req.user!.restaurantId, req.user!.id, 'OPEN', 'Shift', shift.id, `Opened shift with KES ${openingCash.toLocaleString()}`);
-  return sendResponse(res, true, 'Shift opened', { shift }, 201);
+  try {
+    const shift = await prisma.$transaction(async (tx) => {
+      const existing = await tx.shift.findFirst({
+        where: { restaurantId: req.user!.restaurantId, branchId, userId: req.user!.id, status: 'OPEN' },
+      });
+      if (existing) throw new Error('ALREADY_OPEN');
+
+      return tx.shift.create({
+        data: {
+          restaurantId: req.user!.restaurantId,
+          branchId,
+          userId: req.user!.id,
+          createdBy: req.user!.id,
+          openingCash,
+          notes: req.body.notes || undefined,
+        },
+      });
+    });
+
+    await createAuditLog(req.user!.restaurantId, req.user!.id, 'OPEN', 'Shift', shift.id, `Opened shift with KES ${openingCash.toLocaleString()}`);
+    return sendResponse(res, true, 'Shift opened', { shift }, 201);
+  } catch (err: any) {
+    if (err?.message === 'ALREADY_OPEN') {
+      return sendError(res, 'You already have an open shift', undefined, 409);
+    }
+    console.error('Open shift failed:', err);
+    return sendError(res, 'Failed to open shift', undefined, 500);
+  }
 };
 
 export const closeShift = async (req: AuthRequest, res: Response) => {

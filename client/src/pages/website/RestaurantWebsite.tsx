@@ -38,7 +38,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import GalleryLightbox, { GalleryItem } from './components/GalleryLightbox';
 import ReservationModal from './components/ReservationModal';
 import CustomerAuthModal from './components/CustomerAuthModal';
-import { Dock, GlassIcon, SpotlightCard, ShinyText, Magnet, CountUp } from '../../components/react-bits';
+import { Dock, GlassIcon, SpotlightCard, ShinyText, CountUp } from '../../components/react-bits';
 import { OptimizedImage } from '../../components/common/OptimizedImage';
 import { preloadImages } from '../../utils/imagePreloader';
 
@@ -69,31 +69,12 @@ type MenuItem = {
 const money = (value: number, currency = 'KES') =>
   new Intl.NumberFormat('en-KE', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
 
-// Supabase-backed fallback gallery. These are the existing public files in the `menu-images` bucket.
-const SUPABASE_PUBLIC_BASE = 'https://czqznpcgyhcntlpsecla.supabase.co/storage/v1/object/public/menu-images';
-const supabaseImage = (filename: string) => `${SUPABASE_PUBLIC_BASE}/${encodeURIComponent(filename)}`;
-const SUPABASE_MENU_FILENAMES: Record<string, string> = {
-  'Samosa': 'Samosa.jpg',
-  'Chicken Wings': 'Chicken Wings.jpg',
-  'Grilled Chicken': 'Grilled Chicken.jpg',
-  'Beef Steak': 'Beef Steak.jpg',
-  'Chicken Burger': 'Chicken Burger.jpg',
-  'Beef Burger': 'Beef Burger.jpg',
-  'Coke': 'Coke.jpg',
-  'Fresh Passion Juice': 'Passion Juice.jpg',
-  'Chocolate Cake': 'Chocolate Cake.jpg',
-};
-const menuImage = (item?: Pick<MenuItem, 'name' | 'image'> | null) =>
-  item?.image || (item?.name && SUPABASE_MENU_FILENAMES[item.name] ? supabaseImage(SUPABASE_MENU_FILENAMES[item.name]) : '');
+import { resolveImageUrl, getGalleryFallback } from '../../utils/imageUtils';
 
-const GALLERY_ITEMS: GalleryItem[] = [
-  { id: 'g1', title: 'Grilled Chicken', category: 'dishes', image: supabaseImage('Grilled Chicken.jpg'), description: 'Melio signature grilled chicken.' },
-  { id: 'g2', title: 'Beef Steak', category: 'dishes', image: supabaseImage('Beef Steak.jpg'), description: 'Tender beef steak served with chips and salad.' },
-  { id: 'g3', title: 'Beef Burger', category: 'dishes', image: supabaseImage('Beef Burger.jpg'), description: 'Melio gourmet beef burger.' },
-  { id: 'g4', title: 'Chicken Burger', category: 'dishes', image: supabaseImage('Chicken Burger.jpg'), description: 'Grilled chicken burger with house sauce.' },
-  { id: 'g5', title: 'Chicken Wings', category: 'dishes', image: supabaseImage('Chicken Wings.jpg'), description: 'Spicy grilled chicken wings.' },
-  { id: 'g6', title: 'Chocolate Cake', category: 'dishes', image: supabaseImage('Chocolate Cake.jpg'), description: 'Rich chocolate layer cake.' },
-];
+const menuImage = (item?: Pick<MenuItem, 'name' | 'image'> | null) =>
+  resolveImageUrl(item?.image, item?.name);
+
+const GALLERY_ITEMS: GalleryItem[] = getGalleryFallback();
 
 // Curated Testimonials
 const TESTIMONIALS = [

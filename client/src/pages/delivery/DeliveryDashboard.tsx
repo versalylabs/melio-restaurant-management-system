@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Truck,
   MapPin,
@@ -9,14 +9,10 @@ import {
   Clock,
   Search,
   RefreshCw,
-  ExternalLink,
-  ChevronRight,
   PackageCheck,
   AlertCircle,
-  DollarSign,
   User,
   ShoppingBag,
-  Compass,
 } from 'lucide-react';
 import { orderApi } from '../../services/api';
 import DeliveryMapViewer from '../../components/common/DeliveryMapViewer';
@@ -55,6 +51,8 @@ interface DeliveryOrder {
   }>;
 }
 
+import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
+
 export default function DeliveryDashboard() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<DeliveryOrder[]>([]);
@@ -70,7 +68,8 @@ export default function DeliveryDashboard() {
   const fetchDeliveries = useCallback(async (isManual = false) => {
     if (isManual) setRefreshing(true);
     try {
-      const res = await orderApi.getOrders({ limit: 100 });
+      const branchId = getActiveBranchId(user);
+      const res = await orderApi.getOrders({ limit: 100, ...(branchId ? { branchId } : {}) });
       if (res.data?.success) {
         const allOrders: DeliveryOrder[] = (res.data.data?.orders || []).map((o: any) => ({
           ...o,
@@ -97,15 +96,23 @@ export default function DeliveryDashboard() {
       setLoading(false);
       if (isManual) setRefreshing(false);
     }
-  }, [selectedOrder]);
+  }, [user, selectedOrder]);
 
   useEffect(() => {
     fetchDeliveries();
     const interval = setInterval(() => fetchDeliveries(), 20000);
-    return () => clearInterval(interval);
+    const unsub = listenForBranchChanges(() => fetchDeliveries());
+    return () => {
+      clearInterval(interval);
+      unsub();
+    };
   }, [fetchDeliveries]);
 
   const handleUpdateStatus = async (orderId: string, nextStatus: string) => {
+    if (nextStatus === 'COMPLETED' && !window.confirm('Mark this delivery as successfully completed/delivered?')) {
+      return;
+    }
+
     setUpdatingId(orderId);
     setError('');
     // Optimistic update
@@ -321,6 +328,14 @@ export default function DeliveryDashboard() {
               ? 'No deliveries match your search query.'
               : 'There are currently no delivery orders assigned in this view.'}
           </p>
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="mt-3 inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/40 hover:bg-orange-100 transition-colors"
+            >
+              Clear Search
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

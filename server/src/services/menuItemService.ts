@@ -136,22 +136,25 @@ export const createMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
     return sendError(res, 'Invalid category');
   }
 
-  if (branchIds && branchIds.length > 0) {
+  const uniqueBranchIds = Array.isArray(branchIds) ? [...new Set(branchIds.map(String).filter(Boolean))] : [];
+  const uniqueModifierGroupIds = Array.isArray(modifierGroupIds) ? [...new Set(modifierGroupIds.map(String).filter(Boolean))] : [];
+
+  if (uniqueBranchIds.length > 0) {
     const validBranches = await prisma.branch.findMany({
-      where: { id: { in: branchIds }, restaurantId },
+      where: { id: { in: uniqueBranchIds }, restaurantId },
       select: { id: true },
     });
-    if (validBranches.length !== branchIds.length) {
+    if (validBranches.length !== uniqueBranchIds.length) {
       return sendError(res, 'One or more branch IDs are invalid');
     }
   }
 
-  if (modifierGroupIds && modifierGroupIds.length > 0) {
+  if (uniqueModifierGroupIds.length > 0) {
     const validGroups = await prisma.modifierGroup.findMany({
-      where: { id: { in: modifierGroupIds }, restaurantId },
+      where: { id: { in: uniqueModifierGroupIds }, restaurantId },
       select: { id: true },
     });
-    if (validGroups.length !== modifierGroupIds.length) {
+    if (validGroups.length !== uniqueModifierGroupIds.length) {
       return sendError(res, 'One or more modifier group IDs are invalid');
     }
   }
@@ -172,10 +175,10 @@ export const createMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
       status: status || 'ACTIVE',
       displayOrder: displayOrder ?? 0,
       branchAvailabilities: {
-        create: (branchIds || []).map((branchId: string) => ({ branchId, available: true })),
+        create: uniqueBranchIds.map((branchId: string) => ({ branchId, available: true })),
       },
       modifierGroups: {
-        create: (modifierGroupIds || []).map((modifierGroupId: string) => ({ modifierGroupId })),
+        create: uniqueModifierGroupIds.map((modifierGroupId: string) => ({ modifierGroupId })),
       },
     },
     include: {
@@ -228,22 +231,25 @@ export const updateMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
     }
   }
 
-  if (branchIds && branchIds.length > 0) {
+  const uniqueBranchIds = Array.isArray(branchIds) ? [...new Set(branchIds.map(String).filter(Boolean))] : undefined;
+  const uniqueModifierGroupIds = Array.isArray(modifierGroupIds) ? [...new Set(modifierGroupIds.map(String).filter(Boolean))] : undefined;
+
+  if (uniqueBranchIds && uniqueBranchIds.length > 0) {
     const validBranches = await prisma.branch.findMany({
-      where: { id: { in: branchIds }, restaurantId },
+      where: { id: { in: uniqueBranchIds }, restaurantId },
       select: { id: true },
     });
-    if (validBranches.length !== branchIds.length) {
+    if (validBranches.length !== uniqueBranchIds.length) {
       return sendError(res, 'One or more branch IDs are invalid');
     }
   }
 
-  if (modifierGroupIds && modifierGroupIds.length > 0) {
+  if (uniqueModifierGroupIds && uniqueModifierGroupIds.length > 0) {
     const validGroups = await prisma.modifierGroup.findMany({
-      where: { id: { in: modifierGroupIds }, restaurantId },
+      where: { id: { in: uniqueModifierGroupIds }, restaurantId },
       select: { id: true },
     });
-    if (validGroups.length !== modifierGroupIds.length) {
+    if (validGroups.length !== uniqueModifierGroupIds.length) {
       return sendError(res, 'One or more modifier group IDs are invalid');
     }
   }
@@ -263,14 +269,22 @@ export const updateMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
       available,
       status,
       displayOrder,
-      branchAvailabilities: {
-        deleteMany: {},
-        create: (branchIds || []).map((branchId: string) => ({ branchId, available: true })),
-      },
-      modifierGroups: {
-        deleteMany: {},
-        create: (modifierGroupIds || []).map((modifierGroupId: string) => ({ modifierGroupId })),
-      },
+      ...(uniqueBranchIds !== undefined
+        ? {
+            branchAvailabilities: {
+              deleteMany: {},
+              create: uniqueBranchIds.map((branchId: string) => ({ branchId, available: true })),
+            },
+          }
+        : {}),
+      ...(uniqueModifierGroupIds !== undefined
+        ? {
+            modifierGroups: {
+              deleteMany: {},
+              create: uniqueModifierGroupIds.map((modifierGroupId: string) => ({ modifierGroupId })),
+            },
+          }
+        : {}),
     },
     include: {
       branchAvailabilities: { include: { branch: true } },
@@ -299,19 +313,28 @@ export const deleteMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
     return sendError(res, 'Menu item not found', undefined, 404);
   }
 
-  // Clear any optional foreign keys that might reference this menu item
-  await prisma.websiteSettings.updateMany({
-    where: { featuredMenuItemId: id },
-    data: { featuredMenuItemId: null },
-  });
+  const saleItemCount = await prisma.saleItem.count({ where: { menuItemId: id } });
 
-  await prisma.promotion.updateMany({
-    where: { menuItemId: id },
-    data: { menuItemId: null },
-  });
+  await prisma.$transaction(async (tx) => {
+    await tx.websiteSettings.updateMany({
+      where: { restaurantId, featuredMenuItemId: id },
+      data: { featuredMenuItemId: null },
+    });
 
-  // Permanently delete the menu item and its cascaded relations
-  await prisma.menuItem.delete({ where: { id } });
+    await tx.promotion.updateMany({
+      where: { restaurantId, menuItemId: id },
+      data: { menuItemId: null, active: false },
+    });
+
+    if (saleItemCount > 0) {
+      await tx.menuItem.update({
+        where: { id },
+        data: { status: 'INACTIVE', available: false },
+      });
+    } else {
+      await tx.menuItem.delete({ where: { id } });
+    }
+  });
 
   await createAuditLog(
     restaurantId,
@@ -319,10 +342,18 @@ export const deleteMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
     'DELETE',
     'MenuItem',
     id,
-    `Permanently deleted menu item ${existing.name}`
+    saleItemCount > 0
+      ? `Deactivated menu item ${existing.name} (has historical sales)`
+      : `Permanently deleted menu item ${existing.name}`
   );
 
-  return sendResponse(res, true, 'Menu item permanently deleted successfully');
+  return sendResponse(
+    res,
+    true,
+    saleItemCount > 0
+      ? 'Menu item deactivated to preserve historical sales records'
+      : 'Menu item permanently deleted successfully'
+  );
 };
 
 export const duplicateMenuItem = async (req: AuthRequest, res: ExpressResponse) => {

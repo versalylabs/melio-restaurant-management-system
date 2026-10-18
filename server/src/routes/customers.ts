@@ -79,12 +79,31 @@ router.post('/', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) => 
   try {
     const { name, phone, email, address, notes } = req.body || {};
     if (typeof name !== 'string' || !name.trim()) return sendError(res, 'Name is required');
+
+    const trimmedPhone = phone?.trim() || null;
+    const trimmedEmail = email?.trim() ? email.trim().toLowerCase() : null;
+
+    if (trimmedPhone || trimmedEmail) {
+      const duplicate = await prisma.customer.findFirst({
+        where: {
+          restaurantId: req.user!.restaurantId,
+          OR: [
+            ...(trimmedPhone ? [{ phone: trimmedPhone }] : []),
+            ...(trimmedEmail ? [{ email: trimmedEmail }] : []),
+          ],
+        },
+      });
+      if (duplicate) {
+        return sendError(res, 'A customer with this phone or email already exists in this restaurant', undefined, 409);
+      }
+    }
+
     const customer = await prisma.customer.create({
       data: {
         restaurantId: req.user!.restaurantId,
         name: name.trim(),
-        phone: phone?.trim() || null,
-        email: email?.trim() || null,
+        phone: trimmedPhone,
+        email: trimmedEmail,
         address: address?.trim() || null,
         notes: notes?.trim() || null,
       },
@@ -105,12 +124,31 @@ router.put('/:id', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) =
     if (name !== undefined && (typeof name !== 'string' || !name.trim())) return sendError(res, 'Name is required');
     if (status !== undefined && !['ACTIVE', 'INACTIVE'].includes(status)) return sendError(res, 'Invalid customer status');
 
+    const trimmedPhone = phone !== undefined ? (phone?.trim() || null) : existing.phone;
+    const trimmedEmail = email !== undefined ? (email?.trim() ? email.trim().toLowerCase() : null) : existing.email;
+
+    if (trimmedPhone || trimmedEmail) {
+      const duplicate = await prisma.customer.findFirst({
+        where: {
+          restaurantId: req.user!.restaurantId,
+          id: { not: existing.id },
+          OR: [
+            ...(trimmedPhone ? [{ phone: trimmedPhone }] : []),
+            ...(trimmedEmail ? [{ email: trimmedEmail }] : []),
+          ],
+        },
+      });
+      if (duplicate) {
+        return sendError(res, 'A customer with this phone or email already exists in this restaurant', undefined, 409);
+      }
+    }
+
     const customer = await prisma.customer.update({
       where: { id: existing.id },
       data: {
         ...(name !== undefined ? { name: name.trim() } : {}),
-        ...(phone !== undefined ? { phone: phone?.trim() || null } : {}),
-        ...(email !== undefined ? { email: email?.trim() || null } : {}),
+        phone: trimmedPhone,
+        email: trimmedEmail,
         ...(address !== undefined ? { address: address?.trim() || null } : {}),
         ...(notes !== undefined ? { notes: notes?.trim() || null } : {}),
         ...(status !== undefined ? { status } : {}),

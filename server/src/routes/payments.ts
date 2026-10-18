@@ -12,22 +12,28 @@ const REFUND_ROLES = ['OWNER', 'ADMIN', 'MANAGER'];
 const METHODS = ['CASH', 'CARD', 'MOBILE_MONEY'];
 
 async function syncPaymentState(tx: any, saleId: string) {
-  const sale = await tx.sale.findUnique({ where: { id: saleId } });
+  const sale = await tx.sale.findUnique({ where: { id: saleId }, include: { onlineOrder: true } });
   if (!sale) throw new Error('ORDER_NOT_FOUND');
   const payments = await tx.payment.findMany({ where: { saleId, status: 'COMPLETED' } });
   const paid = payments.reduce((sum: number, p: any) => sum + p.amount, 0);
   const paymentStatus = paid <= 0 ? 'UNPAID' : paid + 0.005 < sale.totalAmount ? 'PARTIAL' : 'PAID';
   await tx.sale.update({ where: { id: saleId }, data: { amountPaid: paid, paymentStatus } });
+  if (sale.onlineOrder) {
+    const newOnlineState = paymentStatus === 'PAID' ? 'PAID' : paymentStatus === 'PARTIAL' ? 'PARTIAL' : (sale.onlineOrder.paymentMethod === 'CASH' ? 'PAY_AT_PICKUP' : 'PENDING');
+    await tx.onlineOrder.update({ where: { id: sale.onlineOrder.id }, data: { paymentState: newOnlineState } });
+  }
   return { paid, paymentStatus, balance: Math.max(0, sale.totalAmount - paid) };
 }
 
 async function ensureReceipt(tx: any, sale: any) {
   const existing = await tx.receipt.findUnique({ where: { saleId: sale.id } });
   if (existing) return existing;
-  const counter = await tx.receiptCounter.findUnique({ where: { restaurantId_branchId: { restaurantId: sale.restaurantId, branchId: sale.branchId } } });
-  const next = (counter?.lastNumber || 0) + 1;
-  if (counter) await tx.receiptCounter.update({ where: { restaurantId_branchId: { restaurantId: sale.restaurantId, branchId: sale.branchId } }, data: { lastNumber: next } });
-  else await tx.receiptCounter.create({ data: { restaurantId: sale.restaurantId, branchId: sale.branchId, lastNumber: next } });
+  const counter = await tx.receiptCounter.upsert({
+    where: { restaurantId_branchId: { restaurantId: sale.restaurantId, branchId: sale.branchId } },
+    create: { restaurantId: sale.restaurantId, branchId: sale.branchId, lastNumber: 1 },
+    update: { lastNumber: { increment: 1 } },
+  });
+  const next = counter.lastNumber;
   return tx.receipt.create({ data: { restaurantId: sale.restaurantId, branchId: sale.branchId, saleId: sale.id, receiptNumber: `R-${String(next).padStart(6, '0')}` } });
 }
 

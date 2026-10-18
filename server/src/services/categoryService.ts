@@ -63,11 +63,27 @@ export const createCategory = async (req: AuthRequest, res: ExpressResponse) => 
   const { name, description, displayOrder, status } = req.body;
   const restaurantId = req.user!.restaurantId;
 
+  const trimmedName = name ? String(name).trim() : '';
+  if (!trimmedName) {
+    return sendError(res, 'Category name is required');
+  }
+
+  const existingCategories = await prisma.menuCategory.findMany({
+    where: {
+      restaurantId,
+      status: { not: 'INACTIVE' },
+    },
+    select: { id: true, name: true },
+  });
+  if (existingCategories.some((c) => c.name.toLowerCase() === trimmedName.toLowerCase())) {
+    return sendError(res, 'A category with this name already exists', undefined, 409);
+  }
+
   const category = await prisma.menuCategory.create({
     data: {
       restaurantId,
-      name,
-      description,
+      name: trimmedName,
+      description: description ? String(description).trim() : null,
       displayOrder: displayOrder ?? 0,
       status: status || 'ACTIVE',
     },
@@ -95,9 +111,34 @@ export const updateCategory = async (req: AuthRequest, res: ExpressResponse) => 
     return sendError(res, 'Category not found', undefined, 404);
   }
 
+  let trimmedName = existing.name;
+  if (name !== undefined) {
+    trimmedName = String(name).trim();
+    if (!trimmedName) {
+      return sendError(res, 'Category name cannot be empty');
+    }
+
+    const existingCategories = await prisma.menuCategory.findMany({
+      where: {
+        restaurantId,
+        id: { not: id },
+        status: { not: 'INACTIVE' },
+      },
+      select: { id: true, name: true },
+    });
+    if (existingCategories.some((c) => c.name.toLowerCase() === trimmedName.toLowerCase())) {
+      return sendError(res, 'A category with this name already exists', undefined, 409);
+    }
+  }
+
   const category = await prisma.menuCategory.update({
     where: { id },
-    data: { name, description, displayOrder, status },
+    data: {
+      name: trimmedName,
+      description: description !== undefined ? (description ? String(description).trim() : null) : undefined,
+      displayOrder: displayOrder !== undefined ? displayOrder : undefined,
+      status: status !== undefined ? status : undefined,
+    },
   });
 
   await createAuditLog(
@@ -119,6 +160,13 @@ export const deleteCategory = async (req: AuthRequest, res: ExpressResponse) => 
   const existing = await prisma.menuCategory.findFirst({ where: { id, restaurantId } });
   if (!existing) {
     return sendError(res, 'Category not found', undefined, 404);
+  }
+
+  const activeItemsCount = await prisma.menuItem.count({
+    where: { categoryId: id, status: { not: 'INACTIVE' } },
+  });
+  if (activeItemsCount > 0) {
+    return sendError(res, `Cannot deactivate category with ${activeItemsCount} active menu item(s). Please reassign or deactivate the items first.`, undefined, 400);
   }
 
   await prisma.menuCategory.update({ where: { id }, data: { status: 'INACTIVE' } });

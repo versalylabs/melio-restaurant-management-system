@@ -27,9 +27,19 @@ export default function Orders() {
   const [tendered, setTendered] = useState('');
   const [paymentBusy, setPaymentBusy] = useState(false);
 
+  const [actingId, setActingId] = useState<string | null>(null);
+  const [success, setSuccess] = useState('');
+  const [paymentError, setPaymentError] = useState('');
+
+  const showSuccess = (msg: string) => {
+    setSuccess(msg);
+    setTimeout(() => setSuccess(''), 4000);
+  };
+
   const fetchOrders = async (isManualRefresh = false) => {
     if (isManualRefresh) setRefreshing(true);
     try {
+      setError('');
       const activeBranchId = getActiveBranchId(user);
       const params: any = { page: page.toString(), limit: '20', ...(activeBranchId ? { branchId: activeBranchId } : {}) };
       if (search) params.search = search;
@@ -48,42 +58,70 @@ export default function Orders() {
     }
   };
 
-
   const openPayment = (order: Sale) => {
+    setError('');
+    setPaymentError('');
     setPaymentOrder(order);
-    setPaymentAmount(Math.max(0, order.totalAmount - (order.amountPaid || 0)).toFixed(2));
-    setTendered(Math.max(0, order.totalAmount - (order.amountPaid || 0)).toFixed(2));
+    const balance = Math.max(0, order.totalAmount - (order.amountPaid || 0));
+    setPaymentAmount(balance.toFixed(2));
+    setTendered(balance.toFixed(2));
     setPaymentMethod('CASH');
   };
 
   const handlePayment = async () => {
     if (!paymentOrder) return;
+    setPaymentError('');
+    const amt = Number(paymentAmount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setPaymentError('Payment amount must be greater than zero');
+      return;
+    }
+    const tend = Number(tendered);
+    if (paymentMethod === 'CASH' && tend < amt) {
+      setPaymentError('Amount tendered cannot be less than payment amount');
+      return;
+    }
+
     try {
       setPaymentBusy(true);
-      const response = await paymentApi.recordPayment(paymentOrder.id, { method: paymentMethod, amount: Number(paymentAmount), amountTendered: Number(tendered) });
+      const response = await paymentApi.recordPayment(paymentOrder.id, {
+        method: paymentMethod,
+        amount: amt,
+        amountTendered: tend,
+      });
       const state = response.data?.data;
       if (state?.paymentStatus) {
         setOrders((current) => current.map((order) => order.id === paymentOrder.id ? { ...order, paymentStatus: state.paymentStatus, amountPaid: state.paid } : order));
       }
       setPaymentOrder(null);
+      showSuccess(`Payment of KES ${amt.toLocaleString()} recorded for Order ${paymentOrder.orderNumber}`);
       await fetchOrders();
-    } catch (err: any) { setError(err.response?.data?.message || 'Failed to record payment'); }
-    finally { setPaymentBusy(false); }
+    } catch (err: any) {
+      setPaymentError(err.response?.data?.message || 'Failed to record payment');
+    } finally {
+      setPaymentBusy(false);
+    }
   };
 
   const handleReceipt = async (order: Sale) => {
+    setError('');
+    setActingId(order.id);
     try {
       const response = await paymentApi.getReceipt(order.id);
       const data = response.data.data;
       const sale = data.sale;
       const receipt = data.receipt;
-      const rows = sale.items.map((i: any) => `<tr><td>${i.quantity}x ${i.itemNameSnapshot}</td><td style="text-align:right">KES ${(i.subtotal || 0).toLocaleString()}</td></tr>`).join('');
-      const payments = sale.payments.map((p: any) => `<div>${p.method}: KES ${(p.amount || 0).toLocaleString()}</div>`).join('');
+      const rows = (sale.items || []).map((i: any) => `<tr><td>${i.quantity}x ${i.itemNameSnapshot}</td><td style="text-align:right">KES ${(i.subtotal || 0).toLocaleString()}</td></tr>`).join('');
+      const payments = (sale.payments || []).map((p: any) => `<div>${p.method}: KES ${(p.amount || 0).toLocaleString()}</div>`).join('');
       const w = window.open('', '_blank', 'width=420,height=700');
       if (!w) return;
       w.document.write(`<html><head><title>${receipt.receiptNumber}</title><style>body{font-family:Arial;padding:24px;max-width:380px;margin:auto}table{width:100%;border-collapse:collapse}td{padding:6px 0}.total{font-size:18px;font-weight:700;border-top:1px solid #ccc;padding-top:10px}</style></head><body><h2 style="text-align:center">${sale.branch.name}</h2><p style="text-align:center">Receipt ${receipt.receiptNumber}<br>Order ${sale.orderNumber}<br>${new Date(receipt.issuedAt).toLocaleString()}</p><table>${rows}</table><p class="total">Total: KES ${(sale.totalAmount || 0).toLocaleString()}</p><p>${payments}</p><p style="text-align:center">Thank you for dining with us.</p><script>window.print();</script></body></html>`);
       w.document.close();
-    } catch (err: any) { setError(err.response?.data?.message || 'Failed to generate receipt'); }
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to generate receipt');
+    } finally {
+      setActingId(null);
+    }
   };
 
   useEffect(() => {
@@ -92,6 +130,8 @@ export default function Orders() {
   }, [page, search, filterStatus, filterType, user?.id]);
 
   const handleViewOrder = async (order: Sale) => {
+    setError('');
+    setActingId(order.id);
     try {
       const response = await orderApi.getOrder(order.id);
       if (response.data.success) {
@@ -100,17 +140,42 @@ export default function Orders() {
       }
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load order details');
+    } finally {
+      setActingId(null);
+    }
+  };
+
+  const handleStatusChange = async (order: Sale, newStatus: string) => {
+    setError('');
+    setActingId(order.id);
+    try {
+      if (newStatus === 'SUBMITTED') {
+        await orderApi.submitOrder(order.id);
+      } else {
+        await orderApi.updateOrderStatus(order.id, newStatus);
+      }
+      showSuccess(`Order ${order.orderNumber} updated to ${newStatus}`);
+      await fetchOrders();
+    } catch (err: any) {
+      setError(err.response?.data?.message || `Failed to update order status to ${newStatus}`);
+    } finally {
+      setActingId(null);
     }
   };
 
   const handleCancelOrder = async (order: Sale) => {
     const reason = prompt('Enter cancellation reason:');
     if (!reason) return;
+    setError('');
+    setActingId(order.id);
     try {
       await orderApi.cancelOrder(order.id, { cancelReason: reason });
-      fetchOrders();
+      showSuccess(`Order ${order.orderNumber} cancelled`);
+      await fetchOrders();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to cancel order');
+    } finally {
+      setActingId(null);
     }
   };
 
@@ -138,6 +203,13 @@ export default function Orders() {
           {refreshing ? 'Refreshing...' : 'Refresh Orders'}
         </button>
       </div>
+
+      {success && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 px-4 py-3 rounded-xl text-sm font-medium shadow-sm flex items-center justify-between">
+          <span>{success}</span>
+          <button onClick={() => setSuccess('')} className="text-emerald-600 hover:text-emerald-800 text-xs font-semibold">Dismiss</button>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm">
@@ -199,59 +271,117 @@ export default function Orders() {
               </tr>
             </thead>
             <tbody className="bg-white dark:bg-[#111116] divide-y divide-gray-200 dark:divide-gray-700">
-              {orders.map((order) => (
-                <tr key={order.id} className="hover:bg-[#faf9f7] dark:hover:bg-[#1a1a20]/30">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div>
-                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{order.orderNumber}</div>
-                      <div className="text-xs text-gray-500 dark:text-gray-400">{new Date(order.createdAt).toLocaleString()}</div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{order.orderType}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{order.tableNumber || '-'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{order.branchName}</td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <Badge variant={order.status === 'COMPLETED' ? 'success' : order.status === 'CANCELLED' ? 'danger' : 'warning'}>
-                      {order.status}
-                    </Badge>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <Badge variant={order.paymentStatus === 'PAID' ? 'success' : order.paymentStatus === 'PARTIAL' ? 'warning' : 'danger'}>
-                      {order.paymentStatus || 'UNPAID'}
-                    </Badge>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
-                    KES {(order.totalAmount ?? 0).toLocaleString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={() => handleViewOrder(order)}
-                      className="text-orange-600 hover:text-orange-900 dark:text-orange-400 dark:hover:text-orange-300 mr-3"
-                    >
-                      <Eye className="w-4 h-4" />
-                    </button>
-                    {order.paymentStatus !== 'PAID' && order.status !== 'CANCELLED' && (
-                      <button onClick={() => openPayment(order)} className="text-green-600 hover:text-green-900 dark:text-green-400 mr-3" title="Record payment">
-                        <CreditCard className="w-4 h-4" />
-                      </button>
-                    )}
-                    {order.paymentStatus === 'PAID' && (
-                      <button onClick={() => handleReceipt(order)} className="text-gray-600 hover:text-gray-900 dark:text-gray-300 mr-3" title="Print receipt">
-                        <Printer className="w-4 h-4" />
-                      </button>
-                    )}
-                    {['DRAFT', 'HELD', 'SUBMITTED'].includes(order.status) && (
-                      <button onClick={() => handleCancelOrder(order)} className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {orders.map((order) => {
+                const isActing = actingId === order.id;
+                return (
+                  <tr key={order.id} className="hover:bg-[#faf9f7] dark:hover:bg-[#1a1a20]/30">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{order.orderNumber}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">{new Date(order.createdAt).toLocaleString()}</div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{order.orderType}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{order.tableNumber || '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{order.branchName}</td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <Badge variant={order.status === 'COMPLETED' ? 'success' : order.status === 'CANCELLED' ? 'danger' : 'warning'}>
+                        {order.status}
+                      </Badge>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <Badge variant={order.paymentStatus === 'PAID' ? 'success' : order.paymentStatus === 'PARTIAL' ? 'warning' : 'danger'}>
+                        {order.paymentStatus || 'UNPAID'}
+                      </Badge>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">
+                      KES {(order.totalAmount ?? 0).toLocaleString()}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                      <div className="flex items-center justify-end gap-2">
+                        {['DRAFT', 'HELD'].includes(order.status) && (
+                          <button
+                            onClick={() => handleStatusChange(order, 'SUBMITTED')}
+                            disabled={isActing}
+                            className="px-2 py-1 text-xs rounded-lg font-medium bg-orange-100 text-orange-700 dark:bg-orange-950/60 dark:text-orange-300 hover:bg-orange-200 transition-colors disabled:opacity-50"
+                            title="Submit to kitchen"
+                          >
+                            Submit
+                          </button>
+                        )}
+                        {['READY', 'SERVED'].includes(order.status) && (
+                          <button
+                            onClick={() => handleStatusChange(order, 'COMPLETED')}
+                            disabled={isActing}
+                            className="px-2 py-1 text-xs rounded-lg font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 hover:bg-emerald-200 transition-colors disabled:opacity-50"
+                            title="Complete order"
+                          >
+                            Complete
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleViewOrder(order)}
+                          disabled={isActing}
+                          className="text-orange-600 hover:text-orange-900 dark:text-orange-400 dark:hover:text-orange-300 disabled:opacity-50"
+                          title="View order details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        {order.paymentStatus !== 'PAID' && order.status !== 'CANCELLED' && (
+                          <button
+                            onClick={() => openPayment(order)}
+                            disabled={isActing}
+                            className="text-green-600 hover:text-green-900 dark:text-green-400 disabled:opacity-50"
+                            title="Record payment"
+                          >
+                            <CreditCard className="w-4 h-4" />
+                          </button>
+                        )}
+                        {order.paymentStatus === 'PAID' && (
+                          <button
+                            onClick={() => handleReceipt(order)}
+                            disabled={isActing}
+                            className="text-gray-600 hover:text-gray-900 dark:text-gray-300 disabled:opacity-50"
+                            title="Print receipt"
+                          >
+                            <Printer className="w-4 h-4" />
+                          </button>
+                        )}
+                        {['DRAFT', 'HELD', 'SUBMITTED'].includes(order.status) && (
+                          <button
+                            onClick={() => handleCancelOrder(order)}
+                            disabled={isActing}
+                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
+                            title="Cancel order"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
               {orders.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-6 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-                    No orders found
+                  <td colSpan={8} className="px-6 py-12 text-center">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <div className="w-10 h-10 rounded-full bg-orange-100 dark:bg-orange-950/40 flex items-center justify-center text-orange-600 dark:text-orange-400">
+                        <RefreshCw className="w-5 h-5" />
+                      </div>
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">No orders found</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {search || filterStatus || filterType ? 'Try adjusting your search filters' : 'New orders will appear here in real-time'}
+                      </p>
+                      {(search || filterStatus || filterType) && (
+                        <button
+                          onClick={() => { setSearch(''); setFilterStatus(''); setFilterType(''); }}
+                          className="mt-2 text-xs font-medium text-orange-600 hover:text-orange-700 underline"
+                        >
+                          Clear Filters
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               )}
@@ -407,8 +537,13 @@ export default function Orders() {
       )}
 
       {paymentOrder && (
-        <Modal title={`Payment — ${paymentOrder.orderNumber}`} onClose={() => setPaymentOrder(null)}>
+        <Modal title={`Payment — ${paymentOrder.orderNumber}`} onClose={() => { setPaymentOrder(null); setPaymentError(''); }}>
           <div className="space-y-5">
+            {paymentError && (
+              <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-3 py-2 rounded-lg text-xs">
+                {paymentError}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <div><p className="text-xs text-gray-500 dark:text-gray-400">ORDER TOTAL</p><p className="text-lg font-semibold">KES {paymentOrder.totalAmount.toLocaleString()}</p></div>
               <div><p className="text-xs text-gray-500 dark:text-gray-400">REMAINING</p><p className="text-lg font-semibold">KES {Math.max(0, paymentOrder.totalAmount - (paymentOrder.amountPaid || 0)).toLocaleString()}</p></div>

@@ -52,8 +52,11 @@ export default function KitchenDisplay() {
 
       if (ticketsRes.status === 'fulfilled' && ticketsRes.value.data?.success) {
         setTickets(ticketsRes.value.data.data?.tickets || []);
+        setError('');
       } else if (ticketsRes.status === 'rejected') {
+        const msg = (ticketsRes.reason as any)?.response?.data?.message || 'Failed to load kitchen tickets';
         console.error('Failed to load tickets', ticketsRes.reason);
+        setError(msg);
       }
 
       if (stationsRes.status === 'fulfilled' && stationsRes.value.data?.success) {
@@ -68,8 +71,6 @@ export default function KitchenDisplay() {
         const match = list.find((b: any) => b.id === branchId);
         setBranchName(match?.name || user?.branchName || 'Active branch');
       }
-
-      setError('');
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to load kitchen data');
     } finally {
@@ -238,7 +239,12 @@ export default function KitchenDisplay() {
         const list = byStatus(col.key);
         return <div key={col.key} className="flex-1 min-w-[300px]"><div className="flex items-center justify-between mb-4"><h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{col.title}</h2><Badge variant={col.variant}>{list.length}</Badge></div><div className="space-y-4">
           {list.map(ticket => <TicketCard key={ticket.id} ticket={ticket} selectedStation={selectedStation} onAction={() => col.action(ticket)} onView={() => { setSelectedTicket(ticket); setShowDetailModal(true); }} onPrint={() => printTicket(ticket)} updating={updating === ticket.id} />)}
-          {!list.length && <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">No {col.title.toLowerCase()} orders</p>}
+          {!list.length && (
+            <div className="text-center py-12 px-4 rounded-xl border border-dashed border-gray-200 dark:border-gray-800 bg-white/40 dark:bg-[#111116]/40">
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400">No {col.title.toLowerCase()} orders</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Orders in this state will appear here</p>
+            </div>
+          )}
         </div></div>;
       })}
     </div></div>
@@ -247,7 +253,7 @@ export default function KitchenDisplay() {
       <div className="space-y-5">
         <div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{selectedTicket.orderNumber}</h3><p className="text-sm text-gray-500 dark:text-gray-400">{selectedTicket.orderType}{selectedTicket.tableNumber ? ` • Table ${selectedTicket.tableNumber}` : ''}</p></div><div className="flex gap-2"><Badge variant={selectedTicket.priority === 'URGENT' ? 'danger' : selectedTicket.priority === 'HIGH' ? 'warning' : 'default'}>{selectedTicket.priority}</Badge><Badge variant={selectedTicket.status === 'READY' || selectedTicket.status === 'SERVED' ? 'success' : selectedTicket.status === 'PREPARING' ? 'warning' : 'default'}>{selectedTicket.status}</Badge></div></div>
         <div className="grid grid-cols-3 gap-3"><div><p className="text-xs text-gray-500 uppercase">Received</p><p className="text-sm font-medium">{new Date(selectedTicket.receivedAt).toLocaleTimeString()}</p></div><div><p className="text-xs text-gray-500 uppercase">Prep time</p><p className="text-sm font-medium">{formatDuration(selectedTicket.startedAt, selectedTicket.readyAt || selectedTicket.completedAt)}</p></div><div><p className="text-xs text-gray-500 uppercase">Elapsed</p><p className={`text-sm font-medium ${isLate(selectedTicket.receivedAt) ? 'text-red-600' : ''}`}>{formatDuration(selectedTicket.receivedAt)} {isLate(selectedTicket.receivedAt) && <AlertTriangle className="w-4 h-4 inline" />}</p></div></div>
-        <div className="flex items-center gap-3"><label className="text-sm font-medium text-gray-700 dark:text-gray-300">Priority</label><select value={selectedTicket.priority} onChange={e => updateTicket(selectedTicket, selectedTicket.status, { priority: e.target.value })} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111116] dark:text-gray-100"><option value="LOW">Low</option><option value="NORMAL">Normal</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></select><Button variant="secondary" size="sm" onClick={() => printTicket(selectedTicket)}><Printer className="w-4 h-4 mr-1"/>Print Ticket</Button></div>
+        <div className="flex items-center gap-3"><label className="text-sm font-medium text-gray-700 dark:text-gray-300">Priority</label><select value={selectedTicket.priority} onChange={e => updateTicket(selectedTicket, selectedTicket.status, { priority: e.target.value })} disabled={updating === selectedTicket.id} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111116] dark:text-gray-100 disabled:opacity-50"><option value="LOW">Low</option><option value="NORMAL">Normal</option><option value="HIGH">High</option><option value="URGENT">Urgent</option></select><Button variant="secondary" size="sm" onClick={() => printTicket(selectedTicket)} disabled={updating === selectedTicket.id}><Printer className="w-4 h-4 mr-1"/>Print Ticket</Button></div>
         {selectedTicket.orderNotes && <div className="rounded-md bg-[#faf9f7] dark:bg-[#111116]/70 p-3"><p className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Order Notes</p><p className="text-sm mt-1 text-gray-700 dark:text-gray-300">{selectedTicket.orderNotes}</p></div>}
         <div><h4 className="text-sm font-medium mb-3 text-gray-900 dark:text-gray-100">Preparation by station</h4><div className="space-y-3">{selectedTicket.items.map(item => {
           const belongs = !selectedStation || (item.stationIds || []).includes(selectedStation) || (selectedTicket.stationIds || []).includes(selectedStation);

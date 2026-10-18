@@ -134,8 +134,20 @@ export default function Reservations() {
     };
   }, [subscribe]);
 
+  const [saving, setSaving] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [success, setSuccess] = useState('');
+  const [modalError, setModalError] = useState('');
+
+  const toLocalInput = (d: string | Date) => {
+    const dateObj = new Date(d);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${dateObj.getFullYear()}-${pad(dateObj.getMonth() + 1)}-${pad(dateObj.getDate())}T${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}`;
+  };
+
   const openNew = () => {
     setEditing(null);
+    setModalError('');
     setForm({
       customerId: '',
       tableId: '',
@@ -154,9 +166,10 @@ export default function Reservations() {
 
   const openEdit = (r: any) => {
     setEditing(r);
+    setModalError('');
     setForm({
       ...r,
-      startAt: new Date(r.startAt).toISOString().slice(0, 16),
+      startAt: toLocalInput(r.startAt),
       durationMinutes: Math.round((new Date(r.endAt).getTime() - new Date(r.startAt).getTime()) / 60000),
       branchId: r.branchId
     });
@@ -165,6 +178,8 @@ export default function Reservations() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalError('');
+    setSaving(true);
     try {
       const payload = {
         ...form,
@@ -175,18 +190,32 @@ export default function Reservations() {
       if (editing) await reservationApi.updateReservation(editing.id, payload);
       else await reservationApi.createReservation(payload);
       setShowModal(false);
+      setSuccess(editing ? 'Reservation updated successfully' : 'Reservation created successfully');
+      setTimeout(() => setSuccess(''), 4000);
       load();
     } catch (e: any) {
-      setError(e.response?.data?.message || 'Failed to save reservation');
+      setModalError(e.response?.data?.message || 'Failed to save reservation');
+    } finally {
+      setSaving(false);
     }
   };
 
   const setStatusFor = async (id: string, next: string) => {
+    if (['CANCELLED', 'NO_SHOW'].includes(next)) {
+      const label = next === 'NO_SHOW' ? 'No Show' : 'Cancelled';
+      if (!window.confirm(`Mark this reservation as ${label}?`)) return;
+    }
+    setUpdatingId(id);
+    setError('');
     try {
       await reservationApi.updateStatus(id, { status: next });
+      setSuccess(`Reservation marked as ${next.replace('_', ' ')}`);
+      setTimeout(() => setSuccess(''), 4000);
       load();
     } catch (e: any) {
       setError(e.response?.data?.message || 'Failed to update reservation status');
+    } finally {
+      setUpdatingId(null);
     }
   };
 
@@ -292,6 +321,12 @@ export default function Reservations() {
           <div className="mt-1 text-xs text-green-500/80">Active dining tables</div>
         </div>
       </div>
+
+      {success && (
+        <div className="bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 px-4 py-3 rounded-xl text-sm font-medium">
+          {success}
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-xl text-sm">
@@ -529,26 +564,32 @@ export default function Reservations() {
                   <td className="py-4 pr-4 text-right">
                     <div className="flex justify-end items-center gap-1.5 flex-wrap">
                       {r.status === 'PENDING' && (
-                        <Button size="sm" onClick={() => setStatusFor(r.id, 'CONFIRMED')} className="gap-1">
-                          <CheckCircle2 size={13} /> Confirm
+                        <Button size="sm" disabled={updatingId === r.id} onClick={() => setStatusFor(r.id, 'CONFIRMED')} className="gap-1">
+                          <CheckCircle2 size={13} /> {updatingId === r.id ? 'Updating...' : 'Confirm'}
                         </Button>
                       )}
 
                       {r.status === 'CONFIRMED' && (
-                        <Button size="sm" onClick={() => setStatusFor(r.id, 'SEATED')} className="gap-1 bg-green-600 hover:bg-green-700">
-                          <UserCheck size={13} /> Seat Guest
+                        <Button size="sm" disabled={updatingId === r.id} onClick={() => setStatusFor(r.id, 'SEATED')} className="gap-1 bg-green-600 hover:bg-green-700">
+                          <UserCheck size={13} /> {updatingId === r.id ? 'Updating...' : 'Seat Guest'}
                         </Button>
                       )}
 
                       {r.status === 'SEATED' && (
-                        <Button size="sm" onClick={() => setStatusFor(r.id, 'COMPLETED')} variant="secondary">
-                          Complete
+                        <Button size="sm" disabled={updatingId === r.id} onClick={() => setStatusFor(r.id, 'COMPLETED')} variant="secondary">
+                          {updatingId === r.id ? 'Updating...' : 'Complete'}
                         </Button>
                       )}
 
                       {['PENDING', 'CONFIRMED'].includes(r.status) && (
-                        <Button size="sm" variant="secondary" onClick={() => setStatusFor(r.id, 'CANCELLED')} className="text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40">
+                        <Button size="sm" disabled={updatingId === r.id} variant="secondary" onClick={() => setStatusFor(r.id, 'CANCELLED')} className="text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40">
                           Cancel
+                        </Button>
+                      )}
+
+                      {r.status === 'CONFIRMED' && (
+                        <Button size="sm" disabled={updatingId === r.id} variant="secondary" onClick={() => setStatusFor(r.id, 'NO_SHOW')} className="text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40">
+                          No Show
                         </Button>
                       )}
 
@@ -607,6 +648,11 @@ export default function Reservations() {
       {showModal && (
         <Modal title={editing ? 'Edit Reservation' : 'New Table Booking'} onClose={() => setShowModal(false)}>
           <form onSubmit={submit} className="space-y-4">
+            {modalError && (
+              <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-500 font-semibold">
+                {modalError}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <Input
                 id="customerName"
@@ -746,7 +792,9 @@ export default function Reservations() {
               <Button type="button" variant="secondary" onClick={() => setShowModal(false)}>
                 Cancel
               </Button>
-              <Button type="submit">{editing ? 'Save Changes' : 'Create Reservation'}</Button>
+              <Button type="submit" disabled={saving}>
+                {saving ? 'Saving...' : editing ? 'Save Changes' : 'Create Reservation'}
+              </Button>
             </div>
           </form>
         </Modal>

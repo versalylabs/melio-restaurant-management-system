@@ -292,7 +292,11 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     0
   );
   if (promotionId) {
-    promotion = await validatePromotion(promotionId, restaurantId, branchId, customerId, baseSubtotal);
+    try {
+      promotion = await validatePromotion(promotionId, restaurantId, branchId, customerId, baseSubtotal);
+    } catch (promoErr: any) {
+      return sendError(res, promoErr.message || 'Invalid promotion', undefined, 400);
+    }
   }
   const role = await prisma.role.findUnique({ where: { id: req.user!.roleId }, select: { maxDiscountPercent: true, maxDiscountAmount: true } });
   if (!promotion && Number(discountAmount || 0) > 0) {
@@ -314,25 +318,13 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
   const totals = await calculateOrderTotals(calculationInput);
 
   const order = await prisma.$transaction(async (tx) => {
-    const counter = await tx.orderCounter.findUnique({
+    const counter = await tx.orderCounter.upsert({
       where: { restaurantId_branchId: { restaurantId, branchId } },
+      create: { restaurantId, branchId, lastNumber: 1 },
+      update: { lastNumber: { increment: 1 } },
     });
 
-    let nextNumber: number;
-    if (counter) {
-      nextNumber = counter.lastNumber + 1;
-      await tx.orderCounter.update({
-        where: { restaurantId_branchId: { restaurantId, branchId } },
-        data: { lastNumber: nextNumber },
-      });
-    } else {
-      nextNumber = 1;
-      await tx.orderCounter.create({
-        data: { restaurantId, branchId, lastNumber: nextNumber },
-      });
-    }
-
-    const orderNumber = `#${nextNumber}`;
+    const orderNumber = `#${counter.lastNumber}`;
 
     const newOrder = await tx.sale.create({
       data: {
@@ -448,7 +440,18 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
 
   let updateData: any = {};
   if (notes !== undefined) updateData.notes = notes ? String(notes).trim() : null;
-  if (tableId !== undefined) updateData.tableId = tableId;
+  if (tableId !== undefined) {
+    if (tableId) {
+      const table = await prisma.table.findFirst({
+        where: { id: tableId, branchId: existing.branchId, restaurantId, status: { not: 'INACTIVE' } },
+      });
+      if (!table) return sendError(res, 'Invalid table for this branch');
+      if (['SUBMITTED', 'PREPARING', 'READY', 'SERVED'].includes(existing.status) && table.status === 'OUT_OF_SERVICE') {
+        return sendError(res, 'Cannot assign order to an out-of-service table');
+      }
+    }
+    updateData.tableId = tableId || null;
+  }
   if (orderType !== undefined) updateData.orderType = orderType;
 
   if (customerId !== undefined) {
@@ -528,7 +531,11 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
       0
     );
     if (effectivePromotionId) {
-      promotion = await validatePromotion(effectivePromotionId, restaurantId, existing.branchId, effectiveCustomerId, baseSubtotal);
+      try {
+        promotion = await validatePromotion(effectivePromotionId, restaurantId, existing.branchId, effectiveCustomerId, baseSubtotal);
+      } catch (promoErr: any) {
+        return sendError(res, promoErr.message || 'Invalid promotion', undefined, 400);
+      }
     }
     const role = await prisma.role.findUnique({ where: { id: req.user!.roleId }, select: { maxDiscountPercent: true, maxDiscountAmount: true } });
     const requestedDiscount = discountAmount !== undefined ? Number(discountAmount || 0) : Number(existing.discountAmount || 0);
@@ -664,17 +671,33 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
   const order = await prisma.$transaction(async (tx) => {
     const updateData: any = { status, updatedAt: new Date() };
 
+    if (status === 'SUBMITTED' && existing.tableId) {
+      await tx.table.update({
+        where: { id: existing.tableId },
+        data: { status: 'OCCUPIED' },
+      });
+    }
+
     if (status === 'CANCELLED') {
       updateData.cancelledAt = new Date();
       updateData.cancelReason = req.body.cancelReason || null;
       updateData.cancelledBy = userId;
       if (existing.tableId) {
-        const table = await tx.table.findUnique({ where: { id: existing.tableId } });
-        if (table && table.status === 'OCCUPIED') {
-          await tx.table.update({
-            where: { id: existing.tableId },
-            data: { status: 'AVAILABLE' },
-          });
+        const remainingActive = await tx.sale.count({
+          where: {
+            tableId: existing.tableId,
+            id: { not: id },
+            status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] },
+          },
+        });
+        if (remainingActive === 0) {
+          const table = await tx.table.findUnique({ where: { id: existing.tableId } });
+          if (table && table.status === 'OCCUPIED') {
+            await tx.table.update({
+              where: { id: existing.tableId },
+              data: { status: 'AVAILABLE' },
+            });
+          }
         }
       }
     }
@@ -783,12 +806,21 @@ export const cancelOrder = async (req: AuthRequest, res: ExpressResponse) => {
     });
 
     if (existing.tableId) {
-      const table = await tx.table.findUnique({ where: { id: existing.tableId } });
-      if (table && table.status === 'OCCUPIED') {
-        await tx.table.update({
-          where: { id: existing.tableId },
-          data: { status: 'AVAILABLE' },
-        });
+      const remainingActive = await tx.sale.count({
+        where: {
+          tableId: existing.tableId,
+          id: { not: id },
+          status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] },
+        },
+      });
+      if (remainingActive === 0) {
+        const table = await tx.table.findUnique({ where: { id: existing.tableId } });
+        if (table && table.status === 'OCCUPIED') {
+          await tx.table.update({
+            where: { id: existing.tableId },
+            data: { status: 'AVAILABLE' },
+          });
+        }
       }
     }
 

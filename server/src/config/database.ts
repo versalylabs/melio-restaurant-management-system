@@ -1,13 +1,42 @@
 import { PrismaClient } from '@prisma/client';
 
+import path from 'path';
+import fs from 'fs';
+
 /**
- * Normalizes connection string for Supabase / Serverless PgBouncer pooler.
- * - Switches port 5432 (session mode) to 6543 (transaction mode) when using Supabase poolers.
- * - Appends pgbouncer=true and connection_limit=1 to prevent EMAXCONNSESSION pool exhaustion in serverless lambdas.
+ * Normalizes connection string for Supabase / Serverless PgBouncer pooler or SQLite local path.
+ * - For SQLite: resolves relative file path to an absolute path so it works regardless of process.cwd().
+ * - For Postgres: switches port 5432 to 6543 when using Supabase poolers and configures pgbouncer.
  */
 function getOptimizedDatabaseUrl(): string | undefined {
   const url = process.env.DATABASE_URL;
   if (!url) return undefined;
+
+  // Handle SQLite file URLs
+  if (url.startsWith('file:')) {
+    const rawPath = url.replace(/^file:/, '');
+    if (path.isAbsolute(rawPath) && fs.existsSync(rawPath)) {
+      return `file:${rawPath.replace(/\\/g, '/')}`;
+    }
+
+    const candidates = [
+      path.resolve(__dirname, '../../prisma/dev.db'),
+      path.resolve(__dirname, '../prisma/dev.db'),
+      path.resolve(process.cwd(), 'server/prisma/dev.db'),
+      path.resolve(process.cwd(), 'prisma/dev.db'),
+      path.resolve(process.cwd(), 'server/dev.db'),
+      path.resolve(process.cwd(), 'dev.db'),
+    ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return `file:${candidate.replace(/\\/g, '/')}`;
+      }
+    }
+
+    const defaultFallback = path.resolve(__dirname, '../../prisma/dev.db');
+    return `file:${defaultFallback.replace(/\\/g, '/')}`;
+  }
 
   try {
     const parsed = new URL(url);

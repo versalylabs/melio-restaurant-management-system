@@ -53,44 +53,79 @@ export const createUser = async (req: AuthRequest, res: ExpressResponse) => {
     notes?: string;
   };
 
+  if (!firstName?.trim() || !lastName?.trim() || !email?.trim() || !roleId) {
+    return sendError(res, 'First name, last name, email, and role are required');
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
   const existing = await prisma.user.findFirst({
-    where: { restaurantId: req.user!.restaurantId, email },
+    where: {
+      restaurantId: req.user!.restaurantId,
+      email: normalizedEmail,
+    },
   });
 
   if (existing) {
-    return sendError(res, 'User with this email already exists');
+    return sendError(res, 'User with this email already exists', undefined, 409);
+  }
+
+  const role = await prisma.role.findUnique({ where: { id: roleId } });
+  if (!role) {
+    return sendError(res, 'Selected role does not exist', undefined, 400);
+  }
+
+  if (branchId) {
+    const validBranch = await prisma.branch.findFirst({
+      where: { id: branchId, restaurantId: req.user!.restaurantId },
+    });
+    if (!validBranch) {
+      return sendError(res, 'Selected branch does not belong to this restaurant', undefined, 400);
+    }
   }
 
   const bcrypt = await import('bcryptjs');
   const passwordHash = await bcrypt.hash(password || 'melio@2026', 12);
+  const uniqueStationIds = Array.isArray(stationIds) ? [...new Set(stationIds)] : [];
 
-  const user = await prisma.user.create({
-    data: {
-      restaurantId: req.user!.restaurantId,
-      firstName,
-      lastName,
-      email,
-      phone,
-      roleId,
-      branchId: branchId || undefined,
-      passwordHash,
-      status: 'ACTIVE',
-      employeeCode: employeeCode || undefined,
-      jobTitle: jobTitle || undefined,
-      hireDate: hireDate ? new Date(hireDate) : undefined,
-      notes: notes || undefined,
-      passwordChangedAt: new Date(),
-    },
-    include: {
-      role: { select: { id: true, name: true } },
-      branch: { select: { id: true, name: true } },
-    },
+  const user = await prisma.$transaction(async (tx) => {
+    const created = await tx.user.create({
+      data: {
+        restaurantId: req.user!.restaurantId,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: normalizedEmail,
+        phone: phone?.trim() || undefined,
+        roleId,
+        branchId: branchId || undefined,
+        passwordHash,
+        status: 'ACTIVE',
+        employeeCode: employeeCode?.trim() || undefined,
+        jobTitle: jobTitle?.trim() || undefined,
+        hireDate: hireDate ? new Date(hireDate) : undefined,
+        notes: notes?.trim() || undefined,
+        passwordChangedAt: new Date(),
+      },
+      include: {
+        role: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true } },
+      },
+    });
+
+    if (uniqueStationIds.length) {
+      const stations = await tx.kitchenStation.findMany({
+        where: { id: { in: uniqueStationIds }, restaurantId: req.user!.restaurantId, ...(branchId ? { branchId } : {}) },
+        select: { id: true },
+      });
+      if (stations.length) {
+        await tx.userKitchenStation.createMany({
+          data: stations.map((station) => ({ userId: created.id, stationId: station.id })),
+        });
+      }
+    }
+
+    return created;
   });
-
-  if (Array.isArray(stationIds) && stationIds.length) {
-    const stations = await prisma.kitchenStation.findMany({ where: { id: { in: stationIds }, restaurantId: req.user!.restaurantId, ...(branchId ? { branchId } : {}) }, select: { id: true } });
-    await prisma.userKitchenStation.createMany({ data: stations.map((station) => ({ userId: user.id, stationId: station.id })) });
-  }
 
   await createAuditLog(
     req.user!.restaurantId,
@@ -149,34 +184,81 @@ export const updateUser = async (req: AuthRequest, res: ExpressResponse) => {
 
   if (id === req.user!.id && status === 'INACTIVE') return sendError(res, 'You cannot deactivate your own account');
   const targetRole = await prisma.role.findUnique({ where: { id: user.roleId } });
-  if (targetRole?.name === 'OWNER' && req.user!.roleName !== 'OWNER' && (status === 'INACTIVE' || roleId !== user.roleId)) return sendError(res, 'Only an owner can modify an owner account', undefined, 403);
-
-  const updated = await prisma.user.update({
-    where: { id },
-    data: {
-      firstName,
-      lastName,
-      email,
-      phone,
-      roleId,
-      branchId: branchId || undefined,
-      status: status || user.status,
-      employeeCode: employeeCode || undefined,
-      jobTitle: jobTitle || undefined,
-      hireDate: hireDate ? new Date(hireDate) : undefined,
-      notes: notes || undefined,
-    },
-    include: {
-      role: { select: { id: true, name: true } },
-      branch: { select: { id: true, name: true } },
-    },
-  });
-
-  if (Array.isArray(stationIds)) {
-    const stations = await prisma.kitchenStation.findMany({ where: { id: { in: stationIds }, restaurantId: req.user!.restaurantId, ...(branchId ? { branchId } : {}) }, select: { id: true } });
-    await prisma.userKitchenStation.deleteMany({ where: { userId: id } });
-    if (stations.length) await prisma.userKitchenStation.createMany({ data: stations.map((station) => ({ userId: id, stationId: station.id })) });
+  if (targetRole?.name === 'OWNER' && req.user!.roleName !== 'OWNER' && (status === 'INACTIVE' || (roleId && roleId !== user.roleId))) {
+    return sendError(res, 'Only an owner can modify an owner account', undefined, 403);
   }
+
+  const normalizedEmail = email ? email.trim().toLowerCase() : user.email;
+  if (normalizedEmail !== user.email.toLowerCase()) {
+    const emailConflict = await prisma.user.findFirst({
+      where: {
+        restaurantId: req.user!.restaurantId,
+        id: { not: id },
+        email: normalizedEmail,
+      },
+    });
+    if (emailConflict) {
+      return sendError(res, 'Another user with this email already exists', undefined, 409);
+    }
+  }
+
+  if (roleId && roleId !== user.roleId) {
+    const validRole = await prisma.role.findUnique({ where: { id: roleId } });
+    if (!validRole) return sendError(res, 'Selected role does not exist', undefined, 400);
+  }
+
+  if (branchId) {
+    const validBranch = await prisma.branch.findFirst({
+      where: { id: branchId, restaurantId: req.user!.restaurantId },
+    });
+    if (!validBranch) {
+      return sendError(res, 'Selected branch does not belong to this restaurant', undefined, 400);
+    }
+  }
+
+  const uniqueStationIds = Array.isArray(stationIds) ? [...new Set(stationIds)] : undefined;
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const u = await tx.user.update({
+      where: { id },
+      data: {
+        firstName: firstName !== undefined ? firstName.trim() : user.firstName,
+        lastName: lastName !== undefined ? lastName.trim() : user.lastName,
+        email: normalizedEmail,
+        phone: phone !== undefined ? (phone?.trim() || null) : user.phone,
+        roleId: roleId || user.roleId,
+        branchId: branchId === '' ? null : (branchId !== undefined ? branchId : user.branchId),
+        status: status || user.status,
+        ...(status === 'INACTIVE' ? { tokenVersion: { increment: 1 } } : {}),
+        employeeCode: employeeCode !== undefined ? (employeeCode?.trim() || null) : user.employeeCode,
+        jobTitle: jobTitle !== undefined ? (jobTitle?.trim() || null) : user.jobTitle,
+        hireDate: hireDate ? new Date(hireDate) : (hireDate === '' ? null : user.hireDate),
+        notes: notes !== undefined ? (notes?.trim() || null) : user.notes,
+      },
+      include: {
+        role: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true } },
+      },
+    });
+
+    if (uniqueStationIds !== undefined) {
+      const effectiveBranchId = branchId === '' ? null : (branchId !== undefined ? branchId : user.branchId);
+      const stations = uniqueStationIds.length
+        ? await tx.kitchenStation.findMany({
+            where: { id: { in: uniqueStationIds }, restaurantId: req.user!.restaurantId, ...(effectiveBranchId ? { branchId: effectiveBranchId } : {}) },
+            select: { id: true },
+          })
+        : [];
+      await tx.userKitchenStation.deleteMany({ where: { userId: id } });
+      if (stations.length) {
+        await tx.userKitchenStation.createMany({
+          data: stations.map((station) => ({ userId: id, stationId: station.id })),
+        });
+      }
+    }
+
+    return u;
+  });
 
   await createAuditLog(
     req.user!.restaurantId,
@@ -223,9 +305,73 @@ export const deleteUser = async (req: AuthRequest, res: ExpressResponse) => {
     return sendError(res, 'You cannot delete your own account');
   }
 
-  if (user.roleId === req.user!.roleId && user.roleId) {
-    const role = await prisma.role.findUnique({ where: { id: user.roleId } });
-    if (role?.name === 'OWNER') return sendError(res, 'Owner accounts cannot be deleted');
+  const role = await prisma.role.findUnique({ where: { id: user.roleId } });
+  if (role?.name === 'OWNER') {
+    return sendError(res, 'Owner accounts cannot be deleted', undefined, 403);
+  }
+
+  const openShiftCount = await prisma.shift.count({
+    where: { userId: id, status: 'OPEN' },
+  });
+  if (openShiftCount > 0) {
+    return sendError(res, 'Cannot remove user while they have an open shift. Please close their shift first.', undefined, 409);
+  }
+
+  // Check if user is referenced by historical operational/financial records
+  const [
+    reservationCount,
+    promotionCount,
+    movementCount,
+    stocktakeCount,
+    poCount,
+    wastageCount,
+    shiftCount,
+    expenseCount,
+    transferCount,
+  ] = await Promise.all([
+    prisma.reservation.count({ where: { createdBy: id } }),
+    prisma.promotion.count({ where: { createdBy: id } }),
+    prisma.stockMovement.count({ where: { userId: id } }),
+    prisma.stocktake.count({ where: { OR: [{ createdBy: id }, { completedBy: id }] } }),
+    prisma.purchaseOrder.count({ where: { createdBy: id } }),
+    prisma.wastageRecord.count({ where: { userId: id } }),
+    prisma.shift.count({ where: { OR: [{ userId: id }, { createdBy: id }, { closedBy: id }] } }),
+    prisma.expense.count({ where: { OR: [{ createdBy: id }, { approvedBy: id }] } }),
+    prisma.stockTransfer.count({ where: { OR: [{ createdBy: id }, { approvedBy: id }, { completedBy: id }] } }),
+  ]);
+
+  const totalReferences =
+    reservationCount +
+    promotionCount +
+    movementCount +
+    stocktakeCount +
+    poCount +
+    wastageCount +
+    shiftCount +
+    expenseCount +
+    transferCount;
+
+  if (totalReferences > 0) {
+    await prisma.user.update({
+      where: { id },
+      data: {
+        status: 'INACTIVE',
+        tokenVersion: { increment: 1 },
+      },
+    });
+
+    await createAuditLog(
+      req.user!.restaurantId,
+      req.user!.id,
+      'DEACTIVATE',
+      'User',
+      id,
+      `Deactivated user ${user.firstName} ${user.lastName} (preserved ${totalReferences} historical records)`
+    );
+
+    return sendResponse(res, true, 'User has historical activity and was safely deactivated', {
+      deactivated: true,
+    });
   }
 
   await prisma.user.delete({ where: { id } });

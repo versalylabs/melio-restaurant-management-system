@@ -27,8 +27,18 @@ export const getPublicRestaurants = async (_req: Request, res: Response) => {
 };
 
 export const getPublicMenu = async (req: Request, res: Response) => {
-  const restaurantId = String(req.query.restaurantId || '').trim();
-  const branchId = String(req.query.branchId || '').trim();
+  let restaurantId = String(req.query.restaurantId || '').trim();
+  let branchId = String(req.query.branchId || '').trim();
+
+  if (!restaurantId) {
+    const defaultRest = await prisma.restaurant.findFirst({ where: { status: 'ACTIVE' }, select: { id: true } });
+    if (defaultRest) restaurantId = defaultRest.id;
+  }
+  if (!branchId && restaurantId) {
+    const defaultBranch = await prisma.branch.findFirst({ where: { restaurantId, status: 'ACTIVE' }, select: { id: true } });
+    if (defaultBranch) branchId = defaultBranch.id;
+  }
+
   if (!restaurantId || !branchId) return sendError(res, 'restaurantId and branchId are required');
 
   const restaurant = await prisma.restaurant.findFirst({ where: { id: restaurantId, status: 'ACTIVE' }, select: { id: true, name: true, description: true, phone: true, address: true, city: true, currency: true, logo: true } });
@@ -96,9 +106,13 @@ export const createPublicOrder = async (req: Request, res: Response) => {
   const baseSubtotal = normalized.reduce((sum: number, item: { menuItemId: string; quantity: number }) => sum + (menuMap.get(item.menuItemId)!.sellingPrice * item.quantity), 0);
   if (promoCode) {
     const found = await prisma.promotion.findFirst({ where: { restaurantId, active: true, code: { equals: promoCode } } });
-    if (!found) return sendError(res, 'Promotion code is invalid');
-    promotion = await validatePromotion(found.id, restaurantId, branchId, customer.id, baseSubtotal);
-    promotionId = found.id;
+    if (!found) return sendError(res, 'Promotion code is invalid', undefined, 400);
+    try {
+      promotion = await validatePromotion(found.id, restaurantId, branchId, customer.id, baseSubtotal);
+      promotionId = found.id;
+    } catch (promoErr: any) {
+      return sendError(res, promoErr.message || 'Invalid promotion code', undefined, 400);
+    }
   }
 
   const calcItems = normalized.map((item: { menuItemId: string; quantity: number }) => ({ menuItemId: item.menuItemId, unitPrice: menuMap.get(item.menuItemId)!.sellingPrice, quantity: item.quantity, modifiers: [] }));
@@ -109,10 +123,12 @@ export const createPublicOrder = async (req: Request, res: Response) => {
 
   const trackingToken = token();
   const result = await prisma.$transaction(async (tx) => {
-    const counter = await tx.orderCounter.findUnique({ where: { restaurantId_branchId: { restaurantId, branchId } } });
-    const next = (counter?.lastNumber || 0) + 1;
-    if (counter) await tx.orderCounter.update({ where: { restaurantId_branchId: { restaurantId, branchId } }, data: { lastNumber: next } });
-    else await tx.orderCounter.create({ data: { restaurantId, branchId, lastNumber: next } });
+    const counter = await tx.orderCounter.upsert({
+      where: { restaurantId_branchId: { restaurantId, branchId } },
+      create: { restaurantId, branchId, lastNumber: 1 },
+      update: { lastNumber: { increment: 1 } },
+    });
+    const next = counter.lastNumber;
 
     const order = await tx.sale.create({
       data: {
@@ -175,6 +191,9 @@ export const confirmPublicPayment = async (req: Request, res: Response) => {
 
   const reference = String(req.body?.reference || '').trim() || `ONLINE-${online.trackingToken.slice(0, 8).toUpperCase()}`;
   await prisma.$transaction(async (tx) => {
+    const currentOnline = await tx.onlineOrder.findUnique({ where: { id: online.id } });
+    if (!currentOnline || currentOnline.paymentState === 'PAID') return;
+
     const payment = await tx.payment.findFirst({ where: { saleId: online.saleId, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
     if (payment) await tx.payment.update({ where: { id: payment.id }, data: { status: 'COMPLETED', reference } });
     else await tx.payment.create({ data: { restaurantId: online.restaurantId, branchId: online.branchId, saleId: online.saleId, method: online.paymentMethod, amount: online.sale.totalAmount, status: 'COMPLETED', reference, createdBy: online.sale.createdBy } });
