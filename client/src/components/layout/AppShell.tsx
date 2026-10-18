@@ -110,7 +110,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
       )}
 
       <main className="relative z-10 flex-1 flex flex-col overflow-hidden">
-        <header className="min-h-[4.25rem] bg-white/75 dark:bg-[#0e0e13]/80 backdrop-blur-xl border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between px-3.5 sm:px-5 flex-shrink-0 py-3 gap-2">
+        <header className="relative z-30 min-h-[4.25rem] bg-white/75 dark:bg-[#0e0e13]/80 backdrop-blur-xl border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between px-3.5 sm:px-5 flex-shrink-0 py-3 gap-2">
           {/* Top edge sheen reflection */}
           <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-orange-400/30 dark:via-white/15 to-transparent pointer-events-none" />
 
@@ -143,7 +143,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
             </a>
 
             {canSwitchBranch && branches.length > 0 && (
-              <div className="relative" ref={branchMenuRef}>
+              <div className="relative z-50" ref={branchMenuRef}>
                 <button
                   type="button"
                   onClick={() => setBranchMenuOpen((open) => !open)}
