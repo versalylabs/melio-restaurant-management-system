@@ -43,41 +43,64 @@ export const ensureMenuImageBucket = async () => {
   }
 };
 
-/**
- * Uploads an image to Supabase Storage if configured and valid.
- * Automatically falls back to a high-fidelity data URI if Supabase credentials are not provided or reject the request.
- */
-export const uploadMenuImage = async (path: string, buffer: Buffer, contentType: string): Promise<string> => {
-  if (supabase) {
-    try {
-      await ensureMenuImageBucket();
-      const { error } = await supabase.storage.from(bucketName).upload(path, buffer, {
-        contentType,
-        cacheControl: '31536000',
-        upsert: true,
-      });
+import fs from 'fs';
+import path from 'path';
 
-      if (!error) {
-        const publicUrl = supabase.storage.from(bucketName).getPublicUrl(path).data?.publicUrl;
-        if (publicUrl) return publicUrl;
-      } else {
-        console.warn('Supabase storage upload error, falling back to embedded image storage:', error.message);
+/**
+ * Storage Engine for Menu Images & Gallery Uploads.
+ * - Completely independent of Supabase.
+ * - Locally: writes images to public static assets so they can be cached and served directly.
+ * - Cloud / Serverless (Vercel): stores high-fidelity inline Base64 data URIs directly in Neon PostgreSQL.
+ * - Preserves 100% functionality with zero third-party storage downtime.
+ */
+export const uploadMenuImage = async (filePath: string, buffer: Buffer, contentType: string): Promise<string> => {
+  // 1. Try saving to local static images directory if filesystem is writable
+  try {
+    const candidates = [
+      path.resolve(process.cwd(), 'client/public/images/uploads'),
+      path.resolve(__dirname, '../../../client/public/images/uploads'),
+      path.resolve(__dirname, '../../client/public/images/uploads'),
+      path.resolve(__dirname, '../public/images/uploads'),
+    ];
+
+    for (const dir of candidates) {
+      try {
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        const safeName = `${Date.now()}-${path.basename(filePath).replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const targetFile = path.join(dir, safeName);
+        fs.writeFileSync(targetFile, buffer);
+        return `/images/uploads/${safeName}`;
+      } catch {
+        // Continue to next candidate or fallback
       }
-    } catch (supabaseError: any) {
-      console.warn('Supabase upload exception, falling back to embedded image storage:', supabaseError?.message || supabaseError);
     }
+  } catch (fsErr) {
+    // Read-only filesystem (e.g. Vercel serverless lambda)
   }
 
-  // Resilient fallback: Return inline Base64 data URI permanently persisted in PostgreSQL
+  // 2. Resilient Fallback: Return inline Base64 data URI permanently stored in Neon PostgreSQL
   return `data:${contentType};base64,${buffer.toString('base64')}`;
 };
 
-export const deleteMenuImage = async (path: string) => {
-  if (!supabase) return;
+export const deleteMenuImage = async (filePath: string) => {
+  if (!filePath || filePath.startsWith('data:')) return;
   try {
-    await supabase.storage.from(bucketName).remove([path]);
-  } catch (err: any) {
-    console.warn('Could not delete image from Supabase storage:', err?.message || err);
+    if (filePath.startsWith('/images/uploads/')) {
+      const fileName = path.basename(filePath);
+      const candidates = [
+        path.resolve(process.cwd(), 'client/public/images/uploads', fileName),
+        path.resolve(__dirname, '../../../client/public/images/uploads', fileName),
+      ];
+      for (const f of candidates) {
+        if (fs.existsSync(f)) {
+          fs.unlinkSync(f);
+        }
+      }
+    }
+  } catch (err) {
+    // Non-fatal
   }
 };
 
