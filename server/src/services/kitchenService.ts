@@ -8,6 +8,7 @@ import { markSaleServedFromKitchen } from './orderCompletionService';
 import { lockSale } from './saleLedgerService';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
+import { boundedLimit } from '../utils/pagination';
 
 export const getKitchenStations = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
@@ -228,9 +229,15 @@ export const getKitchenTickets = async (req: AuthRequest, res: ExpressResponse) 
   const where: any = { restaurantId };
   if (branchId) where.branchId = branchId;
   if (status) where.status = status as string;
-  // Tickets for cancelled orders are not work for the kitchen.
-  else where.status = { not: 'CANCELLED' };
-  if (status !== 'CANCELLED') where.order = { status: { not: 'CANCELLED' } };
+  // With no filter, the kitchen only needs open tickets (NEW/PREPARING/READY),
+  // not every ticket ever served. Tickets for cancelled orders are never work.
+  else if (startDate || endDate) where.status = { not: 'CANCELLED' };
+  else where.status = { notIn: ['SERVED', 'COMPLETED', 'CANCELLED'] };
+  const openTicketsOnly = !status && !startDate && !endDate;
+  // An order that was closed without the kitchen pressing "Served" leaves its
+  // ticket open; it is not work any more, so the default view skips it.
+  if (openTicketsOnly) where.order = { status: { notIn: ['CANCELLED', 'COMPLETED'] } };
+  else if (status !== 'CANCELLED') where.order = { status: { not: 'CANCELLED' } };
   if (stationId) where.stationId = stationId as string;
   if (startDate || endDate) {
     where.receivedAt = {};
@@ -238,9 +245,12 @@ export const getKitchenTickets = async (req: AuthRequest, res: ExpressResponse) 
     if (endDate) where.receivedAt.lte = new Date(endDate as string);
   }
 
+  // Keep the newest tickets when capped (so new orders always appear), then
+  // show them oldest first as before.
   const tickets = await prisma.kitchenTicket.findMany({
     where,
-    orderBy: { receivedAt: 'asc' },
+    orderBy: { receivedAt: 'desc' },
+    take: boundedLimit(req.query.limit, 300, 1000),
     include: {
       branch: { select: { id: true, name: true, code: true } },
       order: {
@@ -262,6 +272,7 @@ export const getKitchenTickets = async (req: AuthRequest, res: ExpressResponse) 
       },
     },
   });
+  tickets.reverse();
 
   const allItemMenuIds = [...new Set(tickets.flatMap((t) => t.items.map((i) => i.menuItemId)))];
   const allStationLinks = allItemMenuIds.length

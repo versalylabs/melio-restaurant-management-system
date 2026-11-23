@@ -72,9 +72,9 @@ export const getDashboardMetrics = async (req: AuthRequest, res: ExpressResponse
       prisma.table.count({ where: scoped({ status: 'CLEANING' }) }).catch(() => 0),
       prisma.table.count({ where: scoped({ status: 'OUT_OF_SERVICE' }) }).catch(() => 0),
       prisma.sale.count({ where: scoped({ createdAt: { gte: today } }) }).catch(() => 0),
-      prisma.sale.findMany({ where: scoped({ status: 'COMPLETED', createdAt: { gte: today } }), select: { totalAmount: true } }).catch(() => []),
+      prisma.sale.aggregate({ where: scoped({ status: 'COMPLETED', createdAt: { gte: today } }), _sum: { totalAmount: true } }).catch(() => ({ _sum: { totalAmount: 0 } })),
       prisma.sale.count({ where: scoped({ status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] } }) }).catch(() => 0),
-      prisma.sale.findMany({ where: scoped({ status: 'COMPLETED' }), select: { totalAmount: true } }).catch(() => []),
+      prisma.sale.aggregate({ where: scoped({ status: 'COMPLETED' }), _avg: { totalAmount: true } }).catch(() => ({ _avg: { totalAmount: 0 } })),
       prisma.customer.count({ where: { restaurantId } }).catch(() => 0),
       prisma.auditLog.findMany({
         where: { restaurantId }, take: 6, orderBy: { createdAt: 'desc' },
@@ -98,8 +98,8 @@ export const getDashboardMetrics = async (req: AuthRequest, res: ExpressResponse
       }).catch(() => []),
     ]);
 
-    const todaySales = completedToday.reduce((sum: number, order: any) => sum + Number(order.totalAmount || 0), 0);
-    const averageOrderValue = allCompleted.length ? allCompleted.reduce((sum: number, o: any) => sum + Number(o.totalAmount || 0), 0) / allCompleted.length : 0;
+    const todaySales = Number((completedToday as any)._sum?.totalAmount || 0);
+    const averageOrderValue = Number((allCompleted as any)._avg?.totalAmount || 0);
 
     const trendMap = new Map<string, { sales: number; orders: number }>();
     for (let i = 0; i < 7; i++) {

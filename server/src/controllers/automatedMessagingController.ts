@@ -5,7 +5,8 @@ import { sendResponse, sendError } from '../utils/response';
 import {
   getTemplatesForRestaurant,
   updateSingleTemplate,
-  AutomatedMessageTemplate,
+  fillTemplate,
+  TemplateError,
 } from '../services/automatedMessagingService';
 import { notificationHistory, NotificationLog } from '../services/customerNotificationService';
 import prisma from '../config/database';
@@ -15,7 +16,7 @@ export const getAutomatedMessageTemplatesController = async (req: AuthRequest, r
     const restaurantId = req.user?.restaurantId;
     if (!restaurantId) return sendError(res, 'Authentication required', undefined, 401);
 
-    const templates = getTemplatesForRestaurant(restaurantId);
+    const templates = await getTemplatesForRestaurant(restaurantId);
     return sendResponse(res, true, 'Automated message templates retrieved', { templates });
   } catch (err: any) {
     return sendError(res, safeErrorMessage(err, 'Failed to retrieve templates'));
@@ -30,17 +31,16 @@ export const updateAutomatedMessageTemplateController = async (req: AuthRequest,
     const { action } = req.params;
     const { enabled, channel, subject, template } = req.body;
 
-    const updated = updateSingleTemplate(restaurantId, action, {
+    const updated = await updateSingleTemplate(restaurantId, action, {
       ...(enabled !== undefined && { enabled }),
       ...(channel && { channel }),
       ...(subject !== undefined && { subject }),
       ...(template !== undefined && { template }),
-    });
+    }, req.user?.id);
 
-    return sendResponse(res, true, 'Template updated successfully', {
-      template: updated.find((t) => t.action === action),
-    });
+    return sendResponse(res, true, 'Template updated successfully', { template: updated });
   } catch (err: any) {
+    if (err instanceof TemplateError) return sendError(res, err.message, undefined, err.statusCode);
     return sendError(res, safeErrorMessage(err, 'Failed to update template'));
   }
 };
@@ -57,7 +57,7 @@ export const sendTestMessageController = async (req: AuthRequest, res: ExpressRe
     });
 
     const restaurantName = restaurant?.name || 'Melio Restaurant';
-    const templates = getTemplatesForRestaurant(restaurantId);
+    const templates = await getTemplatesForRestaurant(restaurantId);
     const tmpl = templates.find((t) => t.action === action) || templates[0];
 
     // Sample context
@@ -76,12 +76,8 @@ export const sendTestMessageController = async (req: AuthRequest, res: ExpressRe
       reservationTime: '7:30 PM',
     };
 
-    let body = tmpl.template;
-    let subject = tmpl.subject;
-    for (const [key, val] of Object.entries(sampleContext)) {
-      body = body.split(`{${key}}`).join(val);
-      subject = subject.split(`{${key}}`).join(val);
-    }
+    const body = fillTemplate(tmpl.template, sampleContext);
+    const subject = fillTemplate(tmpl.subject, sampleContext);
 
     let emailTarget = recipientEmail;
     if (!emailTarget && req.user?.id) {

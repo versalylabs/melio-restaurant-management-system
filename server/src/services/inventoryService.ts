@@ -5,6 +5,7 @@ import { Response as ExpressResponse } from 'express';
 import { createAuditLog } from './auditLogService';
 import { convertQuantity } from '../utils/units';
 import { notifyRestaurantStaff } from './notificationService';
+import { boundedLimit } from '../utils/pagination';
 
 const COST_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER'];
 
@@ -2811,7 +2812,14 @@ export const getStocktakes = async (req: AuthRequest, res: ExpressResponse) => {
   const { status } = req.query;
   const where: any = { restaurantId, ...(branchId ? { branchId } : {}) };
   if (status) where.status = status as string;
-  const stocktakes = await prisma.stocktake.findMany({ where, orderBy: { createdAt: 'desc' }, include: { branch: { select: { name: true } }, items: { include: { ingredient: { select: { name: true, unit: true } } } } } });
+  const include = { branch: { select: { name: true } }, items: { include: { ingredient: { select: { name: true, unit: true } } } } };
+  const take = boundedLimit(req.query.limit, 100, 300);
+  const stocktakes = status
+    ? await prisma.stocktake.findMany({ where, orderBy: { createdAt: 'desc' }, take, include })
+    : [
+        ...(await prisma.stocktake.findMany({ where: { ...where, status: 'DRAFT' }, orderBy: { createdAt: 'desc' }, include })),
+        ...(await prisma.stocktake.findMany({ where: { ...where, status: { not: 'DRAFT' } }, orderBy: { createdAt: 'desc' }, take, include })),
+      ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   return sendResponse(res, true, 'Stocktakes retrieved', { items: stocktakes });
 };
 

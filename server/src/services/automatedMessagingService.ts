@@ -1,7 +1,4 @@
-import fs from 'fs';
-import path from 'path';
 import prisma from '../config/database';
-import { notificationHistory, NotificationLog } from './customerNotificationService';
 
 export interface AutomatedMessageTemplate {
   action: string;
@@ -108,79 +105,92 @@ We look forward to hosting you!`,
   },
 ];
 
-const DATA_DIR = path.resolve(process.cwd(), 'data', 'automated_messages');
+const CHANNELS = ['EMAIL', 'SMS', 'BOTH'] as const;
+const MAX_SUBJECT = 200;
+const MAX_TEMPLATE = 2000;
 
-function getFilePath(restaurantId: string): string {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  return path.join(DATA_DIR, `${restaurantId}.json`);
-}
-
-export function getTemplatesForRestaurant(restaurantId: string): AutomatedMessageTemplate[] {
-  try {
-    const filePath = getFilePath(restaurantId);
-    if (fs.existsSync(filePath)) {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const saved: AutomatedMessageTemplate[] = JSON.parse(content);
-      // Merge with any new default actions
-      return DEFAULT_TEMPLATES.map((def) => {
-        const found = saved.find((s) => s.action === def.action);
-        return found ? { ...def, ...found } : def;
-      });
-    }
-  } catch (err) {
-    console.warn('Could not read automated message templates, using defaults:', err);
-  }
-  return DEFAULT_TEMPLATES;
-}
-
-export function saveTemplatesForRestaurant(
-  restaurantId: string,
-  templates: AutomatedMessageTemplate[]
-): void {
-  try {
-    const filePath = getFilePath(restaurantId);
-    fs.writeFileSync(filePath, JSON.stringify(templates, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Error saving automated message templates:', err);
+export class TemplateError extends Error {
+  constructor(message: string, public statusCode = 400) {
+    super(message);
+    this.name = 'AppError';
   }
 }
 
-export function updateSingleTemplate(
+/** Built-in defaults with the restaurant's saved edits applied on top. */
+export async function getTemplatesForRestaurant(restaurantId: string): Promise<AutomatedMessageTemplate[]> {
+  const saved = await prisma.messageTemplate.findMany({ where: { restaurantId } });
+  return DEFAULT_TEMPLATES.map((def) => {
+    const found = saved.find((row) => row.action === def.action);
+    if (!found) return def;
+    return {
+      ...def,
+      enabled: found.enabled,
+      channel: (CHANNELS as readonly string[]).includes(found.channel) ? (found.channel as AutomatedMessageTemplate['channel']) : def.channel,
+      subject: found.subject,
+      template: found.template,
+    };
+  });
+}
+
+/** Saves one template. Throws (so the UI shows an error) instead of failing silently. */
+export async function updateSingleTemplate(
   restaurantId: string,
   action: string,
-  data: Partial<AutomatedMessageTemplate>
-): AutomatedMessageTemplate[] {
-  const current = getTemplatesForRestaurant(restaurantId);
-  const updated = current.map((t) => (t.action === action ? { ...t, ...data } : t));
-  saveTemplatesForRestaurant(restaurantId, updated);
-  return updated;
+  data: Partial<Pick<AutomatedMessageTemplate, 'enabled' | 'channel' | 'subject' | 'template'>>,
+  userId?: string
+): Promise<AutomatedMessageTemplate> {
+  const def = DEFAULT_TEMPLATES.find((t) => t.action === action);
+  if (!def) throw new TemplateError('Unknown message type', 404);
+  if (data.channel !== undefined && !(CHANNELS as readonly string[]).includes(data.channel)) throw new TemplateError('Channel must be EMAIL, SMS or BOTH');
+  if (data.enabled !== undefined && typeof data.enabled !== 'boolean') throw new TemplateError('Enabled must be true or false');
+  if (data.subject !== undefined && (typeof data.subject !== 'string' || !data.subject.trim() || data.subject.length > MAX_SUBJECT)) {
+    throw new TemplateError(`Subject is required and must be at most ${MAX_SUBJECT} characters`);
+  }
+  if (data.template !== undefined && (typeof data.template !== 'string' || !data.template.trim() || data.template.length > MAX_TEMPLATE)) {
+    throw new TemplateError(`Message is required and must be at most ${MAX_TEMPLATE} characters`);
+  }
+
+  const current = (await getTemplatesForRestaurant(restaurantId)).find((t) => t.action === action)!;
+  const next = { ...current, ...data };
+  await prisma.messageTemplate.upsert({
+    where: { restaurantId_action: { restaurantId, action } },
+    create: { restaurantId, action, enabled: next.enabled, channel: next.channel, subject: next.subject, template: next.template, updatedBy: userId || null },
+    update: { enabled: next.enabled, channel: next.channel, subject: next.subject, template: next.template, updatedBy: userId || null },
+  });
+  return next;
 }
 
-export function resolveMessage(
+export function fillTemplate(text: string, context: Record<string, string | number | undefined | null>): string {
+  let out = text;
+  for (const [key, val] of Object.entries(context)) {
+    out = out.split(`{${key}}`).join(val != null ? String(val) : '');
+  }
+  return out;
+}
+
+/**
+ * The message to send for an action. Returns null when the action has no
+ * template (the caller uses its default text), and `enabled: false` when the
+ * owner switched it off (the caller must not send anything).
+ */
+export async function resolveMessage(
   restaurantId: string,
   action: string,
   context: Record<string, string | number | undefined | null>
-): { enabled: boolean; channel: 'EMAIL' | 'SMS' | 'BOTH'; subject: string; body: string } | null {
-  const templates = getTemplatesForRestaurant(restaurantId);
-  const match = templates.find((t) => t.action === action);
-  if (!match || !match.enabled) return null;
-
-  let body = match.template;
-  let subject = match.subject;
-
-  for (const [key, val] of Object.entries(context)) {
-    const placeholder = `{${key}}`;
-    const strVal = val != null ? String(val) : '';
-    body = body.split(placeholder).join(strVal);
-    subject = subject.split(placeholder).join(strVal);
+): Promise<{ enabled: boolean; channel: 'EMAIL' | 'SMS' | 'BOTH'; subject: string; body: string } | null> {
+  let templates: AutomatedMessageTemplate[];
+  try {
+    templates = await getTemplatesForRestaurant(restaurantId);
+  } catch (err) {
+    console.warn('Could not load message templates, using defaults:', err);
+    templates = DEFAULT_TEMPLATES;
   }
-
+  const match = templates.find((t) => t.action === action);
+  if (!match) return null;
   return {
     enabled: match.enabled,
     channel: match.channel,
-    subject,
-    body,
+    subject: fillTemplate(match.subject, context),
+    body: fillTemplate(match.template, context),
   };
 }

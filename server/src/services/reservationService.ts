@@ -5,6 +5,7 @@ import { Response as ExpressResponse } from 'express';
 import { sendResponse, sendError } from '../utils/response';
 import { createAuditLog } from './auditLogService';
 import { getRestaurantTimeZone, localDayRange, startOfLocalDay } from '../utils/timezone';
+import { boundedLimit } from '../utils/pagination';
 
 const ACTIVE_STATUSES = ['PENDING', 'CONFIRMED', 'SEATED'];
 const VALID_STATUSES = ['PENDING', 'CONFIRMED', 'SEATED', 'COMPLETED', 'CANCELLED', 'NO_SHOW'];
@@ -63,9 +64,14 @@ export const getReservations = async (req: AuthRequest, res: ExpressResponse) =>
     where.startAt = { gte: range.start, lte: range.end };
   }
 
+  // Upcoming / single-day views read forward from the start. The open-ended
+  // "all dates" view keeps the most recent bookings when capped, then shows
+  // them in date order.
+  const newestFirst = upcoming !== 'true' && (!date || date === 'ALL');
   const reservations = await prisma.reservation.findMany({
     where,
-    orderBy: { startAt: 'asc' },
+    orderBy: { startAt: newestFirst ? 'desc' : 'asc' },
+    take: boundedLimit(req.query.limit, 500, 1000),
     include: {
       branch: { select: { id: true, name: true, code: true, address: true, city: true, phone: true } },
       table: { select: { id: true, tableNumber: true, name: true, capacity: true } },
@@ -73,6 +79,7 @@ export const getReservations = async (req: AuthRequest, res: ExpressResponse) =>
       creator: { select: { id: true, firstName: true, lastName: true } },
     },
   });
+  if (newestFirst) reservations.reverse();
   return sendResponse(res, true, 'Reservations retrieved', { reservations });
 };
 
