@@ -3,6 +3,7 @@ import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response } from 'express';
 import { createAuditLog } from './auditLogService';
+import { quickPurchaseMovement, reverseQuickPurchase } from './quickPurchaseService';
 
 export const getExpenses = async (req: AuthRequest, res: Response) => {
   const { status, category, paymentMethod, from, to, search } = req.query as any;
@@ -37,6 +38,7 @@ export const updateExpense = async (req: AuthRequest, res: Response) => {
   const expense = await prisma.expense.findFirst({ where:{id:req.params.id,restaurantId:req.user!.restaurantId, ...(req.user!.branchId?{branchId:req.user!.branchId}:{})} });
   if (!expense) return sendError(res,'Expense not found',undefined,404);
   if (expense.status !== 'PENDING') return sendError(res,'Only pending expenses can be edited');
+  if (await quickPurchaseMovement(prisma, expense.id)) return sendError(res,'This is a quick purchase: approve or reject it instead of editing it');
   const amount = req.body.amount == null ? expense.amount : Number(req.body.amount);
   if (!Number.isFinite(amount) || amount <= 0) return sendError(res,'Expense amount must be greater than zero');
   const updated = await prisma.expense.update({ where:{id:expense.id}, data:{category:req.body.category ?? expense.category,description:req.body.description ?? expense.description,amount,paymentMethod:req.body.paymentMethod ?? expense.paymentMethod,vendor:req.body.vendor ?? expense.vendor,reference:req.body.reference ?? expense.reference,notes:req.body.notes ?? expense.notes,expenseDate:req.body.expenseDate?new Date(req.body.expenseDate):expense.expenseDate} });
@@ -47,6 +49,7 @@ export const deleteExpense = async (req: AuthRequest, res: Response) => {
   const expense = await prisma.expense.findFirst({ where:{id:req.params.id,restaurantId:req.user!.restaurantId, ...(req.user!.branchId?{branchId:req.user!.branchId}:{})} });
   if (!expense) return sendError(res,'Expense not found',undefined,404);
   if (expense.status !== 'PENDING') return sendError(res,'Only pending expenses can be deleted');
+  if (await quickPurchaseMovement(prisma, expense.id)) return sendError(res,'This is a quick purchase: reject it to undo the stock and price');
   await prisma.expense.delete({where:{id:expense.id}});
   await createAuditLog(req.user!.restaurantId, req.user!.id, 'DELETE', 'Expense', expense.id, `Deleted expense ${expense.category}`);
   return sendResponse(res,true,'Expense deleted');
@@ -57,7 +60,14 @@ export const setExpenseStatus = async (req: AuthRequest, res: Response) => {
   if (!expense) return sendError(res,'Expense not found',undefined,404);
   if (!['APPROVED','REJECTED'].includes(req.body.status)) return sendError(res,'Invalid expense status');
   if (expense.status !== 'PENDING') return sendError(res,'Only pending expenses can be approved or rejected');
-  const updated = await prisma.expense.update({ where:{id:expense.id}, data:{status:req.body.status,approvedBy:req.body.status==='APPROVED'?req.user!.id:null,approvedAt:req.body.status==='APPROVED'?new Date():null} });
+  // Rejecting a quick purchase also undoes its stock and price, in the same transaction.
+  const updated = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.expense.updateMany({ where:{id:expense.id,status:'PENDING'}, data:{status:req.body.status,approvedBy:req.body.status==='APPROVED'?req.user!.id:null,approvedAt:req.body.status==='APPROVED'?new Date():null} });
+    if (claimed.count === 0) return null;
+    if (req.body.status === 'REJECTED') await reverseQuickPurchase(tx, expense.id, req.user!.id);
+    return tx.expense.findUnique({ where:{id:expense.id} });
+  });
+  if (!updated) return sendError(res,'Only pending expenses can be approved or rejected');
   await createAuditLog(req.user!.restaurantId, req.user!.id, req.body.status, 'Expense', expense.id, `${req.body.status === 'APPROVED' ? 'Approved' : 'Rejected'} expense ${expense.category}`);
   return sendResponse(res,true,`Expense ${req.body.status.toLowerCase()}`,{expense:updated});
 };

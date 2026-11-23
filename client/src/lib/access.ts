@@ -23,6 +23,8 @@ export const ROUTE_ROLES: Record<string, string[] | undefined> = {
   '/inventory': ['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER', 'CHEF'],
   '/suppliers': ['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER'],
   '/purchases': ['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER'],
+  '/quick-purchase': ['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER', 'CASHIER'],
+  '/food-cost': ['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER'],
   '/customers': ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'],
   '/loyalty': ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'],
   '/staff': ['OWNER', 'ADMIN', 'MANAGER'],
@@ -53,7 +55,8 @@ export const permissionForPath = (path: string): string | null => {
   if (path === '/payments') return 'payments.view';
   if (path === '/shifts') return 'shifts.view';
   if (path === '/expenses') return 'expenses.view';
-  if (path === '/inventory' || path === '/suppliers' || path === '/purchases') return 'inventory.view';
+  if (path === '/inventory' || path === '/suppliers' || path === '/purchases' || path === '/food-cost') return 'inventory.view';
+  if (path === '/quick-purchase') return 'inventory.manage';
   if (path === '/menu-items' || path === '/categories' || path === '/menu-preview') return 'menu.view';
   if (path.startsWith('/customers') || path === '/loyalty') return 'customers.view';
   if (path === '/orders') return 'orders.view';

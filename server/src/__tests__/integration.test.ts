@@ -650,6 +650,116 @@ async function run() {
     await prisma.menuItem.update({ where: { id: menuItem.id }, data: { taxCategory: itemBefore!.taxCategory } });
   }
 
+  console.log('\n--- Food cost: quick purchase, prices, margins, stocktake value ---');
+  {
+    const category = await prisma.ingredientCategory.create({ data: { restaurantId, name: `IT Veg ${uid()}` } });
+    const beef = await prisma.ingredient.create({ data: { restaurantId, categoryId: category.id, name: `IT Beef ${uid()}`, unit: 'kg', costPerUnit: 600 } });
+    const dish = await prisma.menuItem.create({
+      data: { restaurantId, categoryId: menuItem.categoryId, name: `IT Stew ${uid()}`, sellingPrice: 1000, targetFoodCostPct: 30 },
+    });
+    // 250 g of beef per serving: 0.25 kg × KES 600 = KES 150, 15% of the price.
+    await prisma.recipe.create({ data: { restaurantId, menuItemId: dish.id, servings: 1, ingredients: { create: [{ ingredientId: beef.id, quantity: 250, unit: 'g' }] } } });
+
+    await test('Dish cost converts recipe grams into the per-kg price', async () => {
+      const res = await call('GET', '/inventory/food-cost', ownerToken);
+      const row = res.body.data.dishes.find((d: any) => d.menuItemId === dish.id);
+      assert.ok(row && Math.abs(row.costPerServing - 150) < 0.01 && Math.abs(row.foodCostPct - 15) < 0.01 && !row.overTarget, JSON.stringify(row));
+    });
+    await test('Paying from the till needs an open shift', async () => {
+      await prisma.shift.updateMany({ where: { userId: cashier.id, status: 'OPEN' }, data: { status: 'CLOSED', closedAt: new Date() } });
+      const res = await call('POST', '/inventory/quick-purchase', cashierToken, { ingredientId: beef.id, quantity: 5, totalPaid: 4000, paidFrom: 'TILL_CASH' });
+      assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    });
+    await test('Quick purchase: stock, price, history, expense and a margin alert in one step', async () => {
+      await call('POST', '/shifts', cashierToken, { openingCash: 0 });
+      // 5 kg for KES 7,000 = KES 1,400/kg; the stew now costs 350 = 35%, over its 30% target.
+      const res = await call('POST', '/inventory/quick-purchase', cashierToken, { ingredientId: beef.id, quantity: 5, unit: 'kg', totalPaid: 7000, paidFrom: 'TILL_CASH', vendor: 'Marikiti' });
+      assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+      const d = res.body.data;
+      assert.strictEqual(d.expenseStatus, 'PENDING', 'a cashier purchase waits for approval');
+      assert.strictEqual(d.priceChange, null, 'cashiers are not shown costs');
+      assert.deepStrictEqual(d.marginAlerts, []);
+      const fresh = await prisma.ingredient.findUnique({ where: { id: beef.id } });
+      assert.ok(Math.abs(fresh!.costPerUnit - 1400) < 0.01, String(fresh!.costPerUnit));
+      const alert = await prisma.notification.findFirst({ where: { userId: owner.id, type: 'MARGIN_ALERT', message: { contains: dish.name } } });
+      assert.ok(alert, 'the owner is told the dish went over target');
+      const waiterAlert = await prisma.notification.findFirst({ where: { user: { role: { name: 'WAITER' } }, type: 'MARGIN_ALERT', message: { contains: dish.name } } });
+      assert.strictEqual(waiterAlert, null, 'waiters are not sent costs');
+      const stock = await prisma.inventoryStock.findUnique({ where: { branchId_ingredientId: { branchId, ingredientId: beef.id } } });
+      assert.ok(stock && Math.abs(stock.quantity - 5) < 0.001);
+      assert.strictEqual(await prisma.ingredientPriceHistory.count({ where: { ingredientId: beef.id } }), 1);
+      const expense = await prisma.expense.findUnique({ where: { id: d.expenseId } });
+      assert.ok(expense && expense.shiftId && expense.paymentMethod === 'CASH' && expense.category === 'Food purchases');
+    });
+    await test('Buying in grams adds to stock counted in kg', async () => {
+      const res = await call('POST', '/inventory/quick-purchase', ownerToken, { ingredientId: beef.id, quantity: 500, unit: 'g', totalPaid: 700, paidFrom: 'MPESA', branchId });
+      assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+      assert.strictEqual(res.body.data.expenseStatus, 'APPROVED', "an owner's purchase is approved at once");
+      const stock = await prisma.inventoryStock.findUnique({ where: { branchId_ingredientId: { branchId, ingredientId: beef.id } } });
+      assert.ok(Math.abs(stock!.quantity - 5.5) < 0.001, String(stock!.quantity));
+    });
+    await test('A unit that cannot be converted is refused', async () => {
+      const res = await call('POST', '/inventory/quick-purchase', ownerToken, { ingredientId: beef.id, quantity: 2, unit: 'litres', totalPaid: 100, paidFrom: 'OTHER', branchId });
+      assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    });
+    await test('Cash taken for a pending purchase already counts against the shift', async () => {
+      const current = await prisma.shift.findFirst({ where: { userId: cashier.id, status: 'OPEN' } });
+      const managerView = (await call('GET', '/shifts', ownerToken)).body.data.shifts.find((x: any) => x.id === current!.id);
+      assert.ok(Math.abs(managerView.cashExpenses - 7000) < 0.01, JSON.stringify(managerView));
+    });
+    await test('A price far from the last one needs confirming', async () => {
+      const body = { ingredientId: beef.id, quantity: 1, unit: 'kg', totalPaid: 140000, paidFrom: 'OTHER', branchId };
+      const check = await call('POST', '/inventory/quick-purchase', ownerToken, body);
+      assert.strictEqual(check.status, 409, JSON.stringify(check.body));
+      assert.deepStrictEqual(check.body.errors?.price, ['PRICE_CHECK']);
+      assert.strictEqual(await prisma.ingredientPriceHistory.count({ where: { ingredientId: beef.id } }), 2, 'nothing saved before confirming');
+    });
+    await test('The same purchase sent twice is recorded once', async () => {
+      const body = { ingredientId: beef.id, quantity: 1, unit: 'kg', totalPaid: 1400, paidFrom: 'OTHER', branchId, clientRequestId: uid() };
+      const first = await call('POST', '/inventory/quick-purchase', ownerToken, body);
+      const again = await call('POST', '/inventory/quick-purchase', ownerToken, body);
+      assert.strictEqual(first.status, 201, JSON.stringify(first.body));
+      assert.strictEqual(again.body.data.expenseId, first.body.data.expenseId);
+      assert.strictEqual(await prisma.expense.count({ where: { reference: `QP:${body.clientRequestId}` } }), 1);
+    });
+    await test('Rejecting a quick purchase takes the stock back out and restores the price', async () => {
+      const before = await prisma.inventoryStock.findUnique({ where: { branchId_ingredientId: { branchId, ingredientId: beef.id } } });
+      const priceBefore = (await prisma.ingredient.findUnique({ where: { id: beef.id } }))!.costPerUnit;
+      const res = await call('POST', '/inventory/quick-purchase', cashierToken, { ingredientId: beef.id, quantity: 2, unit: 'kg', totalPaid: 4000, paidFrom: 'TILL_CASH' });
+      assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+      const edit = await call('PUT', `/expenses/${res.body.data.expenseId}`, ownerToken, { amount: 10 });
+      assert.strictEqual(edit.status, 400, 'a quick purchase cannot be edited');
+      const reject = await call('PATCH', `/expenses/${res.body.data.expenseId}/status`, ownerToken, { status: 'REJECTED' });
+      assert.strictEqual(reject.status, 200, JSON.stringify(reject.body));
+      const after = await prisma.inventoryStock.findUnique({ where: { branchId_ingredientId: { branchId, ingredientId: beef.id } } });
+      assert.ok(Math.abs(after!.quantity - before!.quantity) < 0.001, `${before!.quantity} -> ${after!.quantity}`);
+      const priceAfter = (await prisma.ingredient.findUnique({ where: { id: beef.id } }))!.costPerUnit;
+      assert.ok(Math.abs(priceAfter - priceBefore) < 0.000001, `${priceBefore} -> ${priceAfter}`);
+    });
+    await test('Price history lists what was paid, newest first', async () => {
+      const res = await call('GET', `/inventory/ingredients/${beef.id}/price-history`, ownerToken);
+      assert.strictEqual(res.body.data.history.length, 3, 'the rejected purchase is not listed');
+      assert.ok(res.body.data.history.every((h: any) => Math.abs(h.unitCost - 1400) < 0.01));
+      const denied = await call('GET', `/inventory/ingredients/${beef.id}/price-history`, cashierToken);
+      assert.strictEqual(denied.status, 403);
+    });
+    await test('A completed stocktake values the shortage in shillings', async () => {
+      const st = await call('POST', '/inventory/stocktakes', ownerToken, { branchId });
+      const line = st.body.data.items.find((i: any) => i.ingredientId === beef.id);
+      await call('PUT', `/inventory/stocktakes/${st.body.data.id}`, ownerToken, { items: [{ ingredientId: beef.id, countedQty: line.expectedQty - 1 }] });
+      const done = await call('POST', `/inventory/stocktakes/${st.body.data.id}/complete`, ownerToken);
+      assert.strictEqual(done.status, 200, JSON.stringify(done.body));
+      const item = await prisma.stocktakeItem.findFirst({ where: { stocktakeId: st.body.data.id, ingredientId: beef.id } });
+      assert.ok(item && item.varianceValue !== null && item.varianceValue < 0 && Math.abs(item.varianceValue + item.unitCost!) < 0.01, JSON.stringify(item));
+    });
+    await test('A food-cost target outside 1–99% is refused', async () => {
+      const res = await call('PUT', `/inventory/food-cost/${dish.id}/target`, ownerToken, { targetFoodCostPct: 150 });
+      assert.strictEqual(res.status, 400);
+    });
+    await prisma.shift.updateMany({ where: { userId: cashier.id, status: 'OPEN' }, data: { status: 'CLOSED', closedAt: new Date() } });
+    await prisma.menuItem.update({ where: { id: dish.id }, data: { status: 'INACTIVE' } });
+  }
+
   server.close();
   await prisma.$disconnect();
   console.log(`\n========================================\nIntegration Results: ${passed} Passed, ${failed} Failed\n========================================`);

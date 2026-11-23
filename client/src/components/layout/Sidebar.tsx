@@ -51,6 +51,8 @@ const navigation: NavItem[] = [
     { title: 'Inventory', href: '/inventory' },
     { title: 'Suppliers', href: '/suppliers' },
     { title: 'Purchases', href: '/purchases' },
+    { title: 'Quick Purchase', href: '/quick-purchase' },
+    { title: 'Food Cost', href: '/food-cost' },
   ]},
   { title: 'Customers', icon: Users, children: [
     { title: 'Customers', href: '/customers' }, { title: 'Loyalty', href: '/loyalty' },
