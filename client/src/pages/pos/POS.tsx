@@ -22,8 +22,53 @@ interface CartItem extends SaleItem {
   modifiers: SaleItemModifier[];
 }
 
+/**
+ * The order being rung up survives a session expiry (the 401 handler sends
+ * the cashier to login, which unmounts this page) and a page reload. It is
+ * tied to the user and branch, expires after 12 hours, and is removed on
+ * sign-out or when someone else signs in on this terminal.
+ */
+const POS_DRAFT_KEY = 'rms-pos-cart';
+const POS_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+interface PosDraft {
+  userId: string;
+  branchId: string;
+  savedAt: number;
+  cart: CartItem[];
+  orderType: string;
+  selectedTable: PosTable | null;
+  customerName: string;
+  selectedCustomerId: string;
+  orderNotes: string;
+  selectedPromotionId: string;
+  manualDiscount: number;
+  manualDiscountType: 'FIXED' | 'PERCENTAGE';
+  requestId: { key: string; status: string } | null;
+}
+
+function loadPosDraft(userId?: string, branchId?: string): PosDraft | null {
+  if (!userId) return null;
+  try {
+    const raw = localStorage.getItem(POS_DRAFT_KEY);
+    if (!raw) return null;
+    const draft = JSON.parse(raw) as PosDraft;
+    const fresh = Date.now() - Number(draft.savedAt || 0) < POS_DRAFT_MAX_AGE_MS;
+    if (!fresh || draft.userId !== userId || (draft.branchId || '') !== (branchId || '') || !Array.isArray(draft.cart)) {
+      localStorage.removeItem(POS_DRAFT_KEY);
+      return null;
+    }
+    return draft;
+  } catch {
+    return null;
+  }
+}
+
 export default function POS() {
   const { user } = useAuth();
+  const restoredDraft = useRef<PosDraft | null | undefined>(undefined);
+  if (restoredDraft.current === undefined) restoredDraft.current = loadPosDraft(user?.id, getActiveBranchId(user));
+  const draft = restoredDraft.current;
   const [categories, setCategories] = useState<PosCategory[]>([]);
   const [tables, setTables] = useState<PosTable[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,19 +77,19 @@ export default function POS() {
   const [successMessage, setSuccessMessage] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [search, setSearch] = useState('');
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [orderType, setOrderType] = useState<string>('DINE_IN');
-  const [selectedTable, setSelectedTable] = useState<PosTable | null>(null);
-  const [customerName, setCustomerName] = useState('');
+  const [cart, setCart] = useState<CartItem[]>(() => draft?.cart ?? []);
+  const [orderType, setOrderType] = useState<string>(() => draft?.orderType ?? 'DINE_IN');
+  const [selectedTable, setSelectedTable] = useState<PosTable | null>(() => draft?.selectedTable ?? null);
+  const [customerName, setCustomerName] = useState(() => draft?.customerName ?? '');
   const [customers, setCustomers] = useState<any[]>([]);
   const [promotions, setPromotions] = useState<any[]>([]);
-  const [selectedPromotionId, setSelectedPromotionId] = useState('');
-  const [manualDiscountType, setManualDiscountType] = useState<'FIXED'|'PERCENTAGE'>('FIXED');
-  const [manualDiscount, setManualDiscount] = useState(0);
+  const [selectedPromotionId, setSelectedPromotionId] = useState(() => draft?.selectedPromotionId ?? '');
+  const [manualDiscountType, setManualDiscountType] = useState<'FIXED'|'PERCENTAGE'>(() => draft?.manualDiscountType ?? 'FIXED');
+  const [manualDiscount, setManualDiscount] = useState(() => draft?.manualDiscount ?? 0);
   const [taxRate, setTaxRate] = useState(0);
   const [serviceChargeRate, setServiceChargeRate] = useState(0);
-  const [selectedCustomerId, setSelectedCustomerId] = useState('');
-  const [orderNotes, setOrderNotes] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState(() => draft?.selectedCustomerId ?? '');
+  const [orderNotes, setOrderNotes] = useState(() => draft?.orderNotes ?? '');
   const [showModifierModal, setShowModifierModal] = useState(false);
   const [modifierError, setModifierError] = useState('');
   const [showTableModal, setShowTableModal] = useState(false);
@@ -372,10 +417,49 @@ export default function POS() {
   // One idempotency key per cart: kept across retries (e.g. after a gateway
   // timeout where the server did save the order), reset when the cart changes
   // or the order goes through, so a retry can never create a second order.
-  const pendingRequestId = useRef<{ key: string; status: string } | null>(null);
-  useEffect(() => { pendingRequestId.current = null; }, [cart, selectedTable, orderType, selectedPromotionId, manualDiscount, manualDiscountType]);
+  // A restored draft keeps its key: if the session expired while the order
+  // was being sent, the retry after login must not create a second order.
+  const pendingRequestId = useRef<{ key: string; status: string } | null>(draft?.requestId ?? null);
+  const skipKeyReset = useRef(true);
+  useEffect(() => {
+    if (skipKeyReset.current) { skipKeyReset.current = false; return; }
+    pendingRequestId.current = null;
+  }, [cart, selectedTable, orderType, selectedPromotionId, manualDiscount, manualDiscountType]);
+
+  const saveDraft = () => {
+    if (!user?.id) return;
+    try {
+      if (cart.length === 0) {
+        localStorage.removeItem(POS_DRAFT_KEY);
+        return;
+      }
+      const next: PosDraft = {
+        userId: user.id,
+        branchId: getActiveBranchId(user),
+        savedAt: Date.now(),
+        cart, orderType, selectedTable, customerName, selectedCustomerId, orderNotes,
+        selectedPromotionId, manualDiscount, manualDiscountType,
+        requestId: pendingRequestId.current,
+      };
+      localStorage.setItem(POS_DRAFT_KEY, JSON.stringify(next));
+    } catch {
+      // Storage full or blocked: the cart still works, it just won't survive a reload.
+    }
+  };
+  useEffect(() => {
+    if (draft?.cart.length) {
+      setSuccessMessage(`Restored the order you were working on (${draft.cart.length} item${draft.cart.length === 1 ? '' : 's'}).`);
+      const t = setTimeout(() => setSuccessMessage(''), 4500);
+      return () => clearTimeout(t);
+    }
+  }, []);
+  useEffect(saveDraft, [cart, orderType, selectedTable, customerName, selectedCustomerId, orderNotes, selectedPromotionId, manualDiscount, manualDiscountType, user?.id]);
+
   const requestIdFor = (status: 'SUBMITTED' | 'HELD') => {
-    if (!pendingRequestId.current || pendingRequestId.current.status !== status) pendingRequestId.current = { key: newRequestId(), status };
+    if (!pendingRequestId.current || pendingRequestId.current.status !== status) {
+      pendingRequestId.current = { key: newRequestId(), status };
+      saveDraft();
+    }
     return pendingRequestId.current.key;
   };
 

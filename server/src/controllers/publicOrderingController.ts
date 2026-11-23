@@ -3,6 +3,7 @@ import {
   getPublicRestaurants,
   getPublicMenu,
   createPublicOrder,
+  quotePublicOrder,
   confirmPublicPayment,
   getPublicOrderTracking,
   createPublicReservation,
@@ -12,6 +13,7 @@ import {
 
 export const getPublicRestaurantsController = (req: Request, res: Response) => getPublicRestaurants(req, res);
 export const getPublicMenuController = (req: Request, res: Response) => getPublicMenu(req, res);
+export const quotePublicOrderController = (req: Request, res: Response) => quotePublicOrder(req, res);
 export const createPublicOrderController = (req: Request, res: Response) => createPublicOrder(req, res);
 export const confirmPublicPaymentController = (req: Request, res: Response) => confirmPublicPayment(req, res);
 export const getPublicOrderTrackingController = (req: Request, res: Response) => getPublicOrderTracking(req, res);

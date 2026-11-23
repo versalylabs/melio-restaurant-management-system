@@ -14,63 +14,62 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { showInNavigation } from '../../lib/access';
 
 interface NavChild {
   title: string;
   href: string;
   disabled?: boolean;
-  roles?: string[];
 }
 
 interface NavItem {
   title: string;
   href?: string;
-  roles?: string[];
   icon: React.ComponentType<{ className?: string }>;
   children?: NavChild[];
 }
 
 const navigation: NavItem[] = [
-  { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','INVENTORY_MANAGER'] },
-  { title: 'Operations', icon: CreditCard, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','DELIVERY'], children: [
-    { title: 'POS', href: '/pos', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
-    { title: 'Orders', href: '/orders', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
-    { title: 'Deliveries', href: '/deliveries', roles: ['OWNER','ADMIN','MANAGER','DELIVERY','CASHIER','WAITER'] },
-    { title: 'Tables', href: '/tables', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
-    { title: 'Sections', href: '/sections', roles: ['OWNER','ADMIN','MANAGER'] },
-    { title: 'Kitchen', href: '/kitchen', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF'] },
-    { title: 'Reservations', href: '/reservations', roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'] },
-    { title: 'Branches', href: '/branches', roles: ['OWNER','ADMIN','MANAGER'] },
+  { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { title: 'Operations', icon: CreditCard, children: [
+    { title: 'POS', href: '/pos' },
+    { title: 'Orders', href: '/orders' },
+    { title: 'Deliveries', href: '/deliveries' },
+    { title: 'Tables', href: '/tables' },
+    { title: 'Sections', href: '/sections' },
+    { title: 'Kitchen', href: '/kitchen' },
+    { title: 'Reservations', href: '/reservations' },
+    { title: 'Branches', href: '/branches' },
   ]},
-  { title: 'Menu', icon: BookOpen, roles: ['OWNER','ADMIN','MANAGER'], children: [
+  { title: 'Menu', icon: BookOpen, children: [
     { title: 'Menu Items', href: '/menu-items' },
     { title: 'Categories', href: '/categories' },
     { title: 'Menu Preview', href: '/menu-preview' },
   ]},
-  { title: 'Inventory', icon: Package, roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER','CHEF'], children: [
-    { title: 'Inventory', href: '/inventory', roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER','CHEF'] },
-    { title: 'Suppliers', href: '/suppliers', roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER'] },
-    { title: 'Purchases', href: '/purchases', roles: ['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER'] },
+  { title: 'Inventory', icon: Package, children: [
+    { title: 'Inventory', href: '/inventory' },
+    { title: 'Suppliers', href: '/suppliers' },
+    { title: 'Purchases', href: '/purchases' },
   ]},
-  { title: 'Customers', icon: Users, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER'], children: [
+  { title: 'Customers', icon: Users, children: [
     { title: 'Customers', href: '/customers' }, { title: 'Loyalty', href: '/loyalty' },
   ]},
-  { title: 'Staff', icon: UserCog, roles: ['OWNER','ADMIN','MANAGER','CASHIER'], children: [
-    { title: 'Staff', href: '/staff', roles: ['OWNER','ADMIN','MANAGER'] }, { title: 'Shifts', href: '/shifts' },
+  { title: 'Staff', icon: UserCog, children: [
+    { title: 'Staff', href: '/staff' }, { title: 'Shifts', href: '/shifts' },
   ]},
-  { title: 'Finance', icon: Wallet, roles: ['OWNER','ADMIN','MANAGER','CASHIER'], children: [
-    { title: 'Payments', href: '/payments' }, { title: 'Expenses', href: '/expenses', roles: ['OWNER','ADMIN','MANAGER'] },
-    { title: 'Reports', href: '/reports', roles: ['OWNER','ADMIN','MANAGER'] }, { title: 'Analytics', href: '/analytics', roles: ['OWNER','ADMIN','MANAGER'] },
-    { title: 'Discounts & Promotions', href: '/promotions', roles: ['OWNER','ADMIN','MANAGER'] },
+  { title: 'Finance', icon: Wallet, children: [
+    { title: 'Payments', href: '/payments' }, { title: 'Expenses', href: '/expenses' },
+    { title: 'Reports', href: '/reports' }, { title: 'Analytics', href: '/analytics' },
+    { title: 'Discounts & Promotions', href: '/promotions' },
   ]},
-  { title: 'Notifications', href: '/notifications', icon: Bell, roles: ['OWNER','ADMIN','MANAGER','CASHIER','WAITER','CHEF','INVENTORY_MANAGER','DELIVERY'] },
-  { title: 'Administration', icon: Shield, roles: ['OWNER','ADMIN','MANAGER'], children: [
-    { title: 'User Accounts', href: '/users', roles: ['OWNER','ADMIN','MANAGER'] },
-    { title: 'Roles', href: '/roles', roles: ['OWNER','ADMIN'] },
-    { title: 'Automated Messaging', href: '/automated-messaging', roles: ['OWNER','ADMIN'] },
-    { title: 'Settings', href: '/settings', roles: ['OWNER','ADMIN','MANAGER'] },
-    { title: 'Website Management', href: '/website-management', roles: ['OWNER','ADMIN','MANAGER'] },
-    { title: 'Audit Log', href: '/audit-log', roles: ['OWNER','ADMIN'] },
+  { title: 'Notifications', href: '/notifications', icon: Bell },
+  { title: 'Administration', icon: Shield, children: [
+    { title: 'User Accounts', href: '/users' },
+    { title: 'Roles', href: '/roles' },
+    { title: 'Automated Messaging', href: '/automated-messaging' },
+    { title: 'Settings', href: '/settings' },
+    { title: 'Website Management', href: '/website-management' },
+    { title: 'Audit Log', href: '/audit-log' },
   ]},
 ];
 
@@ -78,9 +77,11 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Operations: true });
-  const role = user?.roleName || '';
-  const canSee = (roles?: string[]) => !roles || roles.includes(role);
-  const visibleNavigation = navigation.filter((item) => canSee(item.roles)).map((item) => ({ ...item, children: item.children?.filter((child) => canSee(child.roles)) })).filter((item) => !item.children || item.children.length > 0);
+  // Built from the same rules as the routes: built-in role OR permission, so
+  // users with custom roles see exactly the pages they can open.
+  const visibleNavigation = navigation
+    .map((item) => ({ ...item, children: item.children?.filter((child) => showInNavigation(user, child.href)) }))
+    .filter((item) => (item.children ? item.children.length > 0 : !!item.href && showInNavigation(user, item.href)));
 
   const renderNavItem = (item: NavItem) => {
     const Icon = item.icon;

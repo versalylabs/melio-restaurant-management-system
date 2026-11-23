@@ -3,6 +3,7 @@ import {
   getPublicRestaurantsController,
   getPublicMenuController,
   createPublicOrderController,
+  quotePublicOrderController,
   confirmPublicPaymentController,
   getPublicOrderTrackingController,
   createPublicReservationController,
@@ -14,6 +15,7 @@ import { publicApiRateLimiter, reservationRateLimiter } from '../middleware/rate
 const router = safeRouter();
 router.get('/restaurants', publicApiRateLimiter, getPublicRestaurantsController);
 router.get('/menu', publicApiRateLimiter, getPublicMenuController);
+router.post('/orders/quote', publicApiRateLimiter, quotePublicOrderController);
 router.post('/orders', publicApiRateLimiter, createPublicOrderController);
 router.get('/orders/:trackingToken', publicApiRateLimiter, getPublicOrderTrackingController);
 router.post('/orders/:trackingToken/pay/confirm', confirmPublicPaymentController);

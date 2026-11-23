@@ -13,7 +13,6 @@ import {
   X,
   Plus,
   Minus,
-  CheckCircle2,
   AlertCircle,
   Truck,
   Store,
@@ -66,6 +65,27 @@ type MenuItem = {
 };
 type CartLine = MenuItem & { quantity: number };
 
+interface OrderQuote {
+  subtotal: number;
+  discountAmount: number;
+  taxAmount: number;
+  serviceChargeAmount: number;
+  totalAmount: number;
+}
+
+// The cart survives a refresh: only ids and quantities are stored, and lines
+// are rebuilt from the freshly loaded menu so prices are always current.
+const cartStorageKey = (branchId: string) => `melio-online-cart:${branchId}`;
+const readStoredCart = (branchId: string): Array<{ id: string; quantity: number }> => {
+  try {
+    const raw = localStorage.getItem(cartStorageKey(branchId));
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((l) => l && typeof l.id === 'string' && Number(l.quantity) > 0) : [];
+  } catch {
+    return [];
+  }
+};
+
 const money = (value: number, currency = 'KES') =>
   new Intl.NumberFormat('en-KE', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
 
@@ -83,6 +103,7 @@ export default function OnlineOrdering() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [restaurantId, setRestaurantId] = useState('');
   const [branchId, setBranchId] = useState('');
+  const hydratedBranchRef = useRef<string>('');
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [branch, setBranch] = useState<Branch | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -182,6 +203,19 @@ export default function OnlineOrdering() {
       const menuItems = res.data.data?.items || [];
       setCategories(res.data.data?.categories || []);
       setItems(menuItems);
+      const stored = readStoredCart(targetBranchId);
+      hydratedBranchRef.current = targetBranchId;
+      if (stored.length) {
+        const byId = new Map<string, MenuItem>(menuItems.map((m: MenuItem) => [m.id, m]));
+        setCart((current) =>
+          current.length
+            ? current
+            : stored.flatMap((line) => {
+                const item = byId.get(line.id);
+                return item ? [{ ...item, quantity: Math.min(50, Math.floor(Number(line.quantity))) }] : [];
+              })
+        );
+      }
       // Preload images in background for instant viewing
       preloadImages(menuItems.map((i: any) => menuImage(i)));
       if (res.data.data?.restaurant) {
@@ -245,8 +279,68 @@ export default function OnlineOrdering() {
   const checkoutRequestId = useRef<string | null>(null);
   useEffect(() => { checkoutRequestId.current = null; }, [cart, branchId, form]);
 
+  useEffect(() => {
+    // Don't write until this branch's saved cart has been read back, or the
+    // empty cart on first render would erase it.
+    if (!branchId || hydratedBranchRef.current !== branchId) return;
+    try {
+      if (cart.length) localStorage.setItem(cartStorageKey(branchId), JSON.stringify(cart.map((l) => ({ id: l.id, quantity: l.quantity }))));
+      else localStorage.removeItem(cartStorageKey(branchId));
+    } catch {
+      // Storage unavailable: the cart just won't survive a refresh.
+    }
+  }, [cart, branchId]);
+
+  // Exact price from the server (tax, service charge, promotion) so the total
+  // shown before paying is the amount on the M-Pesa prompt.
+  const [quote, setQuote] = useState<OrderQuote | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState('');
+  const cartKey = cart.map((l) => `${l.id}:${l.quantity}`).join(',');
+  useEffect(() => {
+    if (!checkoutOpen || !cart.length || !restaurantId || !branchId) {
+      setQuote(null);
+      setQuoteError('');
+      return;
+    }
+    let cancelled = false;
+    // Never show (or submit against) a total for a different cart or code.
+    setQuote(null);
+    setQuoteLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await publicOrderingApi.quoteOrder({
+          restaurantId,
+          branchId,
+          promoCode: form.promoCode || undefined,
+          items: cart.map((item) => ({ menuItemId: item.id, quantity: item.quantity })),
+        });
+        if (!cancelled) {
+          setQuote(res.data.data);
+          setQuoteError('');
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setQuote(null);
+          setQuoteError(err.response?.data?.message || 'Could not calculate the final total. Any tax is added when the order is placed.');
+        }
+      } finally {
+        if (!cancelled) setQuoteLoading(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkoutOpen, cartKey, restaurantId, branchId, form.promoCode]);
+
   const placeOrder = async () => {
     if (!cart.length || submitting) return;
+    if (form.fulfillmentType === 'DELIVERY' && !form.deliveryAddress.trim()) {
+      setError('Please add a delivery address.');
+      return;
+    }
     setSubmitting(true);
     setError('');
     if (!checkoutRequestId.current) checkoutRequestId.current = newRequestId();
@@ -260,6 +354,7 @@ export default function OnlineOrdering() {
       });
       const data = response.data.data;
       setCart([]);
+      try { localStorage.removeItem(cartStorageKey(branchId)); } catch { /* ignore */ }
       setCheckoutOpen(false);
       navigate(`/online-order/${data.trackingToken}`);
     } catch (err: any) {
@@ -787,11 +882,20 @@ export default function OnlineOrdering() {
               </div>
             </div>
 
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                placeOrder();
+              }}
+            >
             <div className="mt-5 grid gap-3.5 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <label className="block text-xs font-semibold text-gray-300 mb-1">Full Name</label>
+                <label htmlFor="checkout-name" className="block text-xs font-semibold text-gray-300 mb-1">Full Name</label>
                 <input
+                  id="checkout-name"
                   required
+                  autoComplete="name"
+                  maxLength={120}
                   placeholder="e.g. Sarah Mwangi"
                   value={form.customerName}
                   onChange={(e) => setForm({ ...form, customerName: e.target.value })}
@@ -800,10 +904,15 @@ export default function OnlineOrdering() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">Contact Phone</label>
+                <label htmlFor="checkout-phone" className="block text-xs font-semibold text-gray-300 mb-1">Contact Phone</label>
                 <input
+                  id="checkout-phone"
                   required
                   type="tel"
+                  autoComplete="tel"
+                  inputMode="tel"
+                  pattern="[+]?[0-9][0-9 ]{8,15}"
+                  title="Enter a phone number such as 0712345678 or +254712345678"
                   placeholder="e.g. 0712345678"
                   value={form.contactPhone}
                   onChange={(e) => setForm({ ...form, contactPhone: e.target.value })}
@@ -812,9 +921,11 @@ export default function OnlineOrdering() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-300 mb-1">Email (Optional)</label>
+                <label htmlFor="checkout-email" className="block text-xs font-semibold text-gray-300 mb-1">Email (Optional)</label>
                 <input
+                  id="checkout-email"
                   type="email"
+                  autoComplete="email"
                   placeholder="e.g. guest@example.com"
                   value={form.contactEmail}
                   onChange={(e) => setForm({ ...form, contactEmail: e.target.value })}
@@ -898,25 +1009,50 @@ export default function OnlineOrdering() {
               </div>
             </div>
 
-            {/* Total summary */}
-            <div className="mt-5 rounded-2xl bg-zinc-900/90 border border-white/10 p-3.5 text-xs flex items-center justify-between">
-              <div>
-                <span className="text-gray-400">Total payable:</span>
-                <div className="text-lg font-serif font-bold text-orange-400">
-                  {money(subtotal, currency)}
+            {/* Total breakdown: the exact amount the customer will be charged */}
+            <div className="mt-5 rounded-2xl bg-zinc-900/90 border border-white/10 p-3.5 text-xs" aria-live="polite">
+              <dl className="space-y-1.5 text-gray-300">
+                <div className="flex justify-between">
+                  <dt>Subtotal ({totalItems} {totalItems === 1 ? 'item' : 'items'})</dt>
+                  <dd className="font-mono">{money(quote?.subtotal ?? subtotal, currency)}</dd>
                 </div>
+                {!!quote?.discountAmount && (
+                  <div className="flex justify-between text-emerald-400">
+                    <dt>Discount</dt>
+                    <dd className="font-mono">-{money(quote.discountAmount, currency)}</dd>
+                  </div>
+                )}
+                {!!quote?.taxAmount && (
+                  <div className="flex justify-between">
+                    <dt>Tax</dt>
+                    <dd className="font-mono">{money(quote.taxAmount, currency)}</dd>
+                  </div>
+                )}
+                {!!quote?.serviceChargeAmount && (
+                  <div className="flex justify-between">
+                    <dt>Service charge</dt>
+                    <dd className="font-mono">{money(quote.serviceChargeAmount, currency)}</dd>
+                  </div>
+                )}
+              </dl>
+              <div className="mt-2.5 pt-2.5 border-t border-white/10 flex items-end justify-between">
+                <span className="text-gray-400">{quote ? 'Total to pay' : 'Estimated total'}</span>
+                <span className="text-lg font-serif font-bold text-orange-400">
+                  {quoteLoading && !quote ? 'Calculating...' : money(quote?.totalAmount ?? subtotal, currency)}
+                </span>
               </div>
-              <div className="text-[11px] text-gray-400 text-right">
-                <span>{totalItems} items</span>
-                <div className="text-emerald-400 font-semibold flex items-center gap-1 justify-end">
-                  <CheckCircle2 size={12} /> Live Kitchen Tracking
-                </div>
-              </div>
+              {quoteError && <p className="mt-2 text-[11px] text-amber-300">{quoteError}</p>}
             </div>
 
+            {error && (
+              <div role="alert" className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 py-2.5 text-xs text-red-300">
+                {error}
+              </div>
+            )}
+
             <button
-              disabled={submitting || !cart.length}
-              onClick={placeOrder}
+              type="submit"
+              disabled={submitting || !cart.length || quoteLoading}
               className="mt-4 w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 py-3.5 text-xs font-bold uppercase tracking-wider text-white shadow-xl shadow-orange-500/25 transition active:scale-95 hover:from-orange-600 hover:to-amber-600 disabled:opacity-50"
             >
               {submitting ? (
@@ -930,6 +1066,7 @@ export default function OnlineOrdering() {
                 </>
               )}
             </button>
+            </form>
           </div>
         </div>
       )}

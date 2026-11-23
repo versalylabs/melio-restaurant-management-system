@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import AppShell from './components/layout/AppShell';
 
+import { getDefaultRoute, hasPermission, permissionForPath } from './lib/access';
 // Code-split pages with React.lazy for blazingly fast initial load and snappy route transitions
 const Login = lazy(() => import('./pages/auth/Login'));
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'));
@@ -49,49 +50,21 @@ const PageLoader = () => (
   </div>
 );
 
-export const getDefaultRouteForRole = (roleName?: string) => {
-  if (roleName === 'DELIVERY') return '/deliveries';
-  if (roleName === 'CHEF') return '/kitchen';
-  if (roleName === 'INVENTORY_MANAGER') return '/inventory';
-  return '/dashboard';
-};
-
-const permissionForPath = (path: string) => {
-  if (path === '/users' || path === '/staff') return 'users.view';
-  if (path === '/roles') return 'roles.manage';
-  if (path === '/audit-log') return 'audit.view';
-  if (path === '/reports' || path === '/analytics') return 'reports.view';
-  if (path === '/promotions') return 'promotions.view';
-  if (path === '/payments') return 'payments.view';
-  if (path === '/shifts') return 'shifts.view';
-  if (path === '/expenses') return 'expenses.view';
-  if (path === '/inventory' || path === '/suppliers' || path === '/purchases') return 'inventory.view';
-  if (path === '/menu-items' || path === '/categories' || path === '/menu-preview') return 'menu.view';
-  if (path.startsWith('/customers') || path === '/loyalty') return 'customers.view';
-  if (path === '/orders') return 'orders.view';
-  if (path === '/kitchen') return 'kitchen.view';
-  if (path === '/reservations') return 'reservations.view';
-  if (path === '/branches') return 'inventory.view';
-  if (path === '/pos') return 'pos.use';
-  if (path === '/tables' || path === '/sections') return 'tables.view';
-  if (path === '/website-management' || path === '/website_management') return 'dashboard.view';
-  if (path === '/notifications') return 'dashboard.view';
-  if (path === '/deliveries') return 'orders.view';
-  if (path === '/automated-messaging') return 'settings.manage';
-  if (path === '/dashboard' || path === '/settings') return 'dashboard.view';
-  return null;
-};
-
 function ProtectedRoute({ children, allowedRoles, requiredPermission }: { children: React.ReactNode; allowedRoles?: string[]; requiredPermission?: string }) {
   const { isAuthenticated, isLoading, user } = useAuth();
   const location = useLocation();
   if (isLoading) return <PageLoader />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  const permission = requiredPermission || permissionForPath(location.pathname);
-  const roleAllowed = !allowedRoles || !user || allowedRoles.includes(user.roleName);
-  const permissionAllowed = !!user && (!!permission && (user.permissions?.includes('*') || user.permissions?.includes(permission)));
-  if (allowedRoles && user && !roleAllowed && !permissionAllowed) {
-    return <Navigate to={getDefaultRouteForRole(user.roleName)} replace />;
+  const allowed =
+    !allowedRoles ||
+    !user ||
+    allowedRoles.includes(user.roleName) ||
+    hasPermission(user, requiredPermission || permissionForPath(location.pathname));
+  if (!allowed) {
+    const fallback = getDefaultRoute(user);
+    // Never redirect to the page we're already on (custom roles used to loop).
+    if (fallback !== location.pathname) return <Navigate to={fallback} replace />;
+    return <Navigate to="/notifications" replace />;
   }
   return <AppShell>{children}</AppShell>;
 }
@@ -207,7 +180,7 @@ function App() {
         <Route path="/account" element={<CustomerAccount />} />
         <Route path="/customer/login" element={<Navigate to="/account" replace />} />
         <Route path="/customer/account" element={<Navigate to="/account" replace />} />
-        <Route path="/login" element={isAuthenticated ? <Navigate to={getDefaultRouteForRole(user?.roleName)} replace /> : <Login />} />
+        <Route path="/login" element={isAuthenticated ? <Navigate to={getDefaultRoute(user)} replace /> : <Login />} />
         <Route path="/setup" element={<Setup />} />
         <Route
           path="/dashboard"

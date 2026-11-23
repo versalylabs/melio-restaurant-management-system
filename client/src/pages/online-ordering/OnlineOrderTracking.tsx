@@ -112,9 +112,9 @@ export default function OnlineOrderTracking() {
       if (res.data?.success) {
         hasOrderRef.current = true;
         setData(res.data.data);
-        if (res.data.data?.contactPhone && !mpesaPhone) {
-          setMpesaPhone(res.data.data.contactPhone);
-        }
+        const contactPhone = res.data.data?.contactPhone;
+        // Pre-fill once; never overwrite what the customer typed.
+        if (contactPhone) setMpesaPhone((current) => current || contactPhone);
       }
       setError('');
       setRefreshError('');
@@ -133,7 +133,7 @@ export default function OnlineOrderTracking() {
       setLoading(false);
       if (isManual) setRefreshing(false);
     }
-  }, [trackingToken, mpesaPhone]);
+  }, [trackingToken]);
 
   // Real-time Event Subscription for this specific order
   const { isConnected, subscribe } = useRealtimeEvents({

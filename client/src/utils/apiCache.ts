@@ -15,6 +15,10 @@ interface CacheEntry {
 
 const memoryCache = new Map<string, CacheEntry>();
 
+/** Bumped on every full clear; responses started before it are discarded. */
+let cacheGeneration = 0;
+export const getCacheGeneration = () => cacheGeneration;
+
 // Cache TTL configuration
 export const CACHE_CONFIG = {
   // Duration in ms where cached data is considered 100% fresh (no background revalidation)
@@ -24,6 +28,28 @@ export const CACHE_CONFIG = {
   // Maximum number of entries in memory
   MAX_ENTRIES: 100,
 };
+
+/**
+ * Operational endpoints whose data changes from other terminals (kitchen,
+ * other cashiers, customers paying online). These are never served from the
+ * cache: a ticket or payment that is seconds old is already wrong.
+ */
+const LIVE_ENDPOINTS: RegExp[] = [
+  /^\/orders(\/(?!pos\/menu)|\?|$)/, // orders and POS tables, but not the POS menu
+  /^\/kitchen\/tickets/,
+  /^\/payments/,
+  /^\/tables\/floor/,
+  /^\/tables(\?|$)/,
+  /^\/reservations/,
+  /^\/notifications(\?|$)/,
+  /^\/shifts\/current/,
+  /^\/public\/orders\//,
+  /^\/public\/reservations\/(?!availability)/,
+  /^\/public\/payments\//,
+  /^\/customer\/(orders|reservations)/,
+];
+
+export const isLiveEndpoint = (url: string): boolean => LIVE_ENDPOINTS.some((re) => re.test(url));
 
 export const getCacheKey = (url: string, params?: any, branchId?: string | null): string => {
   const paramStr = params ? JSON.stringify(params) : '';
@@ -57,8 +83,10 @@ export const getCachedResponse = (key: string): { data: any; isStale: boolean } 
 
 export const setCachedResponse = (
   key: string,
-  response: { data: any; status: number; statusText: string; headers: any }
+  response: { data: any; status: number; statusText: string; headers: any },
+  generation: number = cacheGeneration
 ) => {
+  if (generation !== cacheGeneration) return;
   // Enforce cache size limit
   if (memoryCache.size >= CACHE_CONFIG.MAX_ENTRIES) {
     const oldestKey = memoryCache.keys().next().value;
@@ -85,6 +113,7 @@ export const setCachedResponse = (
  */
 export const invalidateCache = (pattern?: string | RegExp) => {
   if (!pattern) {
+    cacheGeneration += 1;
     memoryCache.clear();
     return;
   }

@@ -17,7 +17,7 @@ import {
 import { useCustomerAuth } from '../../../contexts/CustomerAuthContext';
 import { useAuth } from '../../../contexts/AuthContext';
 import { authApi } from '../../../services/api';
-import { getDefaultRouteForRole } from '../../../App';
+import { getDefaultRoute } from '../../../lib/access';
 
 interface CustomerAuthModalProps {
   isOpen: boolean;
@@ -67,7 +67,7 @@ export default function CustomerAuthModal({
           const staffUser = res.data.data.user;
           staffLogin(res.data.data.token, staffUser);
           onClose();
-          navigate(getDefaultRouteForRole(staffUser?.roleName));
+          navigate(getDefaultRoute(staffUser));
           return;
         } else {
           setError(res.data.message || 'Invalid staff credentials');
@@ -88,7 +88,7 @@ export default function CustomerAuthModal({
                 const staffUser = staffRes.data.data.user;
                 staffLogin(staffRes.data.data.token, staffUser);
                 onClose();
-                navigate(getDefaultRouteForRole(staffUser?.roleName));
+                navigate(getDefaultRoute(staffUser));
                 return;
               }
             } catch {
