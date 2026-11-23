@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Clock, CheckCircle, AlertCircle, UtensilsCrossed, Wifi, WifiOff, UploadCloud, RefreshCw, Trash2 } from 'lucide-react';
+import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Clock, CheckCircle, AlertCircle, UtensilsCrossed, WifiOff, UploadCloud, RefreshCw, Trash2 } from 'lucide-react';
 import { orderApi, customerApi, promotionApi, restaurantApi, branchApi } from '../../services/api';
 import type { PosCategory, PosMenuItem, PosTable, SaleItem, SaleItemModifier } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';

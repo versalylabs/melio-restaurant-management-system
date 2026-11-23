@@ -25,9 +25,9 @@ Steps to get a free Neon database in 60 seconds:
 }
 
 // 1. Ensure schema.prisma has provider = "postgresql"
+// server/prisma is the only schema + migrations folder.
 const schemaPaths = [
   path.resolve(__dirname, '../prisma/schema.prisma'),
-  path.resolve(__dirname, '../../prisma/schema.prisma'),
 ];
 
 schemaPaths.forEach((schemaPath) => {

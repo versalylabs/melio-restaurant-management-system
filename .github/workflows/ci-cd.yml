@@ -33,8 +33,59 @@ jobs:
       - name: Compile Backend TypeScript
         run: npm run build:server
 
-      - name: Compile Frontend TypeScript & Vite Bundle
+      - name: Run Backend Tests
+        run: npm test
+
+      - name: Type-Check Frontend
+        run: cd client && npx tsc --noEmit -p tsconfig.json
+
+      - name: Build Frontend Vite Bundle
         run: npm run build:client
+
+  # ----------------------------------------------------
+  # Job: Migrations apply cleanly and match schema.prisma
+  # ----------------------------------------------------
+  migrations-check:
+    name: Database Migration Drift Check
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: melio
+          POSTGRES_PASSWORD: melio
+          POSTGRES_DB: melio_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U melio"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://melio:melio@localhost:5432/melio_ci?schema=public
+      DIRECT_URL: postgresql://melio:melio@localhost:5432/melio_ci?schema=public
+
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Apply Migrations To Empty Database
+        run: cd server && npx prisma migrate deploy
+
+      - name: Fail If Schema And Migrations Drift
+        run: cd server && npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
 
   # ----------------------------------------------------
   # Job 2: Docker Build Verification

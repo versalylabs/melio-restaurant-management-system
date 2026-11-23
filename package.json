@@ -18,6 +18,7 @@
     "db:generate": "cd server && npx prisma generate",
     "db:migrate": "cd server && npx prisma migrate dev",
     "db:push": "cd server && npx prisma db push",
+    "db:deploy": "cd server && npx prisma migrate deploy",
     "db:seed": "cd server && npx prisma db seed",
     "db:studio": "cd server && npx prisma studio",
     "db:reset": "cd server && npx prisma migrate reset --force",
