@@ -153,6 +153,12 @@ model User {
   lastLoginAt   DateTime?
   passwordChangedAt DateTime?
   tokenVersion  Int       @default(0)
+  /// bcrypt hash of the 4–6 digit approval PIN (owners, admins and managers).
+  pinHash       String?
+  pinUpdatedAt  DateTime?
+  /// Wrong PINs since the last correct one; drives the escalating lockout.
+  pinFailedCount Int      @default(0)
+  pinLockedUntil DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -555,12 +561,16 @@ model Sale {
   discountAmount      Float    @default(0)
   discountReason      String?
   discountAppliedBy   String?
+  /// Manager who approved a discount above the cashier's limit (by PIN).
+  discountApprovedBy  String?
   promotionId         String?
   taxAmount           Float    @default(0)
   serviceChargeAmount Float    @default(0)
   totalAmount         Float
   notes               String?
   createdBy           String
+  /// Staff member who served the table (waiter); defaults to the creator when they are a waiter.
+  servedBy            String?
   /// Idempotency key sent by the client (POS, offline sync, online checkout) so retries never duplicate an order.
   clientRequestId     String?
   /// Set once stock has been deducted for this order (claimed atomically; prevents double deduction).
@@ -1198,6 +1208,8 @@ model Payment {
   createdAt      DateTime @default(now())
   refundedAt     DateTime?
   refundReason   String?
+  refundedBy       String?
+  refundApprovedBy String?
 
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
@@ -1257,6 +1269,13 @@ model Shift {
   closingCash     Float?
   expectedCash    Float?
   cashVariance    Float?
+  /// Blind close: what the cashier counted, entered before the expected figures are shown.
+  declaredMobileMoney  Float?
+  declaredCard         Float?
+  expectedMobileMoney  Float?
+  expectedCard         Float?
+  mobileMoneyVariance  Float?
+  cardVariance         Float?
   notes           String?
   createdBy       String
   closedBy        String?
@@ -1369,4 +1388,30 @@ model MessageTemplate {
 
   @@unique([restaurantId, action])
   @@map("message_templates")
+}
+
+/// Every item removed, or order cancelled, after the kitchen had it. Kept for the loss prevention report.
+model VoidRecord {
+  id              String   @id @default(uuid())
+  restaurantId    String
+  branchId        String
+  saleId          String
+  /// ITEM: part of an order; ORDER: the whole order cancelled.
+  kind            String
+  saleItemId      String?
+  itemName        String?
+  quantity        Int      @default(1)
+  value           Float
+  reason          String
+  firedToKitchen  Boolean  @default(true)
+  /// Stock had already been taken out for this order (the food was made), so the void is also waste.
+  stockDeducted   Boolean  @default(false)
+  requestedBy     String
+  approvedBy      String?
+  createdAt       DateTime @default(now())
+
+  @@index([restaurantId, createdAt])
+  @@index([branchId, createdAt])
+  @@index([saleId])
+  @@map("void_records")
 }

@@ -36,7 +36,19 @@ export interface PromptRequest {
   resolve: (value: string | null) => void;
 }
 
-export type DialogRequest = ConfirmRequest | PromptRequest;
+export interface ApprovalRequest {
+  kind: 'approval';
+  id: number;
+  /** What is being approved, e.g. "A manager's approval is needed to refund a payment." */
+  message: string;
+  /** Shown in red, e.g. after a wrong PIN. */
+  error?: string;
+  branchId?: string;
+  lastApproverId?: string;
+  resolve: (value: { approverId: string; pin: string } | null) => void;
+}
+
+export type DialogRequest = ConfirmRequest | PromptRequest | ApprovalRequest;
 
 export interface Notice {
   id: number;
@@ -131,4 +143,15 @@ export function notify(message: string, tone: NoticeTone = 'error') {
   notices = [...notices.slice(-3), { id, message, tone }];
   emit();
   setTimeout(() => dialogStore.dismissNotice(id), tone === 'error' ? 7000 : 4000);
+}
+
+/** Asks a manager to pick their name and enter their PIN. Resolves null when cancelled. */
+export function approvalDialog(
+  message: string,
+  options: { error?: string; branchId?: string; lastApproverId?: string } = {}
+): Promise<{ approverId: string; pin: string } | null> {
+  return new Promise((resolve) => {
+    dialogs = [...dialogs, { kind: 'approval', id: nextId++, message, ...options, resolve }];
+    emit();
+  });
 }

@@ -8,7 +8,11 @@ import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { useAuth } from '../../contexts/AuthContext';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
-import { promptDialog } from '../../lib/dialogs';
+import { notify, promptDialog } from '../../lib/dialogs';
+import { isApprovalCancelled, withApproval } from '../../lib/approval';
+
+/** The kitchen has these orders; removing an item needs a manager's PIN. */
+const VOIDABLE_STATUSES = ['SUBMITTED', 'PREPARING', 'READY', 'SERVED', 'OUT_FOR_DELIVERY'];
 
 export default function Orders() {
   const { user } = useAuth();
@@ -131,6 +135,45 @@ export default function Orders() {
     return listenForBranchChanges(() => fetchOrders());
   }, [page, search, filterStatus, filterType, user?.id]);
 
+  const handleVoidItem = async (order: Sale, item: Sale['items'][number]) => {
+    let quantity = 1;
+    if (item.quantity > 1) {
+      const answer = await promptDialog(`How many ${item.itemNameSnapshot} should be removed? (1 to ${item.quantity})`, {
+        title: 'Remove item',
+        defaultValue: String(item.quantity),
+        required: true,
+        confirmLabel: 'Next',
+      });
+      if (answer === null) return;
+      quantity = Number(answer);
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > item.quantity) {
+        notify(`Enter a whole number from 1 to ${item.quantity}.`);
+        return;
+      }
+    }
+    const reason = await promptDialog(`Why is ${quantity} × ${item.itemNameSnapshot} being removed?`, {
+      title: 'Remove item',
+      placeholder: 'e.g. customer changed their mind, wrong item rung up',
+      required: true,
+      multiline: true,
+      confirmLabel: 'Remove item',
+    });
+    if (!reason) return;
+    setActingId(order.id);
+    try {
+      const res = await withApproval((approval) => orderApi.voidItem(order.id, item.id, { quantity, reason, approval }), { branchId: order.branchId });
+      showSuccess(`Removed ${quantity} × ${item.itemNameSnapshot}. The kitchen has been told.`);
+      const fresh = await orderApi.getOrder(order.id).catch(() => null);
+      setSelectedOrder(fresh?.data?.data || res.data.data);
+      await fetchOrders();
+    } catch (err: any) {
+      if (isApprovalCancelled(err)) return;
+      notify(err.response?.data?.message || 'Could not remove the item');
+    } finally {
+      setActingId(null);
+    }
+  };
+
   const handleViewOrder = async (order: Sale) => {
     setError('');
     setActingId(order.id);
@@ -171,10 +214,11 @@ export default function Orders() {
     setError('');
     setActingId(order.id);
     try {
-      await orderApi.cancelOrder(order.id, { cancelReason: reason });
+      await withApproval((approval) => orderApi.cancelOrder(order.id, { cancelReason: reason, approval }), { branchId: order.branchId });
       showSuccess(`Order ${order.orderNumber} cancelled`);
       await fetchOrders();
     } catch (err: any) {
+      if (isApprovalCancelled(err)) return;
       setError(err.response?.data?.message || 'Failed to cancel order');
     } finally {
       setActingId(null);
@@ -430,6 +474,12 @@ export default function Orders() {
                   {selectedOrder.status}
                 </Badge>
               </div>
+              {selectedOrder.servedByName && (
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">Served by</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{selectedOrder.servedByName}</p>
+                </div>
+              )}
               {selectedOrder.tableNumber && (
                 <div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 uppercase">Table</p>
@@ -475,9 +525,21 @@ export default function Orders() {
                           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 italic">Note: {item.notes}</p>
                         )}
                       </div>
-                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        KES {(item.unitPrice * item.quantity + item.modifiers.reduce((s, m) => s + m.priceAdjustment * item.quantity, 0)).toLocaleString()}
-                      </p>
+                      <div className="flex items-center gap-3">
+                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                          KES {(item.unitPrice * item.quantity + item.modifiers.reduce((s, m) => s + m.priceAdjustment * item.quantity, 0)).toLocaleString()}
+                        </p>
+                        {VOIDABLE_STATUSES.includes(selectedOrder.status) && !(selectedOrder.amountPaid > 0) && selectedOrder.items.length + (item.quantity > 1 ? 1 : 0) > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleVoidItem(selectedOrder, item)}
+                            disabled={actingId === selectedOrder.id}
+                            className="min-h-[36px] rounded-lg border border-red-200 px-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}

@@ -258,6 +258,9 @@ export const orderApi = {
   resumeOrder: (id: string) => api.post(`/orders/${id}/resume`),
   submitOrder: (id: string) => api.post(`/orders/${id}/submit`),
   cancelOrder: (id: string, data: any) => api.post(`/orders/${id}/cancel`, data),
+  voidItem: (id: string, itemId: string, data: { quantity: number; reason: string; approval?: Approval }) =>
+    api.post(`/orders/${id}/items/${itemId}/void`, data),
+  getPosStaff: () => api.get('/orders/pos/staff'),
   updateOrderStatus: (id: string, status: string) => api.patch(`/orders/${id}/status`, { status }),
   getPosMenu: () => cachedGet('/orders/pos/menu'),
   getPosTables: () => cachedGet('/orders/pos/tables'),
@@ -380,6 +383,8 @@ export const paymentApi = {
 
 export const reportApi = {
   getSalesReport: (params?: any) => cachedGet('/reports/sales', { params }),
+  // Not cached: it should reflect voids and shift closes immediately.
+  getLossReport: (params?: any) => api.get('/reports/loss-prevention', { params }),
   exportSalesReport: (params?: any) => api.get('/reports/sales/export', { params, responseType: 'blob' }),
 };
 
@@ -485,4 +490,17 @@ export const automatedMessagingApi = {
   updateTemplate: (action: string, data: any) => api.put(`/automated-messaging/${action}`, data),
   sendTest: (data: { action: string; recipientEmail?: string; recipientPhone?: string }) =>
     api.post('/automated-messaging/test', data),
+};
+
+/** A manager's approval (their user id and PIN) sent with a risky till action. */
+export interface Approval {
+  approverId: string;
+  pin: string;
+}
+
+export const approvalApi = {
+  getApprovers: (branchId?: string) => api.get('/approvals/approvers', { params: branchId ? { branchId } : undefined }),
+  getPinStatus: () => api.get('/approvals/pin'),
+  setPin: (data: { currentPassword: string; pin: string }) => api.put('/approvals/pin', data),
+  clearPin: (userId: string) => api.delete(`/approvals/users/${userId}/pin`),
 };

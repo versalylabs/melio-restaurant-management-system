@@ -234,6 +234,9 @@ export interface Sale {
   totalAmount: number;
   notes?: string;
   createdBy: string;
+  /** Staff member who served the table. */
+  servedBy?: string | null;
+  servedByName?: string | null;
   completedAt?: string;
   cancelledAt?: string;
   cancelReason?: string;

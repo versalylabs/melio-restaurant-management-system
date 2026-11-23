@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { showInNavigation } from '../../lib/access';
+import ApprovalPinModal from '../common/ApprovalPinModal';
 
 interface NavChild {
   title: string;
@@ -59,7 +60,7 @@ const navigation: NavItem[] = [
   ]},
   { title: 'Finance', icon: Wallet, children: [
     { title: 'Payments', href: '/payments' }, { title: 'Expenses', href: '/expenses' },
-    { title: 'Reports', href: '/reports' }, { title: 'Analytics', href: '/analytics' },
+    { title: 'Reports', href: '/reports' }, { title: 'Loss Prevention', href: '/loss-prevention' }, { title: 'Analytics', href: '/analytics' },
     { title: 'Discounts & Promotions', href: '/promotions' },
   ]},
   { title: 'Notifications', href: '/notifications', icon: Bell },
@@ -77,6 +78,8 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Operations: true });
+  const [pinOpen, setPinOpen] = useState(false);
+  const canApprove = ['OWNER', 'ADMIN', 'MANAGER'].includes(user?.roleName || '');
   // Built from the same rules as the routes: built-in role OR permission, so
   // users with custom roles see exactly the pages they can open.
   const visibleNavigation = navigation
@@ -177,6 +180,15 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <p className="text-[10px] uppercase font-bold tracking-wider text-orange-500 truncate">{user?.roleName}</p>
           </div>
         </div>
+        {canApprove && (
+          <button
+            onClick={() => setPinOpen(true)}
+            className="mb-1 w-full text-center px-3 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-200 hover:bg-orange-500/10 rounded-xl transition-colors"
+          >
+            Approval PIN
+          </button>
+        )}
+        {pinOpen && <ApprovalPinModal onClose={() => setPinOpen(false)} />}
         <button
           onClick={logout}
           className="w-full text-center px-3 py-1.5 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-500/10 rounded-xl transition-colors"

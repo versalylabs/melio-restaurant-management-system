@@ -69,6 +69,11 @@ async function run() {
   const branchId = cashier.branchId!;
   const cashierToken = generateToken(cashier.id, restaurantId, cashier.tokenVersion);
   const ownerToken = generateToken(owner.id, restaurantId, owner.tokenVersion);
+  // Voids after the kitchen has an order and refunds need a manager's PIN.
+  const TEST_PIN = '8642';
+  await prisma.user.update({ where: { id: owner.id }, data: { pinHash: await require('bcryptjs').hash(TEST_PIN, 4) } });
+  await prisma.user.update({ where: { id: owner.id }, data: { pinFailedCount: 0, pinLockedUntil: null } });
+  const approval = { approverId: owner.id, pin: TEST_PIN };
   const menuItem = await prisma.menuItem.findFirst({ where: { restaurantId, status: 'ACTIVE', available: true, sellingPrice: { gt: 0 } } });
   assert.ok(menuItem, 'an active menu item is required');
 
@@ -111,7 +116,7 @@ async function run() {
     const order = (await newOrder()).body.data;
     const pay = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
     const pid = pay.body.data.payment.id;
-    const refund = () => call('POST', `/payments/${pid}/refund`, ownerToken, { reason: 'test' });
+    const refund = () => call('POST', `/payments/${pid}/refund`, ownerToken, { reason: 'test', approval });
     const results = await Promise.all([refund(), refund()]);
     assert.strictEqual(results.filter((r) => r.status === 200).length, 1, `statuses ${results.map((r) => r.status)}`);
   });
@@ -120,12 +125,12 @@ async function run() {
   await test('an order with a payment cannot be cancelled until refunded', async () => {
     const order = (await newOrder()).body.data;
     await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: 1 });
-    const res = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test' });
+    const res = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test', approval });
     assert.strictEqual(res.status, 409);
   });
   await test('cancelling an order cancels its kitchen ticket', async () => {
     const order = (await newOrder()).body.data;
-    const res = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'customer left' });
+    const res = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'customer left', approval });
     assert.strictEqual(res.status, 200);
     const ticket = await prisma.kitchenTicket.findFirst({ where: { orderId: order.id } });
     assert.strictEqual(ticket.status, 'CANCELLED');
@@ -173,14 +178,14 @@ async function run() {
   await test('cancel is refused while an M-Pesa payment awaits verification', async () => {
     const { online, payment } = await placeOnlineMpesaOrder();
     await prisma.payment.update({ where: { id: payment.id }, data: { reference: `ws_CO_${uid()}`, notes: '[AWAITING_VERIFICATION receipt=ABC123 amount=100]', createdAt: new Date(Date.now() - 3_600_000) } });
-    const res = await call('POST', `/orders/${online.saleId}/cancel`, cashierToken, {});
+    const res = await call('POST', `/orders/${online.saleId}/cancel`, cashierToken, { cancelReason: 'test', approval });
     assert.strictEqual(res.status, 409);
   });
   await test('an M-Pesa payment confirmed after cancellation is recorded and flagged for refund', async () => {
     const { online, payment } = await placeOnlineMpesaOrder();
     // Prompt sent long ago (customer never finished), so staff may cancel...
     await prisma.payment.update({ where: { id: payment.id }, data: { reference: `ws_CO_${uid()}`, createdAt: new Date(Date.now() - 3_600_000) } });
-    const cancel = await call('POST', `/orders/${online.saleId}/cancel`, cashierToken, {});
+    const cancel = await call('POST', `/orders/${online.saleId}/cancel`, cashierToken, { cancelReason: 'test', approval });
     assert.strictEqual(cancel.status, 200, JSON.stringify(cancel.body));
     const stillPending = await prisma.payment.findUnique({ where: { id: payment.id } });
     assert.strictEqual(stillPending.status, 'PENDING', 'a sent M-Pesa prompt must stay PENDING after cancel');
@@ -240,7 +245,7 @@ async function run() {
   await test('serving a cancelled order is refused', async () => {
     const order = (await newOrder()).body.data;
     const ticket = await prisma.kitchenTicket.findFirst({ where: { orderId: order.id } });
-    await call('POST', `/orders/${order.id}/cancel`, cashierToken, {});
+    await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test', approval });
     const res = await call('PATCH', `/kitchen/tickets/${ticket.id}/status`, cashierToken, { status: 'SERVED' });
     assert.strictEqual(res.status, 409);
   });
@@ -320,12 +325,89 @@ async function run() {
       assert.strictEqual(r.status, 200, `${st}: ${JSON.stringify(r.body)}`);
     }
     const before = (await call('GET', '/reports/sales', ownerToken)).body.data.summary;
-    await call('POST', `/payments/${pay.body.data.payment.id}/refund`, ownerToken, { reason: 'test' });
+    await call('POST', `/payments/${pay.body.data.payment.id}/refund`, ownerToken, { reason: 'test', approval });
     const after = (await call('GET', '/reports/sales', ownerToken)).body.data.summary;
     const near = (a: number, b: number) => Math.abs(a - b) < 0.01;
     assert.ok(near(after.totalRefunds - before.totalRefunds, order.totalAmount), 'refund counted once');
     assert.ok(near(after.unpaidAmount, before.unpaidAmount), 'refunded order must not become "unpaid"');
     assert.ok(near(before.collectedSales - after.collectedSales, order.totalAmount), 'collected drops by the refund');
+  });
+
+  console.log('\n--- Loss prevention: manager approval ---');
+  await test('cancelling an order the kitchen has needs a PIN, and is logged as a void', async () => {
+    const order = (await newOrder()).body.data;
+    const refused = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test' });
+    assert.strictEqual(refused.status, 428);
+    assert.deepStrictEqual(refused.body.errors?.approval, ['APPROVAL_REQUIRED']);
+    const wrong = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test', approval: { ...approval, pin: '0000' } });
+    assert.deepStrictEqual(wrong.body.errors?.approval, ['APPROVAL_INVALID']);
+    await prisma.auditLog.deleteMany({ where: { restaurantId, action: 'APPROVAL_FAILED' } });
+    const ok = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test', approval });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const log = await prisma.voidRecord.findFirst({ where: { saleId: order.id, kind: 'ORDER' } });
+    assert.ok(log && log.approvedBy === owner.id && log.requestedBy === cashier.id);
+  });
+  await test('a held order (never sent to the kitchen) cancels without a PIN', async () => {
+    const order = (await newOrder({ status: 'HELD' })).body.data;
+    const res = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test' });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(await prisma.voidRecord.count({ where: { saleId: order.id } }), 0);
+  });
+  await test('removing one of two items needs a PIN, lowers the bill and the kitchen line', async () => {
+    const order = (await newOrder()).body.data;
+    const item = order.items[0];
+    const refused = await call('POST', `/orders/${order.id}/items/${item.id}/void`, cashierToken, { quantity: 1, reason: 'test' });
+    assert.strictEqual(refused.status, 428);
+    const res = await call('POST', `/orders/${order.id}/items/${item.id}/void`, cashierToken, { quantity: 1, reason: 'test', approval });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.ok(res.body.data.totalAmount < order.totalAmount, 'total must drop');
+    const kitchenLine = await prisma.kitchenTicketItem.findFirst({ where: { saleItemId: item.id } });
+    assert.strictEqual(kitchenLine?.quantity, 1);
+    const log = await prisma.voidRecord.findFirst({ where: { saleId: order.id, kind: 'ITEM' } });
+    assert.ok(log && log.quantity === 1 && log.value === menuItem.sellingPrice);
+  });
+  await test('the last item cannot be removed (cancel the order instead)', async () => {
+    const order = (await call('POST', '/orders', cashierToken, { orderType: 'TAKEAWAY', status: 'SUBMITTED', items: [{ menuItemId: menuItem.id, quantity: 1, modifiers: [] }] })).body.data;
+    const res = await call('POST', `/orders/${order.id}/items/${order.items[0].id}/void`, cashierToken, { quantity: 1, reason: 'test', approval });
+    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+  });
+  await test('a discount above the cashier limit needs an approver whose limit covers it', async () => {
+    const big = { discountAmount: 50, discountType: 'PERCENTAGE', discountReason: 'test' };
+    const refused = await newOrder(big);
+    assert.strictEqual(refused.status, 428, JSON.stringify(refused.body));
+    const ok = await newOrder({ ...big, approval });
+    assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+    assert.strictEqual(ok.body.data.discountApprovedBy, owner.id);
+  });
+  await test('a cashier does not see expected cash while their shift is open', async () => {
+    await prisma.shift.updateMany({ where: { userId: cashier.id, status: 'OPEN' }, data: { status: 'CLOSED', closedAt: new Date() } });
+    await call('POST', '/shifts', cashierToken, { openingCash: 500 });
+    const current = (await call('GET', '/shifts/current', cashierToken)).body.data.shift;
+    assert.strictEqual(current.expectedCash, undefined);
+    const closed = await call('POST', `/shifts/${current.id}/close`, cashierToken, { closingCash: 450, declaredMobileMoney: 0, declaredCard: 0 });
+    assert.strictEqual(closed.status, 200, JSON.stringify(closed.body));
+    assert.strictEqual(closed.body.data.shift.cashVariance, -50);
+  });
+
+  await test('editing a held order down to a smaller bill re-checks the discount', async () => {
+    const price = menuItem.sellingPrice;
+    const quantity = Math.min(10, Math.max(2, Math.ceil(10000 / price)));
+    const discount = Math.floor(Math.min(1000, 0.1 * quantity * price));
+    const held = await call('POST', '/orders', cashierToken, { orderType: 'TAKEAWAY', status: 'HELD', discountAmount: discount, discountType: 'FIXED', items: [{ menuItemId: menuItem.id, quantity, modifiers: [] }] });
+    assert.strictEqual(held.status, 201, JSON.stringify(held.body));
+    const shrink = await call('PATCH', `/orders/${held.body.data.id}`, cashierToken, { items: [{ menuItemId: menuItem.id, quantity: 1, modifiers: [] }] });
+    assert.strictEqual(shrink.status, 428, `kept a ${discount} discount on a ${price} bill: ${JSON.stringify(shrink.body)}`);
+  });
+  await test('a burst of wrong PINs locks that PIN after five tries', async () => {
+    const order = (await newOrder()).body.data;
+    const guesses = ['1111', '2222', '3333', '4444', '5555', '6666', '7777', '9999'];
+    const results = await Promise.all(guesses.map((pin) =>
+      call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test', approval: { ...approval, pin } })));
+    const wrong = results.filter((r) => r.body.errors?.approval?.[0] === 'APPROVAL_INVALID').length;
+    assert.ok(wrong <= 4, `${wrong} guesses were checked before the lock`);
+    const right = await call('POST', `/orders/${order.id}/cancel`, cashierToken, { cancelReason: 'test', approval });
+    assert.strictEqual(right.status, 429, 'even the right PIN is refused while locked');
+    await prisma.user.update({ where: { id: owner.id }, data: { pinFailedCount: 0, pinLockedUntil: null } });
   });
 
   server.close();

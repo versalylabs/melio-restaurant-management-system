@@ -32,6 +32,7 @@ import realtimeRoutes from './realtime';
 import publicPaymentsRoutes from './publicPayments';
 import automatedMessagingRoutes from './automatedMessaging';
 import mediaRoutes from './media';
+import approvalsRoutes from './approvals';
 import { notFound } from '../middleware/errorHandler';
 import { errorHandler } from '../middleware/errorHandler';
 
@@ -51,6 +52,7 @@ router.use('/sections', sectionsRoutes);
 router.use('/tables', tablesRoutes);
 router.use('/table-combinations', tableCombinationsRoutes);
 router.use('/orders', ordersRoutes);
+router.use('/approvals', approvalsRoutes);
 router.use('/kitchen', kitchenRoutes);
 router.use('/kitchen', kitchenTicketsRoutes);
 router.use('/inventory', inventoryRoutes);

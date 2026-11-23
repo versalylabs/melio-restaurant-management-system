@@ -8,12 +8,14 @@ import { ensureReceipt, lockSale, syncPaymentState } from '../services/saleLedge
 import { completeOrder } from '../services/orderCompletionService';
 import { reverifyAwaitingPayment } from '../services/mpesaService';
 import { realtimeService } from '../services/realtimeService';
+import { sendApprovalError, verifyApproval } from '../services/approvalService';
 
 import { safeRouter } from '../utils/safeRouter';
 const router = safeRouter();
 router.use(authenticate);
 const PAYMENT_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER'];
-const REFUND_ROLES = ['OWNER', 'ADMIN', 'MANAGER'];
+// Cashiers can refund too, but every refund needs a manager's PIN.
+const REFUND_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER'];
 // Waiters can see an order's payment status and receipt, but not the full payments ledger.
 const ORDER_PAYMENT_VIEW_ROLES = [...PAYMENT_ROLES, 'WAITER'];
 const METHODS = ['CASH', 'CARD', 'MOBILE_MONEY'];
@@ -141,6 +143,18 @@ router.post('/:id/refund', authorize(...REFUND_ROLES), async (req: AuthRequest, 
   try {
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (!reason) return sendError(res, 'Refund reason is required');
+    const target = await prisma.payment.findFirst({
+      where: { id: req.params.id, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) },
+      select: { branchId: true },
+    });
+    if (!target) return sendError(res, 'Payment not found', undefined, 404);
+    let approver;
+    try {
+      approver = await verifyApproval(req, 'refund a payment', { branchId: target.branchId });
+    } catch (err) {
+      if (sendApprovalError(res, err)) return;
+      throw err;
+    }
     const result = await prisma.$transaction(async (tx) => {
       const scope = { id: req.params.id, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) };
       const found = await tx.payment.findFirst({ where: scope, select: { saleId: true } });
@@ -150,11 +164,11 @@ router.post('/:id/refund', authorize(...REFUND_ROLES), async (req: AuthRequest, 
       const payment = await tx.payment.findFirst({ where: scope });
       if (!payment) throw new Error('PAYMENT_NOT_FOUND');
       if (payment.status !== 'COMPLETED') throw new Error('PAYMENT_ALREADY_REFUNDED');
-      await tx.payment.update({ where: { id: payment.id }, data: { status: 'REFUNDED', refundedAt: new Date(), refundReason: reason } });
+      await tx.payment.update({ where: { id: payment.id }, data: { status: 'REFUNDED', refundedAt: new Date(), refundReason: reason, refundedBy: req.user!.id, refundApprovedBy: approver.id } });
       const state = await syncPaymentState(tx, payment.saleId);
       return { paymentId: payment.id, ...state };
     });
-    await createAuditLog(req.user!.restaurantId, req.user!.id, 'REFUND', 'Payment', req.params.id, `Refunded payment: ${reason}`);
+    await createAuditLog(req.user!.restaurantId, req.user!.id, 'REFUND', 'Payment', req.params.id, `Refunded payment, approved by ${approver.name}: ${reason}`);
     return sendResponse(res, true, 'Payment refunded', result);
   } catch (e: any) {
     if (e?.message === 'PAYMENT_NOT_FOUND') return sendError(res, 'Payment not found', undefined, 404);

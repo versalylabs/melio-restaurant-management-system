@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { useLocation } from 'react-router-dom';
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
-import { dialogStore, type ConfirmRequest, type PromptRequest } from '../../lib/dialogs';
+import { dialogStore, type ApprovalRequest, type ConfirmRequest, type PromptRequest } from '../../lib/dialogs';
+import { approvalApi } from '../../services/api';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
 import Button from './Button';
 
@@ -92,6 +93,97 @@ function PromptView({ request }: { request: PromptRequest }) {
   );
 }
 
+const fieldClass =
+  'w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/30 dark:border-white/15 dark:bg-[#0d0d11]';
+
+/** Manager picks their name and types their PIN on the device in front of them. */
+function ApprovalView({ request }: { request: ApprovalRequest }) {
+  const [approvers, setApprovers] = useState<{ id: string; name: string; role: string }[] | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [approverId, setApproverId] = useState(request.lastApproverId || '');
+  const [pin, setPin] = useState('');
+  const nameId = useId();
+  const pinId = useId();
+  useEffect(() => {
+    let live = true;
+    approvalApi
+      .getApprovers(request.branchId)
+      .then((res) => {
+        if (!live) return;
+        const list = res.data.data?.approvers || [];
+        setApprovers(list);
+        if (!request.lastApproverId && list.length === 1) setApproverId(list[0].id);
+      })
+      .catch(() => live && setLoadError('Could not load the list of managers. Check the connection and try again.'));
+    return () => {
+      live = false;
+    };
+  }, [request.branchId, request.lastApproverId]);
+
+  const finish = (result: { approverId: string; pin: string } | null) => {
+    dialogStore.settle(request.id);
+    request.resolve(result);
+  };
+  const canSubmit = !!approverId && /^\d{4,6}$/.test(pin);
+  return (
+    <DialogFrame title="Manager approval" onCancel={() => finish(null)}>
+      <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">{request.message}</p>
+      {request.error && (
+        <p role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/60 dark:text-red-200">
+          {request.error}
+        </p>
+      )}
+      {loadError && <p role="alert" className="mt-3 text-sm text-red-600">{loadError}</p>}
+      {approvers && approvers.length === 0 ? (
+        <>
+          <p className="mt-4 text-sm text-gray-600 dark:text-gray-300">
+            No manager at this branch has set an approval PIN yet. A manager can set one from the menu under their name: <strong>Approval PIN</strong>.
+          </p>
+          <div className="mt-6 flex justify-end">
+            <Button variant="secondary" onClick={() => finish(null)} data-autofocus>Close</Button>
+          </div>
+        </>
+      ) : (
+        <form
+          className="mt-4 space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (canSubmit) finish({ approverId, pin });
+          }}
+        >
+          <div>
+            <label htmlFor={nameId} className="mb-1 block text-sm font-medium">Manager</label>
+            <select id={nameId} value={approverId} onChange={(e) => setApproverId(e.target.value)} className={fieldClass} disabled={!approvers} {...(approverId ? {} : { 'data-autofocus': true })}>
+              <option value="">{approvers ? 'Choose a manager' : 'Loading…'}</option>
+              {(approvers || []).map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor={pinId} className="mb-1 block text-sm font-medium">PIN</label>
+            <input
+              id={pinId}
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={6}
+              value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+              className={`${fieldClass} tracking-[0.4em]`}
+              {...(approverId ? { 'data-autofocus': true } : {})}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-3">
+            <Button type="button" variant="secondary" onClick={() => finish(null)}>Cancel</Button>
+            <Button type="submit" disabled={!canSubmit}>Approve</Button>
+          </div>
+        </form>
+      )}
+    </DialogFrame>
+  );
+}
+
 const TONE = {
   error: { icon: AlertCircle, className: 'border-red-500/30 bg-red-50 text-red-800 dark:bg-red-950/90 dark:text-red-200' },
   success: { icon: CheckCircle2, className: 'border-emerald-500/30 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-200' },
@@ -116,6 +208,7 @@ export default function DialogHost() {
     <>
       {current?.kind === 'confirm' && <ConfirmView key={current.id} request={current} />}
       {current?.kind === 'prompt' && <PromptView key={current.id} request={current} />}
+      {current?.kind === 'approval' && <ApprovalView key={current.id} request={current} />}
       <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[80] flex flex-col items-center gap-2 px-4 sm:items-end sm:pr-6" aria-live="polite" role="status">
         {notices.map((notice) => {
           const tone = TONE[notice.tone];
