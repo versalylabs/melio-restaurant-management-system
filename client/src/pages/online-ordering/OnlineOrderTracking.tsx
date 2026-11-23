@@ -84,6 +84,7 @@ export default function OnlineOrderTracking() {
   const [mpesaSuccess, setMpesaSuccess] = useState(false);
   const [mpesaError, setMpesaError] = useState('');
   const [checkoutRequestId, setCheckoutRequestId] = useState('');
+  const [mpesaSimulated, setMpesaSimulated] = useState(false);
 
   // Card Form State
   const [cardForm, setCardForm] = useState({
@@ -148,11 +149,44 @@ export default function OnlineOrderTracking() {
       setPaymentModalType(null);
     });
 
+    const unsubPaymentFailed = subscribe('payment_failed', (payload: any) => {
+      setMpesaSuccess(false);
+      setCheckoutRequestId('');
+      setMpesaError(payload?.reason || 'The M-Pesa payment was not completed. Please try again.');
+    });
+
     return () => {
       unsubStatus();
       unsubPayment();
+      unsubPaymentFailed();
     };
   }, [subscribe]);
+
+  // While waiting for the customer to approve the STK prompt, poll the
+  // server-side payment status as a fallback for blocked realtime streams.
+  const checkMpesaStatus = useCallback(async () => {
+    if (!checkoutRequestId) return;
+    try {
+      const res = await publicPaymentsApi.getMpesaStatus(checkoutRequestId);
+      const status = res.data?.data?.status;
+      if (status === 'SUCCESS') {
+        setData((prev: any) => (prev ? { ...prev, paymentState: 'PAID', paymentStatus: 'PAID' } : prev));
+        setPaymentModalType(null);
+      } else if (status === 'FAILED') {
+        setMpesaSuccess(false);
+        setCheckoutRequestId('');
+        setMpesaError('The M-Pesa payment was not completed. Please try again.');
+      }
+    } catch {
+      /* keep waiting */
+    }
+  }, [checkoutRequestId]);
+
+  useEffect(() => {
+    if (!checkoutRequestId || mpesaSimulated) return;
+    const timer = window.setInterval(checkMpesaStatus, 4000);
+    return () => window.clearInterval(timer);
+  }, [checkoutRequestId, mpesaSimulated, checkMpesaStatus]);
 
   // SSE is the primary live channel. Polling is a lightweight fallback so a
   // customer's stage still refreshes when a corporate/mobile network blocks
@@ -179,6 +213,7 @@ export default function OnlineOrderTracking() {
 
       if (res.data.success) {
         setCheckoutRequestId(res.data.data.checkoutRequestId);
+        setMpesaSimulated(Boolean(res.data.data.simulated));
         setMpesaSuccess(true);
       }
     } catch (err: any) {
@@ -565,13 +600,29 @@ export default function OnlineOrderTracking() {
                 </div>
 
                 <div className="pt-2">
-                  <button
-                    onClick={handleMpesaSimulateConfirm}
-                    disabled={mpesaLoading}
-                    className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 py-3 text-xs font-bold text-white shadow-lg shadow-emerald-600/25 transition disabled:opacity-50"
-                  >
-                    {mpesaLoading ? 'Verifying Receipt...' : 'Simulate / Confirm M-Pesa Receipt'}
-                  </button>
+                  {mpesaSimulated ? (
+                    <button
+                      onClick={handleMpesaSimulateConfirm}
+                      disabled={mpesaLoading}
+                      className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 py-3 text-xs font-bold text-white shadow-lg shadow-emerald-600/25 transition disabled:opacity-50"
+                    >
+                      {mpesaLoading ? 'Verifying Receipt...' : 'Simulate M-Pesa Payment (demo mode)'}
+                    </button>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="flex items-center justify-center gap-2 text-xs text-gray-400">
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+                        Waiting for M-Pesa confirmation…
+                      </p>
+                      <button
+                        onClick={checkMpesaStatus}
+                        className="w-full rounded-xl border border-emerald-600/60 py-3 text-xs font-bold text-emerald-300 transition hover:bg-emerald-600/10"
+                      >
+                        I've paid — check status
+                      </button>
+                    </div>
+                  )}
+                  {mpesaError && <p className="mt-3 text-xs text-red-400">{mpesaError}</p>}
                 </div>
               </div>
             )}

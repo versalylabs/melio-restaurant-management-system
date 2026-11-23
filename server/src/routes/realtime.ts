@@ -3,9 +3,17 @@ import crypto from 'crypto';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { realtimeService } from '../services/realtimeService';
 import prisma from '../config/database';
+import { generateStreamTicket, sendResponse } from '../utils/response';
 
 import { safeRouter } from '../utils/safeRouter';
 const router = safeRouter();
+
+// Issue a 60-second ticket for opening the staff stream (EventSource cannot send headers).
+router.post('/ticket', authenticate, async (req: AuthRequest, res: Response) => {
+  const user = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { tokenVersion: true } });
+  const ticket = generateStreamTicket(req.user!.id, req.user!.restaurantId, user?.tokenVersion ?? 0);
+  return sendResponse(res, true, 'Stream ticket issued', { ticket, expiresInSeconds: 60 });
+});
 
 // Staff Real-time Events Stream (Authenticated)
 router.get('/stream', authenticate, async (req: AuthRequest, res: Response) => {
@@ -30,13 +38,30 @@ router.get('/stream', authenticate, async (req: AuthRequest, res: Response) => {
     channels.add(`reservations:${user.branchId}`);
   }
 
-  // Allow client to specify additional custom requested channels if within restaurant
-  const queryChannels = String(req.query.channels || '').split(',').map((c) => c.trim()).filter(Boolean);
-  for (const c of queryChannels) {
-    // Only allow channels scoped to their restaurant or branch
-    if (c.startsWith(`branch:`) || c.startsWith(`kitchen:`) || c.startsWith(`orders:`) || c.startsWith(`reservations:`)) {
-      channels.add(c);
-    }
+  // Extra branch-scoped channels may be requested, but only for branches this
+  // user can access: their own branch, or (owners/admins/managers) any branch
+  // of their own restaurant. Anything else is silently dropped.
+  const BRANCH_CHANNEL = /^(branch|kitchen|orders|reservations):([A-Za-z0-9-]{1,64})$/;
+  const requested = String(req.query.channels || '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .slice(0, 50)
+    .map((c) => c.match(BRANCH_CHANNEL))
+    .filter((m): m is RegExpMatchArray => m !== null);
+
+  const requestedBranchIds = [...new Set(requested.map((m) => m[2]))];
+  const canSwitchBranch = ['OWNER', 'ADMIN', 'MANAGER'].includes(user.roleName);
+  const accessibleBranchIds = new Set<string>(user.branchId ? [user.branchId] : []);
+  if (canSwitchBranch && requestedBranchIds.length > 0) {
+    const branches = await prisma.branch.findMany({
+      where: { id: { in: requestedBranchIds }, restaurantId: user.restaurantId },
+      select: { id: true },
+    });
+    branches.forEach((b) => accessibleBranchIds.add(b.id));
+  }
+  for (const m of requested) {
+    if (accessibleBranchIds.has(m[2])) channels.add(m[0]);
   }
 
   realtimeService.registerClient(clientId, res, Array.from(channels));

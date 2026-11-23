@@ -388,7 +388,7 @@ export const publicPaymentsApi = {
   confirmMpesaPayment: (data: { checkoutRequestId: string; mpesaReceiptNumber?: string }) =>
     api.post('/public/payments/mpesa/confirm', data),
   getMpesaStatus: (checkoutRequestId: string) =>
-    cachedGet(`/public/payments/mpesa/status/${checkoutRequestId}`),
+    api.get(`/public/payments/mpesa/status/${checkoutRequestId}`),
   processCardPayment: (data: {
     trackingToken: string;
     cardNumber?: string;

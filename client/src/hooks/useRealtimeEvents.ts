@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { api } from '../services/api';
 
 export type RealtimeEventCallback = (payload: any) => void;
 
@@ -50,20 +51,44 @@ export function useRealtimeEvents({
     };
   }, []);
 
-  const connect = useCallback(() => {
+  const connectAttemptRef = useRef(0);
+
+  const connect = useCallback(async () => {
     if (!enabled || typeof window === 'undefined') return;
+    const attempt = ++connectAttemptRef.current;
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
 
-    const token = localStorage.getItem('rms_token') || localStorage.getItem('token');
+    const isPublicStream = url.includes('/public/');
     const queryParams = new URLSearchParams();
     if (channels.length > 0) queryParams.set('channels', channels.join(','));
-    // EventSource cannot set Authorization headers, so the staff realtime
-    // endpoint accepts the token as a short-lived query credential. Public
-    // tracking streams intentionally do not send a staff token.
-    if (token && !url.includes('/public/')) queryParams.set('token', token);
+
+    // EventSource cannot set Authorization headers. Staff streams exchange the
+    // login token (sent in a header) for a 60-second stream-only ticket, so the
+    // long-lived token never appears in a URL or server log.
+    if (!isPublicStream) {
+      const token = localStorage.getItem('rms_token') || localStorage.getItem('token');
+      if (!token) return;
+      try {
+        const res = await api.post('/realtime/ticket');
+        const ticket = res.data?.data?.ticket;
+        if (!ticket) throw new Error('No stream ticket');
+        queryParams.set('ticket', ticket);
+      } catch {
+        setIsConnected(false);
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (enabled) connect();
+        }, 10000);
+        return;
+      }
+    }
+
+    // A newer connect() started (or the component unmounted) while we waited.
+    if (attempt !== connectAttemptRef.current) return;
 
     const fullUrl = `${url}${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
 
@@ -120,6 +145,7 @@ export function useRealtimeEvents({
     connect();
 
     return () => {
+      connectAttemptRef.current++;
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
