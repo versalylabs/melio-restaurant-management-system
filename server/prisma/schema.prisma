@@ -21,6 +21,13 @@ model Restaurant {
   currency    String   @default("KES")
   taxRate          Float    @default(0)
   serviceChargeRate Float   @default(0)
+  /// KRA PIN shown on receipts and the tax summary.
+  kraPin           String?
+  vatRegistered    Boolean  @default(false)
+  /// true: menu prices already include VAT (VAT is extracted, not added on top).
+  pricesIncludeTax Boolean  @default(false)
+  /// Tourism Levy on gross sales (fraction, e.g. 0.02). Paid by the business; not added to bills.
+  tourismLevyRate  Float    @default(0)
   logo        String?
   timezone    String   @default("Africa/Nairobi")
   status      String   @default("ACTIVE")
@@ -367,6 +374,8 @@ model MenuItem {
   sellingPrice    Float
   costPrice       Float?
   taxRate         Float    @default(0)
+  /// VAT treatment: STANDARD (restaurant VAT rate), ZERO_RATED (0%) or EXEMPT.
+  taxCategory     String   @default("STANDARD")
   preparationTime Int?
   status          String   @default("ACTIVE")
   available       Boolean  @default(true)
@@ -566,6 +575,12 @@ model Sale {
   promotionId         String?
   taxAmount           Float    @default(0)
   serviceChargeAmount Float    @default(0)
+  /// How VAT was worked out for this bill, frozen at the time: inclusive prices or added on top.
+  taxInclusive        Boolean  @default(false)
+  /// After discount, excluding VAT: standard-rated base, zero-rated and exempt sales.
+  taxableAmount       Float    @default(0)
+  zeroRatedAmount     Float    @default(0)
+  exemptAmount        Float    @default(0)
   totalAmount         Float
   notes               String?
   createdBy           String
@@ -592,6 +607,7 @@ model Sale {
   promotion      Promotion? @relation(fields: [promotionId], references: [id], onDelete: SetNull)
   payments       Payment[]
   receipt        Receipt?
+  creditNotes    CreditNote[]
   onlineOrder    OnlineOrder?
 
   @@unique([branchId, orderNumber])
@@ -1414,4 +1430,33 @@ model VoidRecord {
   @@index([branchId, createdAt])
   @@index([saleId])
   @@map("void_records")
+}
+
+/// Issued for every refund: reverses part or all of a sale for VAT and levy purposes.
+model CreditNote {
+  id            String   @id @default(uuid())
+  restaurantId  String
+  branchId      String
+  saleId        String
+  paymentId     String?  @unique
+  number        String
+  amount        Float
+  /// VAT portion of the refund, in the same proportion as on the original bill.
+  vatAmount     Float    @default(0)
+  reason        String
+  createdBy     String
+  createdAt     DateTime @default(now())
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Restrict)
+
+  @@unique([restaurantId, number])
+  @@index([restaurantId, createdAt])
+  @@map("credit_notes")
+}
+
+model CreditNoteCounter {
+  restaurantId String @id
+  lastNumber   Int    @default(0)
+
+  @@map("credit_note_counters")
 }

@@ -88,6 +88,7 @@ export default function POS() {
   const [manualDiscountType, setManualDiscountType] = useState<'FIXED'|'PERCENTAGE'>(() => draft?.manualDiscountType ?? 'FIXED');
   const [manualDiscount, setManualDiscount] = useState(() => draft?.manualDiscount ?? 0);
   const [taxRate, setTaxRate] = useState(0);
+  const [pricesIncludeTax, setPricesIncludeTax] = useState(false);
   const [serviceChargeRate, setServiceChargeRate] = useState(0);
   const [selectedCustomerId, setSelectedCustomerId] = useState(() => draft?.selectedCustomerId ?? '');
   const [orderNotes, setOrderNotes] = useState(() => draft?.orderNotes ?? '');
@@ -213,7 +214,7 @@ export default function POS() {
       if (promotionsRes.data.success) setPromotions(promotionsRes.data.data?.promotions || []);
       const activeBranch = (branchesRes.data?.data?.branches || []).find((b:any) => b.id === activeBranchId);
       setActiveBranchName(activeBranch?.name || user?.branchName || 'Active branch');
-      if (restaurantRes.data.success) { setTaxRate((restaurantRes.data.data?.taxRate || 0) * 100); setServiceChargeRate((restaurantRes.data.data?.serviceChargeRate || 0) * 100); }
+      if (restaurantRes.data.success) { setTaxRate((restaurantRes.data.data?.taxRate || 0) * 100); setPricesIncludeTax(!!restaurantRes.data.data?.pricesIncludeTax); setServiceChargeRate((restaurantRes.data.data?.serviceChargeRate || 0) * 100); }
     } catch (err: any) {
       if (!navigator.onLine || !err.response) {
         setIsOnline(false);
@@ -351,8 +352,21 @@ export default function POS() {
 
   const getPreviewTotals = () => {
     const subtotal = calculateCartTotal(); const discount = getDiscountAmount(); const after = subtotal-discount;
-    const tax = Math.round(after*taxRate)/100; const service = Math.round(after*serviceChargeRate)/100;
-    return {subtotal,discount,tax,service,total:Math.round((after+tax+service)*100)/100};
+    // Same rules as the server: VAT only on standard-rated items, the discount spread
+    // in proportion, and with inclusive prices VAT is the part already in the price.
+    const categoryOf = new Map(categories.flatMap((c) => c.items.map((i) => [i.id, i.taxCategory || 'STANDARD'] as const)));
+    const standardGross = cart
+      .filter((i) => (categoryOf.get(i.menuItemId) || 'STANDARD') === 'STANDARD')
+      .reduce((sum, i) => sum + (i.unitPrice + i.modifiers.reduce((m, mod) => m + Math.max(0, mod.priceAdjustment), 0)) * i.quantity, 0);
+    const promo = selectedPromotionId ? promotions.find((x) => x.id === selectedPromotionId) : null;
+    const productCategory = promo && promo.scope !== 'ORDER' && promo.menuItemId ? categoryOf.get(promo.menuItemId) || 'STANDARD' : null;
+    const standardAfter = productCategory
+      ? productCategory === 'STANDARD' ? Math.max(0, standardGross - discount) : standardGross
+      : subtotal > 0 ? standardGross - (discount * standardGross) / subtotal : 0;
+    const r = taxRate / 100;
+    const tax = Math.round((pricesIncludeTax ? (standardAfter * r) / (1 + r) : standardAfter * r) * 100) / 100;
+    const service = Math.round(after*serviceChargeRate)/100;
+    return {subtotal,discount,tax,service,total:Math.round((after+(pricesIncludeTax?0:tax)+service)*100)/100};
   };
 
   const handleAddItem = (item: PosMenuItem) => {
@@ -1038,7 +1052,7 @@ export default function POS() {
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Subtotal</span><span className="font-semibold text-gray-900 dark:text-gray-100">KES {getPreviewTotals().subtotal.toLocaleString()}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Discount</span><span className="font-semibold text-green-600 dark:text-green-400">- KES {getPreviewTotals().discount.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Tax</span><span className="font-semibold text-gray-900 dark:text-gray-100">KES {getPreviewTotals().tax.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">{pricesIncludeTax ? "VAT (included)" : "VAT"}</span><span className="font-semibold text-gray-900 dark:text-gray-100">KES {getPreviewTotals().tax.toLocaleString()}</span></div>
                 <div className="flex justify-between"><span className="text-gray-500 dark:text-gray-400">Service</span><span className="font-semibold text-gray-900 dark:text-gray-100">KES {getPreviewTotals().service.toLocaleString()}</span></div>
               </div>
               <div className="flex justify-between items-center rounded-xl border border-orange-500/20 bg-gradient-to-r from-orange-500/15 to-amber-500/15 px-3.5 py-2.5 text-base font-bold text-gray-900 dark:text-gray-100 liquid-glass-card">

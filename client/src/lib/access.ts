@@ -31,6 +31,7 @@ export const ROUTE_ROLES: Record<string, string[] | undefined> = {
   '/expenses': ['OWNER', 'ADMIN', 'MANAGER'],
   '/reports': ['OWNER', 'ADMIN', 'MANAGER'],
   '/loss-prevention': ['OWNER', 'ADMIN', 'MANAGER'],
+  '/tax-summary': ['OWNER', 'ADMIN', 'MANAGER'],
   '/analytics': ['OWNER', 'ADMIN', 'MANAGER'],
   '/promotions': ['OWNER', 'ADMIN', 'MANAGER'],
   '/users': ['OWNER', 'ADMIN', 'MANAGER'],
@@ -47,7 +48,7 @@ export const permissionForPath = (path: string): string | null => {
   if (path === '/users' || path === '/staff') return 'users.view';
   if (path === '/roles') return 'roles.manage';
   if (path === '/audit-log') return 'audit.view';
-  if (path === '/reports' || path === '/analytics' || path === '/loss-prevention') return 'reports.view';
+  if (path === '/reports' || path === '/analytics' || path === '/loss-prevention' || path === '/tax-summary') return 'reports.view';
   if (path === '/promotions') return 'promotions.view';
   if (path === '/payments') return 'payments.view';
   if (path === '/shifts') return 'shifts.view';

@@ -388,6 +388,8 @@ export const reportApi = {
   getSalesReport: (params?: any) => cachedGet('/reports/sales', { params }),
   // Not cached: it should reflect voids and shift closes immediately.
   getLossReport: (params?: any) => api.get('/reports/loss-prevention', { params }),
+  getTaxSummary: (params: { month: string; branchId?: string }) => api.get('/reports/tax-summary', { params }),
+  exportTaxSummary: (params: { month: string; branchId?: string }) => api.get('/reports/tax-summary', { params: { ...params, format: 'csv' }, responseType: 'blob' }),
   exportSalesReport: (params?: any) => api.get('/reports/sales/export', { params, responseType: 'blob' }),
 };
 
