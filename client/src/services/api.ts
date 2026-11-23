@@ -379,6 +379,9 @@ export const paymentApi = {
   recordPayment: (orderId: string, data: any) => api.post(`/payments/orders/${orderId}`, data),
   refundPayment: (id: string, data: any) => api.post(`/payments/${id}/refund`, data),
   getReceipt: (orderId: string) => cachedGet(`/payments/orders/${orderId}/receipt`),
+  sendMpesaPrompt: (orderId: string, data: { phoneNumber: string; amount?: number }) => api.post(`/payments/orders/${orderId}/mpesa-prompt`, data),
+  getMpesaStatus: (checkoutRequestId: string) => api.get(`/payments/mpesa/${encodeURIComponent(checkoutRequestId)}`),
+  simulateMpesa: (checkoutRequestId: string) => api.post(`/payments/mpesa/${encodeURIComponent(checkoutRequestId)}/simulate`),
 };
 
 export const reportApi = {

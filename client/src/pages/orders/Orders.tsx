@@ -10,6 +10,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
 import { notify, promptDialog } from '../../lib/dialogs';
 import { isApprovalCancelled, withApproval } from '../../lib/approval';
+import MpesaPayment from '../../components/payments/MpesaPayment';
 
 /** The kitchen has these orders; removing an item needs a manager's PIN. */
 const VOIDABLE_STATUSES = ['SUBMITTED', 'PREPARING', 'READY', 'SERVED', 'OUT_FOR_DELIVERY'];
@@ -71,7 +72,8 @@ export default function Orders() {
     const balance = Math.max(0, order.totalAmount - (order.amountPaid || 0));
     setPaymentAmount(balance.toFixed(2));
     setTendered(balance.toFixed(2));
-    setPaymentMethod('CASH');
+    // Waiters don't handle cash: they send M-Pesa prompts.
+    setPaymentMethod(user?.roleName === 'WAITER' ? 'MOBILE_MONEY' : 'CASH');
   };
 
   const handlePayment = async () => {
@@ -612,11 +614,24 @@ export default function Orders() {
               <div><p className="text-xs text-gray-500 dark:text-gray-400">ORDER TOTAL</p><p className="text-lg font-semibold">KES {paymentOrder.totalAmount.toLocaleString()}</p></div>
               <div><p className="text-xs text-gray-500 dark:text-gray-400">REMAINING</p><p className="text-lg font-semibold">KES {Math.max(0, paymentOrder.totalAmount - (paymentOrder.amountPaid || 0)).toLocaleString()}</p></div>
             </div>
-            <label className="block text-sm font-medium">Payment method<select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="mt-1 w-full h-10 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm"><option value="CASH">Cash</option><option value="CARD">Card</option><option value="MOBILE_MONEY">Mobile Money</option></select></label>
-            <label className="block text-sm font-medium">Amount<input type="number" min="0.01" step="0.01" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="mt-1 w-full h-10 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm" /></label>
-            <label className="block text-sm font-medium">Amount tendered{paymentMethod === 'CASH' ? <input type="number" min="0" step="0.01" value={tendered} onChange={e => setTendered(e.target.value)} className="mt-1 w-full h-10 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm" /> : <div className="mt-1 text-sm text-gray-500">Not applicable for this method</div>}</label>
-            {paymentMethod === 'CASH' && <div className="text-sm text-gray-600 dark:text-gray-300">Change: <strong>KES {Math.max(0, Number(tendered || 0) - Number(paymentAmount || 0)).toLocaleString()}</strong></div>}
-            <button disabled={paymentBusy} onClick={handlePayment} className="w-full h-10 rounded-md bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium disabled:opacity-50">{paymentBusy ? 'Processing...' : 'Record Payment'}</button>
+            {user?.roleName !== 'WAITER' && (
+              <label className="block text-sm font-medium">Payment method<select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="mt-1 w-full h-10 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm"><option value="CASH">Cash</option><option value="CARD">Card</option><option value="MOBILE_MONEY">M-Pesa</option></select></label>
+            )}
+            {paymentMethod === 'MOBILE_MONEY' ? (
+              <MpesaPayment
+                orderId={paymentOrder.id}
+                balance={Math.max(0, paymentOrder.totalAmount - (paymentOrder.amountPaid || 0))}
+                canEnterCode={user?.roleName !== 'WAITER'}
+                onPaid={(message) => { showSuccess(message); void fetchOrders(); setTimeout(() => setPaymentOrder(null), 2500); }}
+              />
+            ) : (
+              <>
+              <label className="block text-sm font-medium">Amount<input type="number" min="0.01" step="0.01" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="mt-1 w-full h-10 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm" /></label>
+              <label className="block text-sm font-medium">Amount tendered{paymentMethod === 'CASH' ? <input type="number" min="0" step="0.01" value={tendered} onChange={e => setTendered(e.target.value)} className="mt-1 w-full h-10 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm" /> : <div className="mt-1 text-sm text-gray-500">Not applicable for this method</div>}</label>
+              {paymentMethod === 'CASH' && <div className="text-sm text-gray-600 dark:text-gray-300">Change: <strong>KES {Math.max(0, Number(tendered || 0) - Number(paymentAmount || 0)).toLocaleString()}</strong></div>}
+              <button disabled={paymentBusy} onClick={handlePayment} className="w-full h-10 rounded-md bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium disabled:opacity-50">{paymentBusy ? 'Processing...' : 'Record Payment'}</button>
+              </>
+            )}
           </div>
         </Modal>
       )}
