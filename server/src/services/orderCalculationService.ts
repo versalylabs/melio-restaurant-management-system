@@ -71,8 +71,10 @@ export const calculateOrderTotals = async (input: OrderCalculationInput): Promis
   // Each item's VAT category (zero-rated and exempt items carry no VAT).
   const missing = [...new Set(input.items.filter((i) => !i.taxCategory).map((i) => i.menuItemId))];
   const categoryById = new Map<string, TaxCategory>();
-  if (missing.length) {
-    const rows = await prisma.menuItem.findMany({ where: { id: { in: missing } }, select: { id: true, taxCategory: true } });
+  // Only real orders (which always name their restaurant) look categories up; anything
+  // else counts as standard-rated. Scoped to the restaurant's own menu.
+  if (missing.length && input.restaurantId) {
+    const rows = await prisma.menuItem.findMany({ where: { id: { in: missing }, restaurantId: input.restaurantId }, select: { id: true, taxCategory: true } });
     rows.forEach((r) => categoryById.set(r.id, asCategory(r.taxCategory)));
   }
   const byCategory: Record<TaxCategory, number> = { STANDARD: 0, ZERO_RATED: 0, EXEMPT: 0 };
