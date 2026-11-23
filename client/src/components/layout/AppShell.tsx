@@ -1,11 +1,16 @@
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { useAuth } from '../../contexts/AuthContext';
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Moon, Sun, Building2, Bell, ChevronDown, Check, ExternalLink, Menu as MenuIcon, X, UtensilsCrossed, WifiOff } from 'lucide-react';
 import { notificationApi, branchApi } from '../../services/api';
+import DialogOverlay from '../ui/DialogOverlay';
+
+/** All-day work screens get solid surfaces instead of live blur (see index.css). */
+const WORK_SCREENS = ['/pos', '/kitchen'];
 
 export default function AppShell({ children }: { children?: React.ReactNode }) {
+  const location = useLocation();
   const { user } = useAuth();
   const navigate = useNavigate();
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('rms-theme') !== 'light');
@@ -86,11 +91,11 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
   };
 
   return (
-    <div className="relative flex h-screen bg-[#faf9f7] dark:bg-[#0b0b0f] text-gray-900 dark:text-gray-100 overflow-hidden">
+    <div className={`relative flex h-screen bg-[#faf9f7] dark:bg-[#0b0b0f] text-gray-900 dark:text-gray-100 overflow-hidden ${WORK_SCREENS.some((p) => location.pathname.startsWith(p)) ? 'solid-surfaces' : ''}`}>
       {/* Liquid Glass Background Ambient Glows */}
-      <div className="pointer-events-none fixed -top-40 -right-40 h-96 w-96 rounded-full bg-orange-500/10 dark:bg-orange-500/5 blur-[140px] z-0" />
-      <div className="pointer-events-none fixed top-1/2 -left-40 h-96 w-96 rounded-full bg-amber-500/10 dark:bg-amber-500/5 blur-[140px] z-0" />
-      <div className="pointer-events-none fixed -bottom-40 right-1/4 h-96 w-96 rounded-full bg-orange-600/10 dark:bg-rose-500/5 blur-[140px] z-0" />
+      <div className="ambient-glow pointer-events-none fixed -top-40 -right-40 h-96 w-96 rounded-full bg-orange-500/10 dark:bg-orange-500/5 blur-[140px] z-0" />
+      <div className="ambient-glow pointer-events-none fixed top-1/2 -left-40 h-96 w-96 rounded-full bg-amber-500/10 dark:bg-amber-500/5 blur-[140px] z-0" />
+      <div className="ambient-glow pointer-events-none fixed -bottom-40 right-1/4 h-96 w-96 rounded-full bg-orange-600/10 dark:bg-rose-500/5 blur-[140px] z-0" />
 
       {/* Desktop Stationary Sidebar */}
       <aside className="relative z-10 hidden lg:block w-64 bg-white/80 dark:bg-[#0e0e13]/85 backdrop-blur-2xl border-r border-orange-500/10 dark:border-white/10 flex-shrink-0 overflow-hidden shadow-sm">
@@ -99,7 +104,9 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
 
       {/* Mobile Drawer Sidebar */}
       {mobileSidebarOpen && (
-        <div
+        <DialogOverlay
+          onClose={() => setMobileSidebarOpen(false)}
+          label="Navigation"
           className="fixed inset-0 z-50 flex lg:hidden bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
           onClick={() => setMobileSidebarOpen(false)}
         >
@@ -118,7 +125,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
               <Sidebar onNavigate={() => setMobileSidebarOpen(false)} />
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       <main className="relative z-10 flex-1 flex flex-col overflow-hidden">
@@ -219,7 +226,20 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto">{children || <Outlet />}</div>
+        <div className="flex-1 overflow-y-auto">
+          {/* Page-level loading boundary: switching pages keeps the sidebar and
+              header on screen instead of blanking the whole app. */}
+          <Suspense
+            fallback={
+              <div className="flex h-full min-h-[50vh] items-center justify-center" role="status" aria-live="polite">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
+                <span className="sr-only">Loading page</span>
+              </div>
+            }
+          >
+            {children || <Outlet />}
+          </Suspense>
+        </div>
       </main>
     </div>
   );

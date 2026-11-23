@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { X, ChevronLeft, ChevronRight } from 'lucide-react';
+import DialogOverlay from '../../../components/ui/DialogOverlay';
 
 export type GalleryItem = {
   id: string;
@@ -27,7 +28,6 @@ export default function GalleryLightbox({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!isOpen) return;
-      if (e.key === 'Escape') onClose();
       if (e.key === 'ArrowLeft') onNavigate((currentIndex - 1 + items.length) % items.length);
       if (e.key === 'ArrowRight') onNavigate((currentIndex + 1) % items.length);
     };
@@ -41,7 +41,7 @@ export default function GalleryLightbox({
   const current = items[currentIndex];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4 sm:p-6 transition-all duration-300">
+    <DialogOverlay onClose={onClose} label="Gallery image" className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-4 sm:p-6 transition-all duration-300">
       {/* Close button */}
       <button
         onClick={onClose}
@@ -92,6 +92,6 @@ export default function GalleryLightbox({
           </div>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   );
 }

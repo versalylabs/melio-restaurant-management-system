@@ -8,6 +8,7 @@ import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { useAuth } from '../../contexts/AuthContext';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
+import { promptDialog } from '../../lib/dialogs';
 
 export default function Orders() {
   const { user } = useAuth();
@@ -165,7 +166,7 @@ export default function Orders() {
   };
 
   const handleCancelOrder = async (order: Sale) => {
-    const reason = prompt('Enter cancellation reason:');
+    const reason = await promptDialog('Why is this order being cancelled?', { title: `Cancel order ${order.orderNumber}`, required: true, multiline: true, confirmLabel: 'Cancel order' });
     if (!reason) return;
     setError('');
     setActingId(order.id);
@@ -320,13 +321,13 @@ export default function Orders() {
                             Complete
                           </button>
                         )}
-                        <button
+                        <button aria-label="View order details"
                           onClick={() => handleViewOrder(order)}
                           disabled={isActing}
                           className="text-orange-600 hover:text-orange-900 dark:text-orange-400 dark:hover:text-orange-300 disabled:opacity-50"
                           title="View order details"
                         >
-                          <Eye className="w-4 h-4" />
+                          <Eye className="w-4 h-4" aria-hidden="true" />
                         </button>
                         {order.paymentStatus !== 'PAID' && order.status !== 'CANCELLED' && (
                           <button
@@ -339,23 +340,23 @@ export default function Orders() {
                           </button>
                         )}
                         {order.paymentStatus === 'PAID' && (
-                          <button
+                          <button aria-label="Print receipt"
                             onClick={() => handleReceipt(order)}
                             disabled={isActing}
                             className="text-gray-600 hover:text-gray-900 dark:text-gray-300 disabled:opacity-50"
                             title="Print receipt"
                           >
-                            <Printer className="w-4 h-4" />
+                            <Printer className="w-4 h-4" aria-hidden="true" />
                           </button>
                         )}
                         {['DRAFT', 'HELD', 'SUBMITTED'].includes(order.status) && (
-                          <button
+                          <button aria-label="Cancel order"
                             onClick={() => handleCancelOrder(order)}
                             disabled={isActing}
                             className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
                             title="Cancel order"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
                           </button>
                         )}
                       </div>

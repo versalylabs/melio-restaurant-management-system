@@ -35,6 +35,7 @@ import Input from '../../components/ui/Input';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
+import { confirmDialog, promptDialog } from '../../lib/dialogs';
 
 type TabKey = 'dashboard' | 'ingredients' | 'stock' | 'recipes' | 'batches' | 'stocktakes' | 'suppliers' | 'purchases';
 type RecipeRow = { ingredientId: string; quantity: string; unit: string; notes: string };
@@ -260,7 +261,7 @@ function CategoriesManagerModal({
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this category?')) return;
+    if (!await confirmDialog('Delete this category?')) return;
     try {
       await inventoryApi.deleteIngredientCategory(id);
       onSaved();
@@ -288,8 +289,8 @@ function CategoriesManagerModal({
                 <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{c.name}</p>
                 {c.description && <p className="text-xs text-gray-500 dark:text-gray-400">{c.description}</p>}
               </div>
-              <button onClick={() => handleDelete(c.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300">
-                <Trash2 className="w-4 h-4" />
+              <button aria-label="Delete" onClick={() => handleDelete(c.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300">
+                <Trash2 className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
           ))}
@@ -342,7 +343,7 @@ function StocktakesTab() {
   useEffect(()=>{load()},[branchId]);
   const create=async()=>{try{await inventoryApi.createStocktake({branchId:branchId||undefined});load()}catch(err:any){setError(err.response?.data?.message||'Failed to create stocktake')}};
   const save=async()=>{if(!editing)return;try{await inventoryApi.updateStocktake(editing.id,{items:editing.items.map(i=>({ingredientId:i.ingredientId,countedQty:i.countedQty,notes:i.notes}))});setEditing(null);load()}catch(err:any){setError(err.response?.data?.message||'Failed to update stocktake')}};
-  const complete=async(id:string)=>{if(!confirm('Complete this stocktake and apply all variances to inventory?'))return;try{await inventoryApi.completeStocktake(id);load()}catch(err:any){setError(err.response?.data?.message||'Failed to complete stocktake')}};
+  const complete=async(id:string)=>{if(!await confirmDialog('Complete this stocktake and apply all variances to inventory?'))return;try{await inventoryApi.completeStocktake(id);load()}catch(err:any){setError(err.response?.data?.message||'Failed to complete stocktake')}};
   return <div className="space-y-4">{error&&<div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">{error}</div>}<div className="flex flex-wrap gap-3 items-end"><div><label className="block text-sm font-medium mb-1">Branch</label><select value={branchId} onChange={e=>setBranchId(e.target.value)} className="h-10 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-3 text-sm dark:text-gray-100"><option value="">My branch</option>{branches.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></div><Button onClick={create} className="gap-2"><Plus className="w-4 h-4"/> New Stocktake</Button></div><Card><div className="overflow-x-auto"><table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700"><thead><tr>{['Reference','Branch','Status','Items','Created','Actions'].map(h=><th key={h} className="px-4 py-3 text-left text-xs uppercase text-gray-500">{h}</th>)}</tr></thead><tbody className="divide-y divide-gray-200 dark:divide-gray-700">{loading?<tr><td colSpan={6} className="p-8 text-center text-sm text-gray-500">Loading...</td></tr>:items.map(st=><tr key={st.id}><td className="px-4 py-3 text-sm font-medium">{st.reference}</td><td className="px-4 py-3 text-sm">{st.branch?.name||'—'}</td><td className="px-4 py-3"><Badge variant={st.status==='COMPLETED'?'success':'warning'}>{st.status}</Badge></td><td className="px-4 py-3 text-sm">{st.items?.length||0}</td><td className="px-4 py-3 text-sm">{new Date(st.createdAt).toLocaleString()}</td><td className="px-4 py-3">{st.status==='DRAFT'&&<><button className="text-orange-600 mr-3" onClick={()=>setEditing(JSON.parse(JSON.stringify(st)))}>Count</button><button className="text-green-600" onClick={()=>complete(st.id)}>Complete</button></>}</td></tr>)}{!loading&&items.length===0&&<tr><td colSpan={6} className="p-8 text-center text-sm text-gray-500">No stocktakes yet.</td></tr>}</tbody></table></div></Card>{editing&&<Modal title={`Count ${editing.reference}`} onClose={()=>setEditing(null)}><div className="space-y-3 max-h-[60vh] overflow-y-auto">{editing.items.map((i,idx)=><div key={i.id} className="grid grid-cols-[1fr_130px_100px] gap-3 items-end border-b pb-3"><div><p className="text-sm font-medium">{i.ingredient?.name||'Ingredient'}</p><p className="text-xs text-gray-500">Expected: {i.expectedQty} {i.unit}</p></div><Input id={`count-${i.id}`} type="number" step="0.01" label="Counted" value={String(i.countedQty)} onChange={e=>{const arr=[...editing.items];arr[idx]={...arr[idx],countedQty:Number(e.target.value),variance:Number(e.target.value)-arr[idx].expectedQty};setEditing({...editing,items:arr})}}/><div className="text-sm pb-2">Variance: <strong>{(i.countedQty-i.expectedQty).toFixed(2)}</strong></div></div>)}</div><div className="flex justify-end gap-3 mt-5"><Button variant="secondary" onClick={()=>setEditing(null)}>Cancel</Button><Button onClick={save}>Save Counts</Button></div></Modal>}</div>;
 }
 
@@ -423,7 +424,7 @@ function IngredientsTab() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Deactivate this ingredient?')) return;
+    if (!await confirmDialog('Deactivate this ingredient?')) return;
     try { await inventoryApi.deleteIngredient(id); fetchData(); }
     catch (err: any) { setError(err.response?.data?.message || 'Failed to delete'); }
   };
@@ -480,8 +481,8 @@ function IngredientsTab() {
                     <Badge variant={item.status === 'ACTIVE' ? 'success' : 'warning'}>{item.status}</Badge>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button onClick={() => openEdit(item)} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3"><Edit className="w-4 h-4" /></button>
-                    <button onClick={() => handleDelete(item.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300"><Trash2 className="w-4 h-4" /></button>
+                    <button aria-label="Edit" onClick={() => openEdit(item)} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3"><Edit className="w-4 h-4" aria-hidden="true" /></button>
+                    <button aria-label="Deactivate" onClick={() => handleDelete(item.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300"><Trash2 className="w-4 h-4" aria-hidden="true" /></button>
                   </td>
                 </tr>
               ))}
@@ -858,7 +859,7 @@ function RecipesTab() {
   };
 
   const handleDelete = async (menuItemId: string) => {
-    if (!confirm('Delete this recipe?')) return;
+    if (!await confirmDialog('Delete this recipe?')) return;
     try { await inventoryApi.deleteRecipe(menuItemId); fetchData(); }
     catch (err: any) { setError(err.response?.data?.message || 'Failed to delete'); }
   };
@@ -909,9 +910,9 @@ function RecipesTab() {
                     <Badge variant={r.status === 'ACTIVE' ? 'success' : 'warning'}>{r.status}</Badge>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button onClick={() => handleView(r)} className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 mr-3"><FileText className="w-4 h-4" /></button>
-                    <button onClick={() => openEdit(r)} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3"><Edit className="w-4 h-4" /></button>
-                    <button onClick={() => handleDelete(r.menuItemId)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300"><Trash2 className="w-4 h-4" /></button>
+                    <button aria-label="View details" onClick={() => handleView(r)} className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 mr-3"><FileText className="w-4 h-4" aria-hidden="true" /></button>
+                    <button aria-label="Edit" onClick={() => openEdit(r)} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3"><Edit className="w-4 h-4" aria-hidden="true" /></button>
+                    <button aria-label="Delete" onClick={() => handleDelete(r.menuItemId)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300"><Trash2 className="w-4 h-4" aria-hidden="true" /></button>
                   </td>
                 </tr>
               ))}
@@ -958,7 +959,7 @@ function RecipesTab() {
                       <option value="ml">ml</option><option value="pcs">pcs</option><option value="box">box</option>
                     </select>
                     <Input value={row.notes} onChange={(e) => updateRow(idx, 'notes', e.target.value)} placeholder="Notes" className="col-span-2" />
-                    <button type="button" onClick={() => removeRow(idx)} className="col-span-1 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 flex justify-center"><Trash2 className="w-4 h-4" /></button>
+                    <button aria-label="Remove" type="button" onClick={() => removeRow(idx)} className="col-span-1 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 flex justify-center"><Trash2 className="w-4 h-4" aria-hidden="true" /></button>
                   </div>
                 ))}
               </div>
@@ -1043,7 +1044,7 @@ function SuppliersTab() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Deactivate this supplier?')) return;
+    if (!await confirmDialog('Deactivate this supplier?')) return;
     try { await inventoryApi.deleteSupplier(id); fetchData(); }
     catch (err: any) { setError(err.response?.data?.message || 'Failed to delete'); }
   };
@@ -1095,8 +1096,8 @@ function SuppliersTab() {
                     <Badge variant={s.status === 'ACTIVE' ? 'success' : 'warning'}>{s.status}</Badge>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button onClick={() => { setEditing(s); setFormData({ name: s.name, contactName: s.contactName || '', email: s.email || '', phone: s.phone || '', address: s.address || '', city: s.city || '', taxNumber: s.taxNumber || '', businessRegNumber: s.businessRegNumber || '', notes: s.notes || '', status: s.status }); setShowModal(true); }} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3"><Edit className="w-4 h-4" /></button>
-                    <button onClick={() => handleDelete(s.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300"><Trash2 className="w-4 h-4" /></button>
+                    <button aria-label="Edit" onClick={() => { setEditing(s); setFormData({ name: s.name, contactName: s.contactName || '', email: s.email || '', phone: s.phone || '', address: s.address || '', city: s.city || '', taxNumber: s.taxNumber || '', businessRegNumber: s.businessRegNumber || '', notes: s.notes || '', status: s.status }); setShowModal(true); }} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3"><Edit className="w-4 h-4" aria-hidden="true" /></button>
+                    <button aria-label="Deactivate" onClick={() => handleDelete(s.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300"><Trash2 className="w-4 h-4" aria-hidden="true" /></button>
                   </td>
                 </tr>
               ))}
@@ -1208,7 +1209,9 @@ function PurchaseOrdersTab() {
   };
 
   const handleStatusAction = async (id: string, action: 'submit' | 'approve' | 'cancel') => {
-    const reason = action === 'cancel' ? prompt('Cancellation reason (optional):') : undefined;
+    const reason = action === 'cancel' ? await promptDialog('Reason (optional):', { title: 'Cancel purchase order', confirmLabel: 'Cancel order' }) : undefined;
+    // Pressing Cancel in the reason dialog must not cancel the purchase order.
+    if (action === 'cancel' && reason === null) return;
     try {
       if (action === 'submit') await inventoryApi.submitPurchaseOrder(id);
       else if (action === 'approve') await inventoryApi.approvePurchaseOrder(id);
@@ -1221,7 +1224,7 @@ function PurchaseOrdersTab() {
   };
 
   const handleDelete = async (po: PurchaseOrder) => {
-    if (!window.confirm(`Delete purchase order ${po.orderNumber}? This cannot be undone.`)) return;
+    if (!await confirmDialog(`Delete purchase order ${po.orderNumber}? This cannot be undone.`)) return;
     try {
       await inventoryApi.deletePurchaseOrder(po.id);
       await fetchData();
@@ -1332,7 +1335,7 @@ function PurchaseOrdersTab() {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{new Date(o.orderDate).toLocaleDateString()}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button onClick={async () => { try { const res = await inventoryApi.getPurchaseOrder(o.id); setViewing({ ...o, ...(res.data?.data || res.data?.purchaseOrder || res.data) }); } catch (err: any) { setError(err.response?.data?.message || 'Failed to load purchase order details'); } }} className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 mr-3"><FileText className="w-4 h-4" /></button>
+                    <button aria-label="View details" onClick={async () => { try { const res = await inventoryApi.getPurchaseOrder(o.id); setViewing({ ...o, ...(res.data?.data || res.data?.purchaseOrder || res.data) }); } catch (err: any) { setError(err.response?.data?.message || 'Failed to load purchase order details'); } }} className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 mr-3"><FileText className="w-4 h-4" aria-hidden="true" /></button>
                     {o.status === 'DRAFT' && (
                       <button onClick={() => handleStatusAction(o.id, 'submit')} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3">Submit</button>
                     )}
@@ -1346,7 +1349,7 @@ function PurchaseOrdersTab() {
                       <button onClick={() => openReceive(o)} className="text-green-600 dark:text-green-400 hover:text-green-900 dark:hover:text-green-300 mr-3">Receive</button>
                     )}
                     {(o.status === 'DRAFT' || o.status === 'CANCELLED') && (
-                      <button onClick={() => handleDelete(o)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300" title="Delete purchase order"><Trash2 className="w-4 h-4" /></button>
+                      <button aria-label="Delete purchase order" onClick={() => handleDelete(o)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300" title="Delete purchase order"><Trash2 className="w-4 h-4" aria-hidden="true" /></button>
                     )}
                   </td>
                 </tr>
@@ -1399,7 +1402,7 @@ function PurchaseOrdersTab() {
                       <option value="ml">ml</option><option value="pcs">pcs</option><option value="box">box</option>
                     </select>
                     <Input value={row.unitPrice} onChange={(e) => updateRow(idx, 'unitPrice', e.target.value)} placeholder="Price" type="number" step="0.01" className="col-span-2" required />
-                    <button type="button" onClick={() => removeRow(idx)} className="col-span-1 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 flex justify-center"><Trash2 className="w-4 h-4" /></button>
+                    <button aria-label="Remove" type="button" onClick={() => removeRow(idx)} className="col-span-1 text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 flex justify-center"><Trash2 className="w-4 h-4" aria-hidden="true" /></button>
                   </div>
                 ))}
               </div>

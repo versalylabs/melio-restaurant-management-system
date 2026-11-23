@@ -8,6 +8,7 @@ import Card from '../../components/ui/Card';
 import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
+import { confirmDialog, promptDialog, notify } from '../../lib/dialogs';
 
 const SHAPE_COLORS: Record<string, string> = {
   SQUARE: 'border-orange-400 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-500',
@@ -160,7 +161,7 @@ export default function FloorPlan() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to deactivate this table?')) return;
+    if (!await confirmDialog('Are you sure you want to deactivate this table?')) return;
     try {
       await tableApi.deleteTable(id);
       if (selectedTable?.id === id) setSelectedTable(null);
@@ -172,10 +173,10 @@ export default function FloorPlan() {
 
   const handleCombineTables = async () => {
     if (selectedTables.size < 2) {
-      alert('Please select at least 2 tables to combine');
+      notify('Please select at least 2 tables to combine');
       return;
     }
-    const name = prompt('Enter a name for this table combination:');
+    const name = await promptDialog('Name for this table combination:', { title: 'Combine tables', required: true, confirmLabel: 'Combine' });
     if (!name) return;
     try {
       await tableApi.createTableCombination({
@@ -377,8 +378,8 @@ export default function FloorPlan() {
                   <Button variant="secondary" size="sm" className="flex-1" onClick={() => { setEditingTable(selectedTable); setShowTableModal(true); }}>
                     <Edit className="w-4 h-4 mr-1" /> Edit
                   </Button>
-                  <Button variant="danger" size="sm" onClick={() => handleDelete(selectedTable.id)}>
-                    <Trash2 className="w-4 h-4" />
+                  <Button aria-label="Deactivate table" variant="danger" size="sm" onClick={() => handleDelete(selectedTable.id)}>
+                    <Trash2 className="w-4 h-4" aria-hidden="true" />
                   </Button>
                 </div>
               </div>

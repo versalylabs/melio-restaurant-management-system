@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { newRequestId } from '../../lib/utils';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import {
@@ -90,6 +90,7 @@ const money = (value: number, currency = 'KES') =>
   new Intl.NumberFormat('en-KE', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
 
 import { resolveImageUrl } from '../../utils/imageUtils';
+import DialogOverlay from '../../components/ui/DialogOverlay';
 
 const menuImage = (item?: Pick<MenuItem, 'name' | 'image'> | null) =>
   resolveImageUrl(item?.image, item?.name);
@@ -109,9 +110,29 @@ export default function OnlineOrdering() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [activeCategory, setActiveCategory] = useState('ALL');
+  // The category tabs pin directly under the header, whose height differs
+  // between phone (with the branch row) and desktop.
+  const [headerHeight, setHeaderHeight] = useState(64);
+  const headerObserver = useRef<ResizeObserver | null>(null);
+  const headerEl = useRef<HTMLElement | null>(null);
+  const headerRef = useCallback((el: HTMLElement | null) => {
+    headerObserver.current?.disconnect();
+    headerObserver.current = null;
+    headerEl.current = el;
+    if (!el) return;
+    setHeaderHeight(el.offsetHeight);
+    if (typeof ResizeObserver === 'undefined') return;
+    headerObserver.current = new ResizeObserver(() => setHeaderHeight(el.offsetHeight));
+    headerObserver.current.observe(el);
+  }, []);
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
   const [loading, setLoading] = useState(true);
+  // Re-measure when the header's content changes (e.g. the branch row
+  // appears once restaurants load); ResizeObserver covers window resizes.
+  useLayoutEffect(() => {
+    if (headerEl.current) setHeaderHeight(headerEl.current.offsetHeight);
+  }, [loading, restaurant, branchId]);
   const [menuLoading, setMenuLoading] = useState(false);
   const [error, setError] = useState('');
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -376,9 +397,9 @@ export default function OnlineOrdering() {
   }
 
   return (
-    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#faf9f7] text-slate-800 dark:bg-[#0d0d11] dark:text-gray-100 antialiased pb-28 md:pb-24 selection:bg-orange-500 selection:text-white">
+    <div className="min-h-screen w-full max-w-full overflow-x-clip bg-[#faf9f7] text-slate-800 dark:bg-[#0d0d11] dark:text-gray-100 antialiased pb-28 md:pb-24 selection:bg-orange-500 selection:text-white">
       {/* Top Header */}
-      <header className="sticky top-0 z-30 w-full max-w-full border-b border-orange-500/15 bg-black/75 backdrop-blur-xl text-white shadow-md">
+      <header ref={headerRef} className="sticky top-0 z-30 w-full max-w-full border-b border-orange-500/15 bg-black/75 backdrop-blur-xl text-white shadow-md">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-3.5 py-3 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5 sm:gap-3 group shrink-0">
             <div className="grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl bg-orange-500 text-white shadow-lg shadow-orange-500/25 group-hover:scale-105 transition">
@@ -574,14 +595,19 @@ export default function OnlineOrdering() {
               </div>
             </div>
 
-            {/* Category Pills Bar (Edge-to-edge scrollable on mobile) */}
-            <div className="mt-4 sm:mt-6 w-full max-w-full min-w-0 flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+          </SpotlightCard>
+
+          {/* Category tabs stay pinned under the header while scrolling the menu */}
+          <nav aria-label="Menu categories" style={{ top: headerHeight }} className="sticky z-20 -mx-3.5 px-3.5 py-2.5 sm:mx-0 sm:px-0 bg-[#faf9f7]/95 dark:bg-[#0d0d11]/95 backdrop-blur-md">
+            <div className="w-full max-w-full min-w-0 flex gap-2 overflow-x-auto scrollbar-none">
               <button
+                type="button"
+                aria-pressed={activeCategory === 'ALL'}
                 onClick={() => setActiveCategory('ALL')}
                 className={`whitespace-nowrap rounded-xl px-3.5 py-2 text-xs font-bold uppercase tracking-wider transition shrink-0 ${
                   activeCategory === 'ALL'
                     ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25'
-                    : 'bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white'
+                    : 'bg-black/5 text-slate-600 hover:bg-black/10 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20 dark:hover:text-white'
                 }`}
               >
                 All Dishes ({items.length})
@@ -589,18 +615,20 @@ export default function OnlineOrdering() {
               {categories.map((category) => (
                 <button
                   key={category.id}
+                  type="button"
+                  aria-pressed={activeCategory === category.id}
                   onClick={() => setActiveCategory(category.id)}
                   className={`whitespace-nowrap rounded-xl px-3.5 py-2 text-xs font-bold uppercase tracking-wider transition shrink-0 ${
                     activeCategory === category.id
                       ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25'
-                      : 'bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white'
+                      : 'bg-black/5 text-slate-600 hover:bg-black/10 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20 dark:hover:text-white'
                   }`}
                 >
                   {category.name}
                 </button>
               ))}
             </div>
-          </SpotlightCard>
+          </nav>
 
           {error && (
             <div className="flex items-center justify-between gap-2 rounded-2xl border border-red-500/40 bg-red-950/60 p-4 text-xs text-red-200 w-full min-w-0">
@@ -624,7 +652,7 @@ export default function OnlineOrdering() {
               <span className="text-xs uppercase tracking-widest font-sans">Refreshing Branch Menu...</span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 xl:grid-cols-3 w-full min-w-0">
+            <div className="grid grid-cols-1 gap-3 sm:gap-6 sm:grid-cols-2 xl:grid-cols-3 w-full min-w-0">
               {filteredItems.map((item) => {
                 const inCart = cart.find((line) => line.id === item.id);
                 const resolvedImage = menuImage(item);
@@ -633,9 +661,9 @@ export default function OnlineOrdering() {
                     key={item.id}
                     className="w-full max-w-full min-w-0 group flex flex-col justify-between overflow-hidden rounded-2xl sm:rounded-3xl border border-orange-500/10 bg-white shadow-sm dark:bg-zinc-900/80 dark:border-white/5 transition hover:-translate-y-1 hover:shadow-xl"
                   >
-                    <div className="w-full min-w-0">
-                      {/* Image Container */}
-                      <div className="relative h-44 sm:h-48 w-full overflow-hidden bg-zinc-950">
+                    <div className="w-full min-w-0 flex gap-3 p-3 sm:block sm:p-0">
+                      {/* Image: small thumbnail on phones, full width from sm up */}
+                      <div className="relative h-24 w-24 shrink-0 rounded-xl sm:rounded-none sm:h-48 sm:w-full overflow-hidden bg-zinc-950">
                         <OptimizedImage
                           src={resolvedImage}
                           alt={item.name}
@@ -643,16 +671,17 @@ export default function OnlineOrdering() {
                           className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
                           fallbackIcon={<div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-orange-500/10 to-transparent text-5xl">🍽️</div>}
                         />
-                        <span className="absolute right-3 top-3 rounded-full bg-black/75 px-3 py-1 text-xs font-extrabold text-orange-400 backdrop-blur-md border border-orange-500/30 shadow-md">
+                        <span className="hidden sm:inline absolute right-3 top-3 rounded-full bg-black/75 px-3 py-1 text-xs font-extrabold text-orange-400 backdrop-blur-md border border-orange-500/30 shadow-md">
                           {money(item.sellingPrice, currency)}
                         </span>
                       </div>
 
                       {/* Content */}
-                      <div className="p-4 sm:p-5 w-full min-w-0">
+                      <div className="flex-1 sm:p-5 w-full min-w-0">
                         <h2 className="font-serif text-base sm:text-lg font-bold text-slate-950 dark:text-white group-hover:text-orange-500 transition line-clamp-1 break-words">
                           {item.name}
                         </h2>
+                        <p className="sm:hidden mt-0.5 text-sm font-extrabold text-orange-500">{money(item.sellingPrice, currency)}</p>
                         <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500 dark:text-gray-400 break-words">
                           {item.description || 'Artisanal recipe prepared fresh using premium local ingredients.'}
                         </p>
@@ -660,7 +689,7 @@ export default function OnlineOrdering() {
                     </div>
 
                     {/* Footer Actions with Touch Targets */}
-                    <div className="flex items-center justify-between border-t border-slate-100 p-4 pt-3 dark:border-white/5 w-full min-w-0">
+                    <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2 sm:p-4 sm:pt-3 dark:border-white/5 w-full min-w-0">
                       <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 dark:text-gray-400">
                         <Clock3 size={13} className="text-orange-500 shrink-0" />
                         <span>{item.preparationTime ? `${item.preparationTime} mins` : 'Freshly made'}</span>
@@ -671,8 +700,8 @@ export default function OnlineOrdering() {
                           <button
                             type="button"
                             onClick={() => setQuantity(item.id, inCart.quantity - 1)}
-                            className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 active:scale-95 transition"
-                            aria-label="Decrease quantity"
+                            className="h-10 w-10 sm:h-8 sm:w-8 rounded-lg bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 active:scale-95 transition"
+                            aria-label={`Remove one ${item.name}`}
                           >
                             <Minus size={13} />
                           </button>
@@ -682,8 +711,8 @@ export default function OnlineOrdering() {
                           <button
                             type="button"
                             onClick={() => setQuantity(item.id, inCart.quantity + 1)}
-                            className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 active:scale-95 transition"
-                            aria-label="Increase quantity"
+                            className="h-10 w-10 sm:h-8 sm:w-8 rounded-lg bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 active:scale-95 transition"
+                            aria-label={`Add one ${item.name}`}
                           >
                             <Plus size={13} />
                           </button>
@@ -692,7 +721,8 @@ export default function OnlineOrdering() {
                         <button
                           type="button"
                           onClick={() => addItem(item)}
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-orange-500 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-orange-500/25 active:scale-95 hover:bg-orange-600 transition"
+                          aria-label={`Add ${item.name} to order`}
+                          className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-orange-500 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-orange-500/25 active:scale-95 hover:bg-orange-600 transition"
                         >
                           <Plus size={14} /> Add
                         </button>
@@ -848,7 +878,7 @@ export default function OnlineOrdering() {
 
       {/* Checkout Modal & Mobile Bottom Sheet */}
       {checkoutOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+        <DialogOverlay onClose={() => setCheckoutOpen(false)} label="Order checkout" className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
           <div className="relative w-full max-w-xl max-h-[92vh] sm:max-h-[88vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl bg-zinc-950 border border-orange-500/20 p-5 sm:p-8 text-white shadow-2xl">
             <button
               onClick={() => setCheckoutOpen(false)}
@@ -1068,7 +1098,7 @@ export default function OnlineOrdering() {
             </button>
             </form>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {/* Mobile Sticky Bottom Cart Bar */}

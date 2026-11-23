@@ -10,6 +10,7 @@ import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import { useAuth } from '../../contexts/AuthContext';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
+import { confirmDialog, notify } from '../../lib/dialogs';
 
 export default function TableCombinations() {
   const navigate = useNavigate();
@@ -47,7 +48,7 @@ export default function TableCombinations() {
       if (editingCombination) {
         await tableApi.updateTableCombination(editingCombination.id, formData);
       } else {
-        alert('Please use the Floor Plan to create table combinations by selecting tables and clicking Combine.');
+        notify('Please use the Floor Plan to create table combinations by selecting tables and clicking Combine.');
         return;
       }
       setShowModal(false);
@@ -60,7 +61,7 @@ export default function TableCombinations() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to deactivate this table combination?')) return;
+    if (!await confirmDialog('Are you sure you want to deactivate this table combination?')) return;
     try {
       await tableApi.deleteTableCombination(id);
       fetchCombinations();
@@ -135,15 +136,15 @@ export default function TableCombinations() {
                     <Badge variant={combination.status === 'ACTIVE' ? 'success' : 'warning'}>{combination.status}</Badge>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
+                    <button aria-label="Edit"
                       onClick={() => { setEditingCombination(combination); setFormData({ name: combination.name, status: combination.status }); setShowModal(true); }}
                       className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3"
                     >
-                      <Edit className="w-4 h-4" />
+                      <Edit className="w-4 h-4" aria-hidden="true" />
                     </button>
                     {combination.status === 'ACTIVE' && (
-                      <button onClick={() => handleDelete(combination.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300">
-                        <Trash2 className="w-4 h-4" />
+                      <button aria-label="Deactivate" onClick={() => handleDelete(combination.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300">
+                        <Trash2 className="w-4 h-4" aria-hidden="true" />
                       </button>
                     )}
                   </td>

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Calendar, Clock, Users, CheckCircle, Sparkles, AlertCircle, Printer, CalendarPlus, Copy, Check } from 'lucide-react';
 import { publicOrderingApi } from '../../../services/api';
 import { printReservationReceipt, downloadReservationIcs } from '../../../utils/reservationReceipt';
+import DialogOverlay from '../../../components/ui/DialogOverlay';
 
 type Branch = { id: string; name: string; city?: string; address?: string; phone?: string };
 
@@ -80,7 +81,7 @@ export default function ReservationModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
+    <DialogOverlay onClose={handleReset} label="Reserve a table" className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
       <div className="relative w-full max-w-lg rounded-3xl bg-zinc-950 border border-orange-500/20 text-white shadow-2xl p-6 sm:p-8">
         <button
           onClick={handleReset}
@@ -400,6 +401,6 @@ export default function ReservationModal({
           </form>
         )}
       </div>
-    </div>
+    </DialogOverlay>
   );
 }

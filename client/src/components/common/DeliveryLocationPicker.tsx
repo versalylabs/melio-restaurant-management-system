@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { MapPin, Navigation, Search, Check, RefreshCw } from 'lucide-react';
+import { notify } from '../../lib/dialogs';
 
 interface DeliveryLocationPickerProps {
   value: string;
@@ -182,7 +183,7 @@ export default function DeliveryLocationPicker({
   // "Use My GPS Location" Handler
   const handleLocateMe = () => {
     if (!navigator.geolocation) {
-      alert('Geolocation is not supported by your browser.');
+      notify('Geolocation is not supported by your browser.');
       return;
     }
 
@@ -204,7 +205,7 @@ export default function DeliveryLocationPicker({
       (err) => {
         setIsLocating(false);
         console.warn('Geolocation error:', err);
-        alert('Could not determine your location. Please pin manually on the map.');
+        notify('Could not determine your location. Please pin manually on the map.');
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
@@ -237,7 +238,7 @@ export default function DeliveryLocationPicker({
 
           reverseGeocode(lat, lng);
         } else {
-          alert('Location not found. Try dragging the pin on the map instead.');
+          notify('Location not found. Try dragging the pin on the map instead.');
         }
       }
     } catch (err) {

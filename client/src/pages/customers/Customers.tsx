@@ -3,6 +3,7 @@ import { ChevronRight, Search } from 'lucide-react';
 import { customerApi } from '../../services/api';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import DialogOverlay from '../../components/ui/DialogOverlay';
 
 const emptyForm = { name: '', phone: '', email: '', address: '', notes: '' };
 
@@ -111,7 +112,7 @@ export default function Customers() {
 
       {/* Add customer modal */}
       {show && (
-        <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50">
+        <DialogOverlay onClose={() => setShow(false)} label="Add customer" className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50">
           <form
             onSubmit={save}
             className="bg-white dark:bg-[#111116] rounded-xl border border-orange-100 dark:border-gray-700 shadow-xl p-6 w-full max-w-lg space-y-4"
@@ -132,7 +133,7 @@ export default function Customers() {
               <Button type="submit" loading={loading}>{loading ? 'Saving...' : 'Save Customer'}</Button>
             </div>
           </form>
-        </div>
+        </DialogOverlay>
       )}
     </div>
   );

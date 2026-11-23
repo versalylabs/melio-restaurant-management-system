@@ -5,6 +5,8 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
+import { confirmDialog } from '../../lib/dialogs';
+import DialogOverlay from '../../components/ui/DialogOverlay';
 
 const empty = {
   name: '',
@@ -122,7 +124,7 @@ export default function Promotions() {
   };
 
   const remove = async (id: string, name: string) => {
-    if (!confirm(`Delete promotion "${name}"?`)) return;
+    if (!await confirmDialog(`Delete promotion "${name}"?`)) return;
     setDeletingId(id);
     setError('');
     setSuccess('');
@@ -228,12 +230,12 @@ export default function Promotions() {
                     <Badge variant={p.active ? 'success' : 'warning'}>{p.active ? 'ACTIVE' : 'INACTIVE'}</Badge>
                   </td>
                   <td className="px-5 py-4 whitespace-nowrap text-sm">
-                    <button
+                    <button aria-label="Edit promotion"
                       onClick={() => open(p)}
                       className="text-orange-600 hover:text-orange-900 dark:text-orange-400 dark:hover:text-orange-300 mr-3 inline-flex items-center gap-1"
                       title="Edit promotion"
                     >
-                      <Edit className="w-4 h-4" />
+                      <Edit className="w-4 h-4" aria-hidden="true" />
                     </button>
                     <button
                       onClick={() => remove(p.id, p.name)}
@@ -267,7 +269,7 @@ export default function Promotions() {
       </Card>
 
       {show && (
-        <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50 p-4">
+        <DialogOverlay onClose={() => setShow(false)} label="Promotion" className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50 p-4">
           <Card title={editing ? 'Edit Promotion' : 'Create Promotion'} className="w-full max-w-3xl max-h-[92vh] overflow-y-auto">
             {modalError && (
               <div className="mb-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm flex items-center gap-2">
@@ -477,7 +479,7 @@ export default function Promotions() {
               </div>
             </form>
           </Card>
-        </div>
+        </DialogOverlay>
       )}
     </div>
   );

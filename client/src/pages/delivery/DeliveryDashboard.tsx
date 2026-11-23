@@ -52,6 +52,7 @@ interface DeliveryOrder {
 }
 
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
+import { confirmDialog } from '../../lib/dialogs';
 
 export default function DeliveryDashboard() {
   const { user } = useAuth();
@@ -109,7 +110,7 @@ export default function DeliveryDashboard() {
   }, [fetchDeliveries]);
 
   const handleUpdateStatus = async (orderId: string, nextStatus: string) => {
-    if (nextStatus === 'COMPLETED' && !window.confirm('Mark this delivery as successfully completed/delivered?')) {
+    if (nextStatus === 'COMPLETED' && !await confirmDialog('Mark this delivery as successfully completed/delivered?')) {
       return;
     }
 

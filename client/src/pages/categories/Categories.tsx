@@ -6,6 +6,8 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
+import { confirmDialog } from '../../lib/dialogs';
+import DialogOverlay from '../../components/ui/DialogOverlay';
 
 export default function Categories() {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -51,7 +53,7 @@ export default function Categories() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to deactivate this category?')) return;
+    if (!await confirmDialog('Are you sure you want to deactivate this category?')) return;
     try {
       await categoryApi.deleteCategory(id);
       fetchCategories();
@@ -125,12 +127,12 @@ export default function Categories() {
                     <Badge variant={cat.status === 'ACTIVE' ? 'success' : 'warning'}>{cat.status}</Badge>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button onClick={() => { setEditingCategory(cat); setFormData({ name: cat.name, description: cat.description || '', displayOrder: cat.displayOrder, status: cat.status }); setShowModal(true); }} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3">
-                      <Edit className="w-4 h-4" />
+                    <button aria-label="Edit" onClick={() => { setEditingCategory(cat); setFormData({ name: cat.name, description: cat.description || '', displayOrder: cat.displayOrder, status: cat.status }); setShowModal(true); }} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 dark:hover:text-orange-300 mr-3">
+                      <Edit className="w-4 h-4" aria-hidden="true" />
                     </button>
                     {cat.status === 'ACTIVE' && (
-                      <button onClick={() => handleDelete(cat.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300">
-                        <Trash2 className="w-4 h-4" />
+                      <button aria-label="Deactivate" onClick={() => handleDelete(cat.id)} className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300">
+                        <Trash2 className="w-4 h-4" aria-hidden="true" />
                       </button>
                     )}
                   </td>
@@ -149,7 +151,7 @@ export default function Categories() {
       </Card>
 
       {showModal && (
-        <div className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50 p-4">
+        <DialogOverlay onClose={() => { setShowModal(false); setEditingCategory(null); }} label="Category" className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center z-50 p-4">
           <Card title={editingCategory ? 'Edit Category' : 'Add Category'} className="w-full max-w-md">
             <form onSubmit={handleSubmit} className="space-y-4">
               <Input id="name" label="Name" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} required />
@@ -168,7 +170,7 @@ export default function Categories() {
               </div>
             </form>
           </Card>
-        </div>
+        </DialogOverlay>
       )}
     </div>
   );

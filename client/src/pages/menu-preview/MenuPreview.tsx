@@ -7,6 +7,7 @@ import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
 import { OptimizedImage } from '../../components/common/OptimizedImage';
+import DialogOverlay from '../../components/ui/DialogOverlay';
 
 export default function MenuPreview() {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -150,16 +151,16 @@ export default function MenuPreview() {
 
       {/* Item Detail Modal */}
       {selectedItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <DialogOverlay onClose={() => setSelectedItem(null)} label="Menu item details" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="w-full max-w-lg rounded-3xl border border-orange-500/20 bg-white dark:bg-[#121218] p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900 dark:text-white">{selectedItem.name}</h2>
-              <button
+              <button aria-label="Close"
                 type="button"
                 onClick={() => setSelectedItem(null)}
                 className="rounded-xl p-1.5 text-gray-400 hover:bg-orange-500/10 hover:text-orange-500"
               >
-                <X className="h-5 w-5" />
+                <X className="h-5 w-5" aria-hidden="true" />
               </button>
             </div>
             <div className="aspect-[16/10] w-full overflow-hidden rounded-2xl bg-orange-50 dark:bg-[#15151c]">
@@ -194,7 +195,7 @@ export default function MenuPreview() {
               </Button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
     </div>
   );

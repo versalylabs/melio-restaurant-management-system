@@ -1,0 +1,15 @@
+# Public pages may be indexed; the staff app and personal pages may not.
+User-agent: *
+Allow: /$
+Allow: /order-online
+Disallow: /dashboard
+Disallow: /pos
+Disallow: /orders
+Disallow: /kitchen
+Disallow: /online-order/
+Disallow: /account
+Disallow: /customer/
+Disallow: /login
+Disallow: /setup
+
+Sitemap: https://melio-restaurant-management-system-nine.vercel.app/sitemap.xml
