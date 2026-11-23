@@ -76,33 +76,60 @@ export function sanitizeInputs(req: Request, _res: Response, next: NextFunction)
   next();
 }
 
-// Multi-Origin Dynamic CORS Origin Validator
-export function getCorsOriginValidator() {
-  const rawOrigins = process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || 'http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173';
-  const allowedList = rawOrigins
+// CORS allowlist. Never allow wildcard domains such as *.vercel.app together
+// with credentials: anyone can deploy a site on those domains.
+function buildAllowedOrigins(): Set<string> {
+  const configured = [process.env.ALLOWED_ORIGINS, process.env.FRONTEND_URL]
+    .filter(Boolean)
+    .join(',')
     .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter((o) => o && o !== '*');
 
-  const localPatterns = [
-    /^http:\/\/localhost(:\d+)?$/,
-    /^http:\/\/127\.0\.0\.1(:\d+)?$/,
-    /\.vercel\.app$/,
+  // Vercel system env vars: this project's own production/preview hostnames.
+  const vercelHosts = [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
+    .filter((h): h is string => Boolean(h))
+    .map((h) => `https://${h}`);
+
+  // Known Melio production frontends (exact hosts only). The client on any
+  // *.vercel.app host calls the API on melio-restaurant-management-system.vercel.app.
+  const knownFrontends = [
+    'https://melio-restaurant-management-system.vercel.app',
+    'https://melio-restaurant-management-system-nine.vercel.app',
   ];
 
-  return (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (like mobile apps, curl, server-to-server, Postman)
-    if (!origin) return callback(null, true);
+  return new Set([...configured, ...vercelHosts, ...knownFrontends]);
+}
 
-    if (
-      allowedList.includes('*') ||
-      allowedList.includes(origin) ||
-      localPatterns.some((pattern) => pattern.test(origin))
-    ) {
-      return callback(null, true);
+const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+
+export function getCorsOptionsDelegate(baseOptions: Record<string, unknown>) {
+  const allowed = buildAllowedOrigins();
+  if (process.env.ALLOWED_ORIGINS?.split(',').some((o) => o.trim() === '*')) {
+    console.warn('[CORS] ALLOWED_ORIGINS contains "*", which is ignored. List explicit origins instead.');
+  }
+
+  return (req: Request, callback: (err: Error | null, options?: Record<string, unknown>) => void) => {
+    const origin = req.headers.origin;
+    let allow = false;
+
+    if (!origin) {
+      allow = true; // non-browser clients (curl, server-to-server, Safaricom callbacks)
+    } else if (allowed.has(origin)) {
+      allow = true;
+    } else if (!isProduction && LOCAL_ORIGIN.test(origin)) {
+      allow = true;
+    } else {
+      // Same-origin requests (client and API served from one deployment).
+      try {
+        const originHost = new URL(origin).host;
+        const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+        allow = originHost === req.headers.host || (forwardedHost !== '' && originHost === forwardedHost);
+      } catch {
+        allow = false;
+      }
     }
 
-    // Safely deny unauthorized origins without throwing 500 internal server errors
-    callback(null, false);
+    callback(null, { ...baseOptions, origin: allow ? origin : false });
   };
 }

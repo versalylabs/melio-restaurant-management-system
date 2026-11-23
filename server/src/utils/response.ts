@@ -10,7 +10,12 @@ export const generateToken = (userId: string, restaurantId: string, tokenVersion
   );
 };
 
-export const hashPassword = async (password: string): Promise<string> => {
+/** Short-lived credential that is only valid for the staff realtime stream URL. */
+export const generateStreamTicket = (userId: string, restaurantId: string, tokenVersion: number = 0): string => {
+  return jwt.sign({ userId, restaurantId, tokenVersion, purpose: 'sse' }, process.env.JWT_SECRET!, { expiresIn: '60s' });
+};
+
+export const hashPassword =async (password: string): Promise<string> => {
   const saltRounds = 12;
   return bcrypt.hash(password, saltRounds);
 };

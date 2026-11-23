@@ -5,7 +5,7 @@ import routes from './routes';
 import prisma from './config/database';
 import path from 'path';
 import fs from 'fs';
-import { securityHeaders, sanitizeInputs, getCorsOriginValidator } from './middleware/security';
+import { securityHeaders, sanitizeInputs, getCorsOptionsDelegate } from './middleware/security';
 import { globalRateLimiter } from './middleware/rateLimiter';
 
 const app = express();
@@ -26,12 +26,11 @@ app.use(securityHeaders);
 app.use(globalRateLimiter);
 
 // 3. Multi-Origin Dynamic CORS
-app.use(cors({
-  origin: getCorsOriginValidator(),
+app.use(cors(getCorsOptionsDelegate({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Branch-ID', 'X-Restaurant-ID'],
-}));
+})));
 
 // 4. Request Body Parsing & Payload Sanitization
 app.use(express.json({ limit: '1mb' }));

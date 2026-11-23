@@ -42,15 +42,21 @@ export const authenticate = async (req: AuthRequest, res: ExpressResponse, next:
   try {
     const authHeader = req.headers.authorization;
     // Server-Sent Events/EventSource cannot attach custom Authorization headers.
-    // The staff realtime stream therefore accepts the same JWT as a query
-    // parameter, while normal API requests remain header-only.
+    // The staff realtime stream therefore accepts a 60-second, stream-only
+    // ticket (POST /api/realtime/ticket) as a query parameter. The long-lived
+    // login token is never accepted in a URL, where it would end up in logs.
     const isStaffRealtimeStream = req.baseUrl.endsWith('/realtime') && req.path === '/stream';
-    const queryToken = isStaffRealtimeStream && typeof req.query.token === 'string' ? req.query.token : undefined;
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : queryToken;
+    const ticket = isStaffRealtimeStream && typeof req.query.ticket === 'string' ? req.query.ticket : undefined;
+    const bearer = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : undefined;
+    const token = bearer || ticket;
     if (!token) {
       return res.status(401).json({ success: false, message: 'Access token required' });
     }
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string; restaurantId: string; tokenVersion?: number };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: string; restaurantId: string; tokenVersion?: number; purpose?: string };
+    // Stream tickets only work on the stream; login tokens only in the header.
+    if ((bearer && decoded.purpose === 'sse') || (!bearer && decoded.purpose !== 'sse')) {
+      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    }
 
     const user = await prisma.user.findUnique({ where: { id: decoded.userId }, include: { role: true } });
     if (!user || user.status !== 'ACTIVE' || (decoded.tokenVersion ?? 0) !== user.tokenVersion) {

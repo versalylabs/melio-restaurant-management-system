@@ -1,228 +1,337 @@
 import crypto from 'crypto';
 import prisma from '../config/database';
 import { realtimeService } from './realtimeService';
-import { notifyCustomerOrderUpdate } from './customerNotificationService';
+import { isPaymentSimulationEnabled, PaymentError, settleOnlinePayment } from './onlinePaymentService';
 
-export interface StkPushInitiateInput {
-  trackingToken: string;
-  phoneNumber: string;
-  amount?: number;
+/*
+ * M-Pesa (Safaricom Daraja) STK Push.
+ *
+ * State lives in the `payments` table, not in memory, so it works on
+ * serverless hosts (Vercel) where each request may hit a different instance:
+ *   - initiation creates/updates a PENDING payment whose `reference` is the CheckoutRequestID
+ *   - only Safaricom's callback (authenticated with MPESA_CALLBACK_SECRET and
+ *     re-verified with the STK query API) can complete it
+ *
+ * Required env for live payments:
+ *   MPESA_ENVIRONMENT=sandbox|production, MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET,
+ *   MPESA_PASSKEY, MPESA_SHORTCODE, MPESA_CALLBACK_SECRET,
+ *   MPESA_CALLBACK_URL=https://<your-domain>/api/public/payments/mpesa/callback
+ * Optional: MPESA_TRANSACTION_TYPE (default CustomerPayBillOnline; use
+ *   CustomerBuyGoodsOnline for till numbers), MPESA_PARTY_B (till number when it
+ *   differs from the shortcode).
+ */
+
+const CHECKOUT_TAG = (id: string) => `[CheckoutRequestID: ${id}]`;
+
+function config() {
+  const env = process.env.MPESA_ENVIRONMENT === 'production' ? 'production' : 'sandbox';
+  const shortcode = process.env.MPESA_SHORTCODE || '';
+  return {
+    baseUrl: env === 'production' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke',
+    consumerKey: process.env.MPESA_CONSUMER_KEY || '',
+    consumerSecret: process.env.MPESA_CONSUMER_SECRET || '',
+    passkey: process.env.MPESA_PASSKEY || '',
+    shortcode,
+    partyB: process.env.MPESA_PARTY_B || shortcode,
+    transactionType: process.env.MPESA_TRANSACTION_TYPE || 'CustomerPayBillOnline',
+    callbackUrl: process.env.MPESA_CALLBACK_URL || '',
+    callbackSecret: process.env.MPESA_CALLBACK_SECRET || '',
+  };
 }
 
-export interface StkTransactionState {
-  checkoutRequestId: string;
-  merchantRequestId: string;
-  trackingToken: string;
-  saleId: string;
-  branchId: string;
-  restaurantId: string;
-  phoneNumber: string;
-  amount: number;
-  status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCELLED';
-  mpesaReceiptNumber?: string;
-  failureReason?: string;
-  createdAt: Date;
+export function isMpesaConfigured(): boolean {
+  const c = config();
+  return Boolean(c.consumerKey && c.consumerSecret && c.passkey && c.shortcode && c.callbackUrl && c.callbackSecret.length >= 16);
 }
-
-// In-memory active STK tracking table
-const activeStkRequests = new Map<string, StkTransactionState>();
 
 function formatPhoneNumber(phone: string): string {
   let cleaned = phone.replace(/\D/g, '');
-  if (cleaned.startsWith('0')) {
-    cleaned = '254' + cleaned.slice(1);
-  } else if (cleaned.startsWith('7') || cleaned.startsWith('1')) {
-    cleaned = '254' + cleaned;
-  }
+  if (cleaned.startsWith('0')) cleaned = '254' + cleaned.slice(1);
+  else if (cleaned.startsWith('7') || cleaned.startsWith('1')) cleaned = '254' + cleaned;
   return cleaned;
 }
 
-export async function initiateMpesaStkPush({
-  trackingToken,
-  phoneNumber,
-}: StkPushInitiateInput) {
-  const online = await prisma.onlineOrder.findUnique({
-    where: { trackingToken },
-    include: {
-      sale: true,
-      restaurant: true,
-      branch: true,
-    },
-  });
+const maskPhone = (p: string) => (p.length > 7 ? `${p.slice(0, 6)}***${p.slice(-3)}` : '***');
 
-  if (!online) throw new Error('ORDER_NOT_FOUND');
-  if (online.paymentState === 'PAID') throw new Error('ORDER_ALREADY_PAID');
-  if (online.sale.status === 'CANCELLED') throw new Error('ORDER_CANCELLED');
+/** Daraja expects the timestamp in Kenyan time (EAT, UTC+3) as YYYYMMDDHHmmss. */
+function darajaTimestamp(): string {
+  const eat = new Date(Date.now() + 3 * 60 * 60 * 1000);
+  return eat.toISOString().replace(/[-:T]/g, '').slice(0, 14);
+}
+
+let cachedToken: { value: string; expiresAt: number } | null = null;
+
+async function getAccessToken(): Promise<string> {
+  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) return cachedToken.value;
+  const c = config();
+  const basic = Buffer.from(`${c.consumerKey}:${c.consumerSecret}`).toString('base64');
+  const res = await fetch(`${c.baseUrl}/oauth/v1/generate?grant_type=client_credentials`, {
+    headers: { Authorization: `Basic ${basic}` },
+  });
+  if (!res.ok) throw new PaymentError('MPESA_AUTH_FAILED', 'Could not reach M-Pesa. Please try again shortly.', 502);
+  const body = (await res.json()) as { access_token: string; expires_in: string | number };
+  cachedToken = { value: body.access_token, expiresAt: Date.now() + Number(body.expires_in || 3599) * 1000 };
+  return body.access_token;
+}
+
+async function darajaPost<T>(path: string, payload: Record<string, unknown>): Promise<T> {
+  const token = await getAccessToken();
+  const res = await fetch(`${config().baseUrl}${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = (await res.json().catch(() => ({}))) as T & { errorMessage?: string };
+  if (!res.ok) {
+    throw new PaymentError('MPESA_REQUEST_FAILED', body?.errorMessage || `M-Pesa request failed (${res.status})`, 502);
+  }
+  return body;
+}
+
+function stkPassword(timestamp: string) {
+  const c = config();
+  return Buffer.from(`${c.shortcode}${c.passkey}${timestamp}`).toString('base64');
+}
+
+export async function initiateMpesaStkPush({ trackingToken, phoneNumber }: { trackingToken: string; phoneNumber: string; amount?: number }) {
+  const simulated = !isMpesaConfigured();
+  if (simulated && !isPaymentSimulationEnabled()) {
+    throw new PaymentError('MPESA_NOT_CONFIGURED', 'M-Pesa payments are not available right now. Please choose pay on pickup or contact the restaurant.', 503);
+  }
+
+  const online = await prisma.onlineOrder.findUnique({ where: { trackingToken }, include: { sale: true } });
+  if (!online) throw new PaymentError('ORDER_NOT_FOUND', 'Order not found', 404);
+  if (online.paymentState === 'PAID') throw new PaymentError('ORDER_ALREADY_PAID', 'This order has already been paid');
+  if (online.sale.status === 'CANCELLED') throw new PaymentError('ORDER_CANCELLED', 'This order was cancelled');
 
   const formattedPhone = formatPhoneNumber(phoneNumber);
   if (!/^254(7|1)\d{8}$/.test(formattedPhone)) {
-    throw new Error('INVALID_PHONE_NUMBER: Please enter a valid Kenyan Safaricom phone number (e.g. 0712345678).');
+    throw new PaymentError('INVALID_PHONE_NUMBER', 'Please enter a valid Kenyan Safaricom phone number (e.g. 0712345678).');
   }
 
   const payableAmount = Math.max(0, online.sale.totalAmount - online.sale.amountPaid);
-  if (payableAmount <= 0) throw new Error('ORDER_ALREADY_PAID');
+  if (payableAmount <= 0) throw new PaymentError('ORDER_ALREADY_PAID', 'This order has already been paid');
+  // Daraja only accepts whole shillings.
+  const chargeAmount = Math.ceil(payableAmount);
 
-  const checkoutRequestId = `ws_CO_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-  const merchantRequestId = `MR_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+  let checkoutRequestId: string;
+  let merchantRequestId: string;
 
-  const state: StkTransactionState = {
-    checkoutRequestId,
-    merchantRequestId,
-    trackingToken,
-    saleId: online.saleId,
-    branchId: online.branchId,
-    restaurantId: online.restaurantId,
-    phoneNumber: formattedPhone,
-    amount: payableAmount,
-    status: 'PENDING',
-    createdAt: new Date(),
-  };
+  if (simulated) {
+    checkoutRequestId = `SIM_ws_CO_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+    merchantRequestId = `SIM_MR_${crypto.randomBytes(4).toString('hex')}`;
+  } else {
+    const c = config();
+    const callback = new URL(c.callbackUrl);
+    callback.searchParams.set('token', c.callbackSecret);
+    const timestamp = darajaTimestamp();
+    const response = await darajaPost<{ ResponseCode: string; ResponseDescription: string; CheckoutRequestID: string; MerchantRequestID: string; CustomerMessage?: string }>(
+      '/mpesa/stkpush/v1/processrequest',
+      {
+        BusinessShortCode: c.shortcode,
+        Password: stkPassword(timestamp),
+        Timestamp: timestamp,
+        TransactionType: c.transactionType,
+        Amount: chargeAmount,
+        PartyA: formattedPhone,
+        PartyB: c.partyB,
+        PhoneNumber: formattedPhone,
+        CallBackURL: callback.toString(),
+        AccountReference: online.sale.orderNumber.replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'MELIO',
+        TransactionDesc: 'Melio order',
+      },
+    );
+    if (String(response.ResponseCode) !== '0') {
+      throw new PaymentError('MPESA_REJECTED', response.ResponseDescription || 'M-Pesa could not start the payment', 502);
+    }
+    checkoutRequestId = response.CheckoutRequestID;
+    merchantRequestId = response.MerchantRequestID;
+  }
 
-  activeStkRequests.set(checkoutRequestId, state);
+  const notes = `M-Pesa STK push to ${maskPhone(formattedPhone)} ${CHECKOUT_TAG(checkoutRequestId)}${simulated ? ' [SIMULATED]' : ''}`;
 
-  // If live credentials exist, we would call Safaricom Daraja API
-  // Otherwise, we return the checkoutRequestId and allow immediate simulated confirmation
+  // Reuse the placeholder pending payment created at checkout if it has not
+  // been tied to an STK request yet; otherwise record a new attempt.
+  const placeholder = await prisma.payment.findFirst({
+    where: { saleId: online.saleId, status: 'PENDING', reference: null },
+    orderBy: { createdAt: 'desc' },
+  });
+  if (placeholder) {
+    await prisma.payment.update({
+      where: { id: placeholder.id },
+      data: { method: 'MOBILE_MONEY', amount: payableAmount, reference: checkoutRequestId, notes },
+    });
+  } else {
+    await prisma.payment.create({
+      data: {
+        restaurantId: online.restaurantId,
+        branchId: online.branchId,
+        saleId: online.saleId,
+        method: 'MOBILE_MONEY',
+        amount: payableAmount,
+        status: 'PENDING',
+        reference: checkoutRequestId,
+        notes,
+        createdBy: online.sale.createdBy,
+      },
+    });
+  }
+
   return {
     success: true,
+    simulated,
     message: `STK Push prompt sent to ${formattedPhone}. Please enter your M-Pesa PIN on your phone to complete payment.`,
     checkoutRequestId,
     merchantRequestId,
     phoneNumber: formattedPhone,
-    amount: payableAmount,
+    amount: chargeAmount,
   };
 }
 
-export async function confirmMpesaPayment({
-  checkoutRequestId,
-  mpesaReceiptNumber,
-}: {
-  checkoutRequestId: string;
-  mpesaReceiptNumber?: string;
-}) {
-  const state = activeStkRequests.get(checkoutRequestId);
-  if (!state) throw new Error('TRANSACTION_NOT_FOUND');
+async function findPendingStkPayment(checkoutRequestId: string) {
+  return prisma.payment.findFirst({
+    where: { reference: checkoutRequestId, status: 'PENDING', method: 'MOBILE_MONEY' },
+    include: { sale: { include: { onlineOrder: true } } },
+  });
+}
 
-  // Idempotency check on in-memory state
-  if (state.status === 'SUCCESS') {
-    return {
-      success: true,
-      paymentState: 'PAID',
-      receiptNumber: state.mpesaReceiptNumber,
-      amount: state.amount,
+function verifyCallbackToken(token: unknown): boolean {
+  const secret = config().callbackSecret;
+  if (!secret || typeof token !== 'string') return false;
+  const a = Buffer.from(token);
+  const b = Buffer.from(secret);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** Ask Safaricom directly whether the STK request succeeded (defence in depth on top of the callback secret). */
+async function queryStkResult(checkoutRequestId: string): Promise<'SUCCESS' | 'FAILED' | 'UNKNOWN'> {
+  try {
+    const c = config();
+    const timestamp = darajaTimestamp();
+    const result = await darajaPost<{ ResultCode?: string | number }>('/mpesa/stkpushquery/v1/query', {
+      BusinessShortCode: c.shortcode,
+      Password: stkPassword(timestamp),
+      Timestamp: timestamp,
+      CheckoutRequestID: checkoutRequestId,
+    });
+    if (result.ResultCode === undefined) return 'UNKNOWN';
+    return String(result.ResultCode) === '0' ? 'SUCCESS' : 'FAILED';
+  } catch (err) {
+    console.warn('[M-Pesa] STK status query failed; relying on authenticated callback:', err);
+    return 'UNKNOWN';
+  }
+}
+
+interface StkCallbackBody {
+  Body?: {
+    stkCallback?: {
+      MerchantRequestID?: string;
+      CheckoutRequestID?: string;
+      ResultCode?: number | string;
+      ResultDesc?: string;
+      CallbackMetadata?: { Item?: Array<{ Name: string; Value?: string | number }> };
     };
+  };
+}
+
+/** Handles Safaricom's STK callback. Always resolves; the route acknowledges Safaricom regardless. */
+export async function handleMpesaCallback(body: StkCallbackBody, token: unknown) {
+  if (!verifyCallbackToken(token)) throw new PaymentError('UNAUTHORIZED', 'Invalid callback token', 401);
+
+  const cb = body?.Body?.stkCallback;
+  const checkoutRequestId = cb?.CheckoutRequestID ? String(cb.CheckoutRequestID) : '';
+  if (!checkoutRequestId) return { handled: false, reason: 'missing CheckoutRequestID' };
+
+  const payment = await findPendingStkPayment(checkoutRequestId);
+  const online = payment?.sale.onlineOrder;
+  if (!payment || !online) return { handled: false, reason: 'no pending payment for this request' };
+
+  if (String(cb?.ResultCode) !== '0') {
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: { status: 'FAILED', notes: `${payment.notes || ''} [Failed: ${cb?.ResultDesc || 'cancelled'}]`.trim() },
+    });
+    realtimeService.broadcast(`order-tracking:${online.trackingToken}`, 'payment_failed', {
+      trackingToken: online.trackingToken,
+      method: 'M-Pesa',
+      reason: cb?.ResultDesc || 'Payment was not completed',
+    });
+    return { handled: true, status: 'FAILED' };
   }
 
-  const receipt = mpesaReceiptNumber || `QJH${Math.floor(10000000 + Math.random() * 90000000)}`;
+  const items = cb?.CallbackMetadata?.Item || [];
+  const meta = (name: string) => items.find((i) => i.Name === name)?.Value;
+  const paidAmount = Number(meta('Amount') || 0);
+  const receipt = String(meta('MpesaReceiptNumber') || '');
 
-  const online = await prisma.onlineOrder.findUnique({
-    where: { trackingToken: state.trackingToken },
-    include: { sale: true, restaurant: true },
-  });
+  if (!receipt || paidAmount + 0.01 < payment.amount) {
+    console.error(`[M-Pesa] Callback for ${checkoutRequestId} has missing receipt or short amount (${paidAmount} < ${payment.amount}). Left pending for manual review.`);
+    return { handled: false, reason: 'amount/receipt mismatch' };
+  }
 
-  if (!online) throw new Error('ORDER_NOT_FOUND');
+  if ((await queryStkResult(checkoutRequestId)) === 'FAILED') {
+    console.error(`[M-Pesa] Callback for ${checkoutRequestId} claims success but Daraja query disagrees. Ignoring.`);
+    return { handled: false, reason: 'verification failed' };
+  }
 
-  await prisma.$transaction(async (tx) => {
-    const currentOnline = await tx.onlineOrder.findUnique({
-      where: { id: online.id },
-      include: { sale: true },
+  if (online.paymentState === 'PAID') {
+    // Customer paid twice (e.g. retried STK push). Keep a record so staff can refund it.
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: { status: 'DUPLICATE', reference: receipt, notes: `${payment.notes || ''} [Duplicate payment ${paidAmount} — refund required]`.trim() },
     });
-    if (!currentOnline) throw new Error('ORDER_NOT_FOUND');
-    if (currentOnline.paymentState === 'PAID') return;
-    if (currentOnline.sale.status === 'CANCELLED') throw new Error('ORDER_CANCELLED');
+    console.warn(`[M-Pesa] Duplicate payment ${receipt} received for already-paid order ${online.trackingToken}.`);
+    return { handled: true, status: 'DUPLICATE' };
+  }
 
-    // 1. Update or create Payment
-    const existingPayment = await tx.payment.findFirst({
-      where: { saleId: online.saleId, status: 'PENDING' },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (existingPayment) {
-      await tx.payment.update({
-        where: { id: existingPayment.id },
-        data: {
-          status: 'COMPLETED',
-          method: 'MOBILE_MONEY',
-          amount: state.amount,
-          reference: receipt,
-          notes: `M-Pesa STK Push paid by ${state.phoneNumber}`,
-        },
-      });
-    } else {
-      await tx.payment.create({
-        data: {
-          restaurantId: online.restaurantId,
-          branchId: online.branchId,
-          saleId: online.saleId,
-          method: 'MOBILE_MONEY',
-          amount: state.amount,
-          status: 'COMPLETED',
-          reference: receipt,
-          notes: `M-Pesa STK Push paid by ${state.phoneNumber}`,
-          createdBy: online.sale.createdBy,
-        },
-      });
-    }
-
-    // 2. Update Sale
-    await tx.sale.update({
-      where: { id: online.saleId },
-      data: {
-        amountPaid: currentOnline.sale.totalAmount,
-        paymentStatus: 'PAID',
-      },
-    });
-
-    // 3. Update Online Order
-    await tx.onlineOrder.update({
-      where: { id: online.id },
-      data: {
-        paymentState: 'PAID',
-      },
-    });
+  await settleOnlinePayment({
+    onlineOrderId: online.id,
+    paymentId: payment.id,
+    method: 'MOBILE_MONEY',
+    amount: paidAmount,
+    reference: receipt,
+    notes: `M-Pesa receipt ${receipt} ${CHECKOUT_TAG(checkoutRequestId)}`,
+    displayMethod: 'M-Pesa',
   });
-
-  state.status = 'SUCCESS';
-  state.mpesaReceiptNumber = receipt;
-
-  // Broadcast live payment update to order tracking and staff
-  realtimeService.broadcast(`order-tracking:${state.trackingToken}`, 'payment_confirmed', {
-    trackingToken: state.trackingToken,
-    status: 'PAID',
-    method: 'M-Pesa',
-    receiptNumber: receipt,
-    amount: state.amount,
-    timestamp: new Date().toISOString(),
-  });
-
-  realtimeService.broadcast(`orders:${state.branchId}`, 'order_paid', {
-    saleId: state.saleId,
-    orderNumber: online.sale.orderNumber,
-    amount: state.amount,
-    method: 'M-Pesa',
-    receiptNumber: receipt,
-  });
-
-  // Notify customer
-  await notifyCustomerOrderUpdate({
-    trackingToken: state.trackingToken,
-    orderNumber: online.sale.orderNumber,
-    status: online.sale.status,
-    customerPhone: state.phoneNumber,
-    customerEmail: online.contactEmail,
-    restaurantName: online.restaurant.name,
-    totalAmount: state.amount,
-  });
-
-  return {
-    success: true,
-    paymentState: 'PAID',
-    receiptNumber: receipt,
-    amount: state.amount,
-  };
+  return { handled: true, status: 'PAID' };
 }
 
-export function getMpesaStatus(checkoutRequestId: string) {
-  const state = activeStkRequests.get(checkoutRequestId);
-  if (!state) return null;
-  return state;
+/** Simulation-only: lets the demo UI complete a fake STK push. Disabled unless PAYMENT_SIMULATION=true. */
+export async function confirmSimulatedMpesaPayment(checkoutRequestId: string) {
+  if (!isPaymentSimulationEnabled() || !checkoutRequestId.startsWith('SIM_')) {
+    throw new PaymentError('FORBIDDEN', 'M-Pesa payments are confirmed automatically by Safaricom.', 403);
+  }
+  const payment = await findPendingStkPayment(checkoutRequestId);
+  const online = payment?.sale.onlineOrder;
+  if (!payment || !online) throw new PaymentError('TRANSACTION_NOT_FOUND', 'Transaction not found', 404);
+
+  const receipt = `SIM${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  await settleOnlinePayment({
+    onlineOrderId: online.id,
+    paymentId: payment.id,
+    method: 'MOBILE_MONEY',
+    amount: payment.amount,
+    reference: receipt,
+    notes: `SIMULATED M-Pesa receipt ${receipt} ${CHECKOUT_TAG(checkoutRequestId)}`,
+    displayMethod: 'M-Pesa',
+  });
+  return { success: true, paymentState: 'PAID', receiptNumber: receipt, amount: payment.amount };
+}
+
+export async function getMpesaStatus(checkoutRequestId: string) {
+  const payment = await prisma.payment.findFirst({
+    where: {
+      method: 'MOBILE_MONEY',
+      OR: [{ reference: checkoutRequestId }, { notes: { contains: CHECKOUT_TAG(checkoutRequestId) } }],
+    },
+    select: { status: true, reference: true, amount: true },
+  });
+  if (!payment) return null;
+  const status = payment.status === 'COMPLETED' ? 'SUCCESS' : payment.status;
+  return {
+    checkoutRequestId,
+    status,
+    amount: payment.amount,
+    mpesaReceiptNumber: payment.status === 'COMPLETED' ? payment.reference : undefined,
+  };
 }

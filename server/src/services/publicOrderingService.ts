@@ -6,6 +6,7 @@ import { createKitchenTicketForOrder } from './kitchenService';
 import { notifyRestaurantStaff } from './notificationService';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate, notifyCustomerReservation } from './customerNotificationService';
+import { isPaymentSimulationEnabled, settleOnlinePayment } from './onlinePaymentService';
 import { sendError, sendResponse } from '../utils/response';
 import { Request, Response } from 'express';
 
@@ -189,16 +190,21 @@ export const confirmPublicPayment = async (req: Request, res: Response) => {
   if (online.paymentMethod === 'CASH') return sendError(res, 'This order is payable at pickup/delivery');
   if (online.paymentState === 'PAID') return sendResponse(res, true, 'Payment already confirmed', { paymentState: 'PAID' });
 
-  const reference = String(req.body?.reference || '').trim() || `ONLINE-${online.trackingToken.slice(0, 8).toUpperCase()}`;
-  await prisma.$transaction(async (tx) => {
-    const currentOnline = await tx.onlineOrder.findUnique({ where: { id: online.id } });
-    if (!currentOnline || currentOnline.paymentState === 'PAID') return;
+  // Customers must never be able to mark their own order as paid. Real
+  // payments are confirmed by the provider (see mpesaService callback).
+  if (!isPaymentSimulationEnabled()) {
+    return sendError(res, 'Payments are confirmed automatically by the payment provider.', undefined, 403);
+  }
 
-    const payment = await tx.payment.findFirst({ where: { saleId: online.saleId, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
-    if (payment) await tx.payment.update({ where: { id: payment.id }, data: { status: 'COMPLETED', reference } });
-    else await tx.payment.create({ data: { restaurantId: online.restaurantId, branchId: online.branchId, saleId: online.saleId, method: online.paymentMethod, amount: online.sale.totalAmount, status: 'COMPLETED', reference, createdBy: online.sale.createdBy } });
-    await tx.sale.update({ where: { id: online.saleId }, data: { amountPaid: online.sale.totalAmount, paymentStatus: 'PAID' } });
-    await tx.onlineOrder.update({ where: { id: online.id }, data: { paymentState: 'PAID' } });
+  const amount = Math.max(0, online.sale.totalAmount - online.sale.amountPaid);
+  const reference = `SIM-ONLINE-${online.trackingToken.slice(0, 8).toUpperCase()}`;
+  await settleOnlinePayment({
+    onlineOrderId: online.id,
+    method: online.paymentMethod,
+    amount,
+    reference,
+    notes: 'SIMULATED online payment confirmation',
+    displayMethod: online.paymentMethod,
   });
   return sendResponse(res, true, 'Payment confirmed', { paymentState: 'PAID' });
 };

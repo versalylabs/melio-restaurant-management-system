@@ -54,7 +54,8 @@ async function main() {
     await ensureMoiAvenueOperations(existing, moi);
     const existingMenu = await prisma.menuItem.findMany({where:{restaurantId:existing.id}});
     for (const item of existingMenu) await prisma.menuItemBranch.upsert({where:{menuItemId_branchId:{menuItemId:item.id,branchId:moi.id}},update:{available:true},create:{menuItemId:item.id,branchId:moi.id,available:true}});
-    await prisma.user.updateMany({where:{restaurantId:existing.id},data:{passwordHash:await bcrypt.hash('melio@2026',12)}});
+    // NOTE: the seed must never reset existing users' passwords. Doing so would
+    // silently put every real account (owner included) on a publicly known password.
   }
 }
 
@@ -250,7 +251,14 @@ async function fullSeed() {
   const chefRole = roles.find((r) => r.name === 'CHEF')!;
   const deliveryRole = roles.find((r) => r.name === 'DELIVERY')!;
 
-  const passwordHash = await bcrypt.hash('melio@2026', 12);
+  // Demo accounts get SEED_USER_PASSWORD. Outside production a well-known demo
+  // password is used if it is unset; in production it must be provided.
+  const seedPassword = process.env.SEED_USER_PASSWORD
+    || (process.env.NODE_ENV === 'production' ? '' : 'melio@2026');
+  if (seedPassword.length < 8) {
+    throw new Error('Set SEED_USER_PASSWORD (at least 8 characters) before seeding a production database.');
+  }
+  const passwordHash = await bcrypt.hash(seedPassword, 12);
 
   const users = await Promise.all([
     prisma.user.create({

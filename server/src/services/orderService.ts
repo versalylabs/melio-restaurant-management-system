@@ -956,16 +956,37 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
     return sendError(res, 'No offline orders provided to sync', undefined, 400);
   }
 
+  if (orders.length > 100) {
+    return sendError(res, 'Sync at most 100 offline orders per request', undefined, 400);
+  }
+
   const syncedOrders: Array<{ offlineId: string; serverOrderId: string; serverOrderNumber: string }> = [];
   const errors: Array<{ offlineId: string; error: string }> = [];
 
+  // Offline orders are re-priced on the server. Prices, totals and discounts
+  // sent by the device are never trusted, exactly like createOrder.
+  const canSwitchBranch = ['OWNER', 'ADMIN', 'MANAGER'].includes(req.user!.roleName);
+  const role = await prisma.role.findUnique({
+    where: { id: req.user!.roleId },
+    select: { maxDiscountPercent: true, maxDiscountAmount: true },
+  });
+
   for (const offlineOrder of orders) {
-    const offlineId = String(offlineOrder.id || '');
+    const offlineId = String(offlineOrder?.id || '');
     if (!offlineId) continue;
 
-    const branchId = offlineOrder.branchId || userBranchId;
+    // Branch: staff locked to a branch may only sync into it; owners/admins/
+    // managers may sync into any branch of their own restaurant.
+    const requestedBranchId = offlineOrder.branchId ? String(offlineOrder.branchId) : userBranchId;
+    let branchId: string | undefined;
+    if (requestedBranchId && requestedBranchId === userBranchId) {
+      branchId = userBranchId;
+    } else if (requestedBranchId && canSwitchBranch) {
+      const branch = await prisma.branch.findFirst({ where: { id: requestedBranchId, restaurantId }, select: { id: true } });
+      branchId = branch?.id;
+    }
     if (!branchId) {
-      errors.push({ offlineId, error: 'No branch ID associated with this order' });
+      errors.push({ offlineId, error: 'This order belongs to a branch your account cannot access' });
       continue;
     }
 
@@ -990,11 +1011,102 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
       }
 
       // 2. Validate items
-      const rawItems = Array.isArray(offlineOrder.items) ? offlineOrder.items : [];
+      const rawItems: any[] = Array.isArray(offlineOrder.items) ? offlineOrder.items : [];
       if (rawItems.length === 0) {
         errors.push({ offlineId, error: 'Order has no items' });
         continue;
       }
+      if (rawItems.some((item) => {
+        const qty = Number(item?.quantity);
+        return !Number.isInteger(qty) || qty < 1 || qty > 500;
+      })) {
+        errors.push({ offlineId, error: 'Item quantity must be a whole number between 1 and 500' });
+        continue;
+      }
+
+      // Look up authoritative prices. Inactive items are still accepted (the
+      // sale already happened offline) but must belong to this restaurant.
+      const menuItemIds = [...new Set(rawItems.map((item) => String(item?.menuItemId || '')))];
+      const dbMenuItems = await prisma.menuItem.findMany({
+        where: { id: { in: menuItemIds }, restaurantId },
+        select: { id: true, name: true, sellingPrice: true },
+      });
+      if (dbMenuItems.length !== menuItemIds.length) {
+        errors.push({ offlineId, error: 'Order contains menu items that do not exist in this restaurant' });
+        continue;
+      }
+      const menuMap = new Map(dbMenuItems.map((mi) => [mi.id, mi]));
+
+      const modifierIds = [...new Set(rawItems.flatMap((item) =>
+        (Array.isArray(item?.modifiers) ? item.modifiers : []).map((m: any) => String(m?.modifierOptionId || ''))))];
+      const dbModifiers = modifierIds.length
+        ? await prisma.modifierOption.findMany({
+            where: { id: { in: modifierIds }, modifierGroup: { restaurantId } },
+            select: { id: true, name: true, priceAdjustment: true },
+          })
+        : [];
+      if (dbModifiers.length !== modifierIds.length) {
+        errors.push({ offlineId, error: 'Order contains invalid modifier options' });
+        continue;
+      }
+      const modifierMap = new Map(dbModifiers.map((m) => [m.id, m]));
+
+      const normalizedItems = rawItems.map((item) => {
+        const menu = menuMap.get(String(item.menuItemId))!;
+        const modifiers = (Array.isArray(item.modifiers) ? item.modifiers : []).map((m: any) => {
+          const mod = modifierMap.get(String(m.modifierOptionId))!;
+          return { modifierOptionId: mod.id, optionNameSnapshot: mod.name, priceAdjustment: mod.priceAdjustment };
+        });
+        return {
+          menuItemId: menu.id,
+          itemNameSnapshot: menu.name,
+          unitPrice: menu.sellingPrice,
+          quantity: Number(item.quantity),
+          notes: item.notes ? String(item.notes).trim() : null,
+          modifiers,
+        };
+      });
+
+      // Manual discounts are subject to the same role approval limits as online orders.
+      const discountType: 'FIXED' | 'PERCENTAGE' = offlineOrder.discountType === 'PERCENTAGE' ? 'PERCENTAGE' : 'FIXED';
+      const requestedDiscount = Number(offlineOrder.discountAmount || 0);
+      if (!Number.isFinite(requestedDiscount) || requestedDiscount < 0) {
+        errors.push({ offlineId, error: 'Invalid discount amount' });
+        continue;
+      }
+      if (requestedDiscount > 0) {
+        const overLimit = discountType === 'PERCENTAGE'
+          ? requestedDiscount > (role?.maxDiscountPercent ?? 100)
+          : requestedDiscount > (role?.maxDiscountAmount ?? 1000000);
+        if (overLimit) {
+          errors.push({ offlineId, error: 'Discount exceeds your approval limit — a manager must re-enter this order' });
+          continue;
+        }
+      }
+
+      const totals = await calculateOrderTotals({
+        items: normalizedItems,
+        discountAmount: requestedDiscount,
+        discountType,
+        restaurantId,
+        branchId,
+      });
+
+      let customerId: string | undefined;
+      if (offlineOrder.customerId) {
+        const customer = await prisma.customer.findFirst({ where: { id: String(offlineOrder.customerId), restaurantId }, select: { id: true } });
+        customerId = customer?.id;
+      }
+
+      const parsedCreatedAt = offlineOrder.createdAt ? new Date(offlineOrder.createdAt) : null;
+      const createdAt = parsedCreatedAt && !Number.isNaN(parsedCreatedAt.getTime()) && parsedCreatedAt.getTime() <= Date.now()
+        ? parsedCreatedAt
+        : new Date();
+
+      const clientTotal = Number(offlineOrder.totalAmount);
+      const priceNote = Number.isFinite(clientTotal) && Math.abs(clientTotal - totals.totalAmount) > 0.01
+        ? ` [Offline total ${clientTotal} re-priced to ${totals.totalAmount}]`
+        : '';
 
       // 3. Process inside transaction
       const createdSale = await prisma.$transaction(async (tx) => {
@@ -1019,45 +1131,40 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
           }
         }
 
-        const notesWithTag = `${offlineOrder.notes ? offlineOrder.notes + ' ' : ''}${offlineTag} [OfflineRef: ${offlineOrder.offlineOrderNumber || 'OFF'}] [OfflineCreated: ${offlineOrder.createdAt || new Date().toISOString()}]`;
+        const notesWithTag = `${offlineOrder.notes ? String(offlineOrder.notes).trim() + ' ' : ''}${offlineTag} [OfflineRef: ${offlineOrder.offlineOrderNumber || 'OFF'}] [OfflineCreated: ${createdAt.toISOString()}]${priceNote}`;
 
         const finalStatus = offlineOrder.status === 'HELD' ? 'HELD' : 'SUBMITTED';
+        const orderType = ['DINE_IN', 'TAKEAWAY', 'DELIVERY'].includes(offlineOrder.orderType) ? offlineOrder.orderType : 'DINE_IN';
 
         const newSale = await tx.sale.create({
           data: {
             orderNumber,
-            orderType: offlineOrder.orderType || 'DINE_IN',
+            orderType,
             customerName: offlineOrder.customerName ? String(offlineOrder.customerName).trim() : null,
-            ...(offlineOrder.customerId ? { customer: { connect: { id: offlineOrder.customerId } } } : {}),
+            ...(customerId ? { customer: { connect: { id: customerId } } } : {}),
             status: finalStatus,
-            subtotal: Number(offlineOrder.subtotal) || 0,
-            discountAmount: Number(offlineOrder.discountAmount) || 0,
-            discountReason: offlineOrder.discountReason || (offlineOrder.discountAmount > 0 ? 'Offline Discount' : null),
-            discountAppliedBy: offlineOrder.discountAmount > 0 ? userId : null,
-            taxAmount: Number(offlineOrder.taxAmount) || 0,
-            serviceChargeAmount: Number(offlineOrder.serviceChargeAmount) || 0,
-            totalAmount: Number(offlineOrder.totalAmount) || 0,
+            subtotal: totals.subtotal,
+            discountAmount: totals.discountAmount,
+            discountReason: totals.discountAmount > 0 ? (offlineOrder.discountReason ? String(offlineOrder.discountReason).trim() : 'Offline Discount') : null,
+            discountAppliedBy: totals.discountAmount > 0 ? userId : null,
+            taxAmount: totals.taxAmount,
+            serviceChargeAmount: totals.serviceChargeAmount,
+            totalAmount: totals.totalAmount,
             notes: notesWithTag,
             createdBy: userId,
-            createdAt: offlineOrder.createdAt ? new Date(offlineOrder.createdAt) : new Date(),
+            createdAt,
             restaurant: { connect: { id: restaurantId } },
             branch: { connect: { id: branchId } },
             ...(tableConnect ? { table: tableConnect } : {}),
             items: {
-              create: rawItems.map((item: any) => ({
+              create: normalizedItems.map((item) => ({
                 menuItemId: item.menuItemId,
-                itemNameSnapshot: item.itemNameSnapshot || 'Menu Item',
-                unitPrice: Number(item.unitPrice) || 0,
-                quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
-                subtotal: Math.round(((Number(item.unitPrice) || 0) * Math.max(1, Math.floor(Number(item.quantity) || 1))) * 100) / 100,
-                notes: item.notes || null,
-                modifiers: {
-                  create: (item.modifiers || []).map((m: any) => ({
-                    modifierOptionId: m.modifierOptionId,
-                    optionNameSnapshot: m.optionNameSnapshot || 'Option',
-                    priceAdjustment: Number(m.priceAdjustment) || 0,
-                  })),
-                },
+                itemNameSnapshot: item.itemNameSnapshot,
+                unitPrice: item.unitPrice,
+                quantity: item.quantity,
+                subtotal: Math.round((item.unitPrice * item.quantity + item.modifiers.reduce((sum: number, m: { priceAdjustment: number }) => sum + m.priceAdjustment * item.quantity, 0)) * 100) / 100,
+                notes: item.notes,
+                modifiers: { create: item.modifiers },
               })),
             },
           },
@@ -1104,7 +1211,10 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
     }
   }
 
-  return sendResponse(res, true, 'Offline orders synchronization processed', {
+  const message = syncedOrders.length === 0 && errors.length > 0
+    ? errors[0].error
+    : 'Offline orders synchronization processed';
+  return sendResponse(res, true, message, {
     syncedCount: syncedOrders.length,
     failedCount: errors.length,
     syncedOrders,
