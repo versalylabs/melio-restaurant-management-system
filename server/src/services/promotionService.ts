@@ -1,13 +1,14 @@
 import prisma from '../config/database';
+import { DEFAULT_TIMEZONE, getRestaurantTimeZone, localMinutesOfDay } from '../utils/timezone';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
 import { createAuditLog } from './auditLogService';
 
-const isWithinTime = (start?: string | null, end?: string | null) => {
+/** Is the restaurant's local time inside [start, end] ("HH:mm")? Handles windows past midnight. */
+const isWithinTime = (start?: string | null, end?: string | null, timeZone: string = DEFAULT_TIMEZONE, at: Date = new Date()) => {
   if (!start || !end) return true;
-  const now = new Date();
-  const current = now.getHours() * 60 + now.getMinutes();
+  const current = localMinutesOfDay(timeZone, at);
   const [sh, sm] = start.split(':').map(Number); const [eh, em] = end.split(':').map(Number);
   if (![sh, sm, eh, em].every(Number.isFinite)) return false;
   const a = sh * 60 + sm, b = eh * 60 + em;
@@ -24,7 +25,8 @@ export const getActivePromotions = async (req: AuthRequest, res: ExpressResponse
   const restaurantId = req.user!.restaurantId; const branchId = req.user!.branchId; const customerId = typeof req.query.customerId === 'string' ? req.query.customerId : undefined;
   const now = new Date();
   const promotions = await prisma.promotion.findMany({ where: { restaurantId, active: true, OR: [{ branchId: null }, ...(branchId ? [{ branchId }] : [])], AND: [{ OR: [{ startsAt: null }, { startsAt: { lte: now } }] }, { OR: [{ endsAt: null }, { endsAt: { gte: now } }] }] }, include: { menuItem: { select: { id: true, name: true } }, customer: { select: { id: true, name: true } } }, orderBy: { name: 'asc' } });
-  const filtered = promotions.filter(p => !p.customerId || p.customerId === customerId).filter(p => isWithinTime(p.startTime, p.endTime));
+  const timeZone = await getRestaurantTimeZone(restaurantId);
+  const filtered = promotions.filter(p => !p.customerId || p.customerId === customerId).filter(p => isWithinTime(p.startTime, p.endTime, timeZone));
   return sendResponse(res, true, 'Active promotions retrieved', { promotions: filtered });
 };
 
@@ -103,10 +105,11 @@ export const deletePromotion = async (req: AuthRequest, res: ExpressResponse) =>
   return sendResponse(res, true, 'Promotion deleted successfully');
 };
 
-export const validatePromotion = async (promotionId:string, restaurantId:string, branchId:string, customerId:string|undefined, subtotal:number) => {
+/** `at` is when the order was taken (offline orders sync later); defaults to now. */
+export const validatePromotion = async (promotionId:string, restaurantId:string, branchId:string, customerId:string|undefined, subtotal:number, at: Date = new Date()) => {
   const p=await prisma.promotion.findFirst({where:{id:promotionId,restaurantId,active:true}}); if(!p) throw new Error('Promotion is not active or does not exist');
   if(p.branchId && p.branchId!==branchId) throw new Error('Promotion is not available at this branch');
   if(p.customerId && p.customerId!==customerId) throw new Error('Promotion is only available to the selected customer');
-  const now=new Date(); if(p.startsAt && p.startsAt>now) throw new Error('Promotion has not started'); if(p.endsAt && p.endsAt<now) throw new Error('Promotion has expired'); if(!isWithinTime(p.startTime,p.endTime)) throw new Error('Promotion is outside its active hours'); if(subtotal<p.minSubtotal) throw new Error(`Minimum subtotal of ${p.minSubtotal.toFixed(2)} is required for this promotion`);
+  const now=at; if(p.startsAt && p.startsAt>now) throw new Error('Promotion has not started'); if(p.endsAt && p.endsAt<now) throw new Error('Promotion has expired'); if(!isWithinTime(p.startTime,p.endTime,await getRestaurantTimeZone(p.restaurantId),now)) throw new Error('Promotion is outside its active hours'); if(subtotal<p.minSubtotal) throw new Error(`Minimum subtotal of ${p.minSubtotal.toFixed(2)} is required for this promotion`);
   return p;
 };

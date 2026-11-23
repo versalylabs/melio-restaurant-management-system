@@ -1,22 +1,22 @@
 import prisma from '../config/database';
-import { buildSalesReport } from './reportService';
+import { buildSalesReport, rangeDates } from './reportService';
+import { getRestaurantTimeZone, zonedParts } from '../utils/timezone';
 
 export async function buildAdvancedAnalytics(restaurantId: string, options: { startDate?: string; endDate?: string; branchId?: string } = {}) {
   const report = await buildSalesReport(restaurantId, options);
-  const start = options.startDate ? new Date(`${options.startDate}T00:00:00`) : new Date(Date.now() - 29 * 86400000);
-  const end = options.endDate ? new Date(`${options.endDate}T23:59:59.999`) : new Date();
+  const timeZone = await getRestaurantTimeZone(restaurantId);
+  const { start, end } = rangeDates(options.startDate, options.endDate, timeZone);
   const where: any = { restaurantId, status: 'COMPLETED', createdAt: { gte: start, lte: end } };
   if (options.branchId) where.branchId = options.branchId;
   const sales = await prisma.sale.findMany({ where, select: { id:true, customerId:true, totalAmount:true, createdAt:true } });
 
+  // Group by the restaurant's local calendar day.
   const dayKey = (date: Date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    const p = zonedParts(date, timeZone);
+    return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
   };
   const byDay = new Map<string, { sales:number; orders:number }>();
-  for (let d=new Date(start); d<=end; d.setDate(d.getDate()+1)) byDay.set(dayKey(d), {sales:0,orders:0});
+  for (let t=start.getTime(); t<=end.getTime(); t+=86_400_000) byDay.set(dayKey(new Date(t)), {sales:0,orders:0});
   for (const sale of sales) { const k=dayKey(sale.createdAt); const row=byDay.get(k)||{sales:0,orders:0}; row.orders++; row.sales += Number(sale.totalAmount || 0); byDay.set(k,row); }
   const trend = [...byDay.entries()].map(([date,v])=>({date,...v}));
   const customerOrders = new Map<string, number>();

@@ -1,5 +1,7 @@
 import prisma from '../config/database';
-import { deductInventoryForOrder } from './inventoryService';
+import { deductInventoryForOrderSafely } from './inventoryService';
+import { lockSale } from './saleLedgerService';
+import { realtimeService } from './realtimeService';
 
 /**
  * Completes a sale from any workflow (POS/order management or kitchen).
@@ -25,6 +27,7 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
   }
 
   const order = await prisma.$transaction(async (tx) => {
+    await lockSale(tx, orderId);
     const current = await tx.sale.findUnique({ where: { id: orderId } });
     if (!current) throw new Error('ORDER_NOT_FOUND');
     if (current.status === 'COMPLETED') return current;
@@ -66,7 +69,7 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
       data: {
         saleId: orderId,
         status: 'COMPLETED',
-        notes: 'Order completed from kitchen workflow',
+        notes: 'Order completed',
         changedBy: userId,
       },
     });
@@ -77,11 +80,7 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
   // Inventory and loyalty are intentionally kept outside the sale transaction,
   // matching the existing order-completion behavior. Both operations are
   // idempotent/guarded so completing through the kitchen cannot double-apply them.
-  try {
-    await deductInventoryForOrder(orderId, restaurantId, existing.branchId);
-  } catch (error) {
-    console.error('Inventory deduction failed:', error);
-  }
+  await deductInventoryForOrderSafely(orderId, restaurantId, existing.branchId);
 
   if (existing.customerId) {
     const points = Math.floor(order.totalAmount / 100);
@@ -117,4 +116,47 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
   }
 
   return order;
+};
+
+const SERVE_PATH = ['SUBMITTED', 'PREPARING', 'READY', 'SERVED'];
+
+/**
+ * The kitchen has handed the food over. The kitchen never closes a sale:
+ * - dine-in / pickup / takeaway orders move to SERVED (walking through any
+ *   steps the kitchen skipped), delivery orders to READY for the rider;
+ * - stock is deducted once the food is served;
+ * - an order that is SERVED and already fully paid is completed.
+ * Throws ORDER_CANCELLED if the order was cancelled meanwhile.
+ */
+export const markSaleServedFromKitchen = async (orderId: string, restaurantId: string, userId: string) => {
+  const outcome = await prisma.$transaction(async (tx) => {
+    if (!(await lockSale(tx, orderId))) throw new Error('ORDER_NOT_FOUND');
+    const sale = await tx.sale.findFirst({ where: { id: orderId, restaurantId } });
+    if (!sale) throw new Error('ORDER_NOT_FOUND');
+    if (sale.status === 'CANCELLED') throw new Error('ORDER_CANCELLED');
+
+    const target = sale.orderType === 'DELIVERY' ? 'READY' : 'SERVED';
+    const from = SERVE_PATH.indexOf(sale.status);
+    const to = SERVE_PATH.indexOf(target);
+    // Already at/after the target (or COMPLETED / OUT_FOR_DELIVERY): nothing to move.
+    if (['COMPLETED', 'OUT_FOR_DELIVERY'].includes(sale.status) || from >= to) return { sale, changed: false };
+
+    const steps = SERVE_PATH.slice(Math.max(from, 0) + 1, to + 1);
+    for (const step of steps) {
+      await tx.saleStatusHistory.create({ data: { saleId: orderId, status: step, changedBy: userId, notes: `Kitchen workflow moved order to ${step}` } });
+    }
+    const updated = await tx.sale.update({ where: { id: orderId }, data: { status: target, updatedAt: new Date() } });
+    return { sale: updated, changed: true };
+  });
+
+  let sale = outcome.sale;
+  if (outcome.changed) {
+    realtimeService.broadcast(`orders:${sale.branchId}`, 'order_status_updated', { orderId: sale.id, orderNumber: sale.orderNumber, status: sale.status });
+  }
+  if (sale.status === 'SERVED' && sale.paymentStatus === 'PAID') {
+    sale = await completeOrder(orderId, restaurantId, userId);
+  } else if (sale.status === 'SERVED') {
+    await deductInventoryForOrderSafely(orderId, restaurantId, sale.branchId);
+  }
+  return sale;
 };

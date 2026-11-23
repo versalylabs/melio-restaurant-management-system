@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { newRequestId } from '../../lib/utils';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import {
   Moon,
@@ -239,12 +240,19 @@ export default function OnlineOrdering() {
         : current.map((line) => (line.id === id ? { ...line, quantity } : line))
     );
 
+  // One idempotency key per checkout: kept across retries of the same cart so a
+  // double tap or a dropped connection can't place (and charge) two orders.
+  const checkoutRequestId = useRef<string | null>(null);
+  useEffect(() => { checkoutRequestId.current = null; }, [cart, branchId, form]);
+
   const placeOrder = async () => {
-    if (!cart.length) return;
+    if (!cart.length || submitting) return;
     setSubmitting(true);
     setError('');
+    if (!checkoutRequestId.current) checkoutRequestId.current = newRequestId();
     try {
       const response = await publicOrderingApi.placeOrder({
+        clientRequestId: checkoutRequestId.current,
         restaurantId,
         branchId,
         ...form,

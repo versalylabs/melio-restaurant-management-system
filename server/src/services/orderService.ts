@@ -1,5 +1,9 @@
 import prisma from '../config/database';
+import { notifyRestaurantStaff } from './notificationService';
 import { manualDiscountError } from '../utils/discountPolicy';
+import { cancelOrderSafely, OrderCancelError } from './orderCancellationService';
+import { lockSale } from './saleLedgerService';
+import { isUniqueViolationOn, normalizeClientRequestId } from '../utils/idempotency';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
@@ -8,7 +12,7 @@ import { calculateOrderTotals, OrderCalculationInput } from './orderCalculationS
 import { createKitchenTicketForOrder } from './kitchenService';
 import { completeOrder } from './orderCompletionService';
 import { validatePromotion } from './promotionService';
-import { deductInventoryForOrder } from './inventoryService';
+import { deductInventoryForOrderSafely } from './inventoryService';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
 
@@ -197,6 +201,28 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     status,
   } = req.body;
 
+  // Retries of the same checkout (e.g. after a network timeout) return the
+  // order that was already created instead of creating a duplicate.
+  const clientRequestId = normalizeClientRequestId(req.body.clientRequestId);
+  const findExistingByRequestId = () => clientRequestId
+    ? prisma.sale.findUnique({
+        where: { restaurantId_clientRequestId: { restaurantId, clientRequestId } },
+        include: {
+        branch: { select: { id: true, name: true, code: true } },
+        table: { select: { id: true, tableNumber: true, name: true } },
+        items: { include: { modifiers: true } },
+      },
+      })
+    : Promise.resolve(null);
+  const alreadyCreated = await findExistingByRequestId();
+  if (alreadyCreated) {
+    // A retry is also the chance to repair a ticket that failed to create the first time.
+    if (['SUBMITTED', 'PREPARING', 'READY'].includes(alreadyCreated.status)) {
+      await createKitchenTicketForOrder(alreadyCreated.id, restaurantId, alreadyCreated.branchId).catch((err: unknown) => console.error('Kitchen ticket repair failed:', err));
+    }
+    return sendResponse(res, true, 'Order already created', alreadyCreated, 200);
+  }
+
   if (customerId) {
     const customer = await prisma.customer.findFirst({ where: { id: customerId, restaurantId } });
     if (!customer) return sendError(res, 'Invalid customer');
@@ -319,7 +345,9 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
 
   const totals = await calculateOrderTotals(calculationInput);
 
-  const order = await prisma.$transaction(async (tx) => {
+  let order: any;
+  try {
+  order = await prisma.$transaction(async (tx) => {
     const counter = await tx.orderCounter.upsert({
       where: { restaurantId_branchId: { restaurantId, branchId } },
       create: { restaurantId, branchId, lastNumber: 1 },
@@ -331,6 +359,7 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     const newOrder = await tx.sale.create({
       data: {
         orderNumber,
+        clientRequestId,
         orderType: orderType || 'DINE_IN',
         customerName: customerName ? String(customerName).trim() : null,
         ...(customerId ? { customer: { connect: { id: customerId } } } : {}),
@@ -392,6 +421,14 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
 
     return newOrder;
   });
+  } catch (err: any) {
+    // Two identical requests raced; the other one created the order.
+    if (isUniqueViolationOn(err, 'clientRequestId')) {
+      const existing = await findExistingByRequestId();
+      if (existing) return sendResponse(res, true, 'Order already created', existing, 200);
+    }
+    throw err;
+  }
 
   if (['SUBMITTED', 'PREPARING', 'READY', 'SERVED', 'COMPLETED'].includes(finalStatus) && order.tableId) {
     await prisma.table.update({
@@ -401,15 +438,20 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
   }
 
   if (finalStatus === 'SUBMITTED') {
-    await createKitchenTicketForOrder(order.id, restaurantId, branchId);
+    try {
+      await createKitchenTicketForOrder(order.id, restaurantId, branchId);
+    } catch (err) {
+      // The order is saved; failing the request here would make the till retry it.
+      // Tell staff so the kitchen isn't left unaware (a payment or retry re-creates it).
+      console.error('Kitchen ticket creation failed for new order:', err);
+      void notifyRestaurantStaff(restaurantId, branchId, 'KITCHEN_ALERT', 'Order not on kitchen screen',
+        `Order ${order.orderNumber} was saved but did not reach the kitchen display. Tell the kitchen, or reopen it from Orders.`, 'SALE', order.id)
+        .catch(() => undefined);
+    }
   }
 
   if (finalStatus === 'COMPLETED') {
-    try {
-      await deductInventoryForOrder(order.id, restaurantId, branchId);
-    } catch (e) {
-      console.error('Inventory deduction failed:', e);
-    }
+    await deductInventoryForOrderSafely(order.id, restaurantId, branchId);
   }
 
   await createAuditLog(
@@ -439,6 +481,20 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
   }
 
   const { notes, discountAmount, discountReason, tableId, orderType, items, promotionId, customerId } = req.body;
+
+  // Items and pricing can only change before the order goes to the kitchen and
+  // before any money is taken. Afterwards the kitchen ticket and the payments
+  // would no longer match the bill: cancel and re-ring, or add a new order.
+  const changesPricing = (Array.isArray(items) && items.length > 0) || discountAmount !== undefined || req.body.discountType !== undefined || promotionId !== undefined;
+  if (changesPricing) {
+    if (!['DRAFT', 'HELD'].includes(existing.status)) {
+      return sendError(res, `Items and discounts can't be changed once an order is ${existing.status.toLowerCase()}. Add a new order for extra items, or cancel and re-enter it.`, undefined, 409);
+    }
+    const paidCount = await prisma.payment.count({ where: { saleId: id, status: 'COMPLETED' } });
+    if (paidCount > 0) {
+      return sendError(res, "Items and discounts can't be changed after a payment has been taken. Refund it first.", undefined, 409);
+    }
+  }
 
   let updateData: any = {};
   if (notes !== undefined) updateData.notes = notes ? String(notes).trim() : null;
@@ -576,7 +632,14 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     updateData.serviceChargeAmount = totals.serviceChargeAmount;
     updateData.totalAmount = totals.totalAmount;
 
-    const order = await prisma.$transaction(async (tx) => {
+    let order: any;
+    try {
+    order = await prisma.$transaction(async (tx) => {
+      // Re-check under the order lock: it may have been submitted or paid since it was read.
+      await lockSale(tx, id);
+      const current = await tx.sale.findUnique({ where: { id }, select: { status: true } });
+      if (!current || !['DRAFT', 'HELD'].includes(current.status)) throw new Error('ORDER_NOT_EDITABLE');
+      if (await tx.payment.count({ where: { saleId: id, status: 'COMPLETED' } })) throw new Error('ORDER_NOT_EDITABLE');
       await tx.saleItem.deleteMany({ where: { saleId: id } });
 
       return tx.sale.update({
@@ -608,6 +671,11 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
         },
       });
     });
+
+    } catch (err: any) {
+      if (err?.message === 'ORDER_NOT_EDITABLE') return sendError(res, 'This order was just sent to the kitchen or paid, so its items can no longer be changed.', undefined, 409);
+      throw err;
+    }
 
     await createAuditLog(restaurantId, userId, 'UPDATE', 'Order', id, `Updated order ${order.orderNumber}`);
     return sendResponse(res, true, 'Order updated successfully', order);
@@ -664,6 +732,17 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
     return sendError(res, `Cannot change order status from ${existing.status} to ${status}`);
   }
 
+  if (status === 'CANCELLED') {
+    try {
+      const order = await cancelOrderSafely({ orderId: id, restaurantId, branchId: req.user!.branchId, userId, reason: req.body.cancelReason || notes });
+      await createAuditLog(restaurantId, userId, 'CANCEL', 'Order', id, `Cancelled order ${order.orderNumber}. Reason: ${req.body.cancelReason || notes || 'No reason provided'}`);
+      return sendResponse(res, true, 'Order status updated', order);
+    } catch (error: any) {
+      if (error instanceof OrderCancelError) return sendError(res, error.message, undefined, error.statusCode);
+      throw error;
+    }
+  }
+
   if (status === 'COMPLETED') {
     try {
       const order = await completeOrder(id, restaurantId, userId);
@@ -677,7 +756,16 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
     }
   }
 
-  const order = await prisma.$transaction(async (tx) => {
+  let order: any;
+  try {
+    order = await prisma.$transaction(async (tx) => {
+    // Re-check under the order lock: the status may have changed since it was read
+    // (e.g. cancelled or paid-and-completed by someone else a moment ago).
+    await lockSale(tx, id);
+    const current = await tx.sale.findUnique({ where: { id }, select: { status: true } });
+    if (!current) throw new Error('ORDER_NOT_FOUND');
+    if (current.status !== existing.status) throw new Error(`STATUS_CHANGED:${current.status}`);
+
     const updateData: any = { status, updatedAt: new Date() };
 
     if (status === 'SUBMITTED' && existing.tableId) {
@@ -685,30 +773,6 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
         where: { id: existing.tableId },
         data: { status: 'OCCUPIED' },
       });
-    }
-
-    if (status === 'CANCELLED') {
-      updateData.cancelledAt = new Date();
-      updateData.cancelReason = req.body.cancelReason || null;
-      updateData.cancelledBy = userId;
-      if (existing.tableId) {
-        const remainingActive = await tx.sale.count({
-          where: {
-            tableId: existing.tableId,
-            id: { not: id },
-            status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] },
-          },
-        });
-        if (remainingActive === 0) {
-          const table = await tx.table.findUnique({ where: { id: existing.tableId } });
-          if (table && table.status === 'OCCUPIED') {
-            await tx.table.update({
-              where: { id: existing.tableId },
-              data: { status: 'AVAILABLE' },
-            });
-          }
-        }
-      }
     }
 
     const updated = await tx.sale.update({
@@ -731,13 +795,30 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
     });
 
     return updated;
-  });
+    });
+  } catch (error: any) {
+    if (error?.message === 'ORDER_NOT_FOUND') return sendError(res, 'Order not found', undefined, 404);
+    if (typeof error?.message === 'string' && error.message.startsWith('STATUS_CHANGED:')) {
+      return sendError(res, `This order was just changed to ${error.message.split(':')[1]}. Refresh and try again.`, undefined, 409);
+    }
+    throw error;
+  }
 
   if (status === 'SUBMITTED' && existing.branchId) {
     try {
       await createKitchenTicketForOrder(order.id, restaurantId, existing.branchId);
     } catch (ticketErr) {
       console.error('Kitchen ticket creation error:', ticketErr);
+    }
+  }
+
+  // Food has left the kitchen: deduct stock now. A served order that is already
+  // fully paid has nothing left to do, so close it.
+  if (status === 'SERVED' || status === 'OUT_FOR_DELIVERY') {
+    if (status === 'SERVED' && order.paymentStatus === 'PAID') {
+      try { await completeOrder(order.id, restaurantId, userId); } catch (err) { console.error('Auto-complete of paid served order failed:', err); }
+    } else {
+      await deductInventoryForOrderSafely(order.id, restaurantId, existing.branchId);
     }
   }
 
@@ -785,68 +866,15 @@ export const cancelOrder = async (req: AuthRequest, res: ExpressResponse) => {
   const { id } = req.params;
   const restaurantId = req.user!.restaurantId;
   const userId = req.user!.id;
-
-  const existing = await prisma.sale.findFirst({ where: { id, restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) } });
-  if (!existing) {
-    return sendError(res, 'Order not found', undefined, 404);
+  const { cancelReason } = req.body || {};
+  try {
+    const order = await cancelOrderSafely({ orderId: id, restaurantId, branchId: req.user!.branchId, userId, reason: cancelReason });
+    await createAuditLog(restaurantId, userId, 'CANCEL', 'Order', id, `Cancelled order ${order.orderNumber}. Reason: ${cancelReason || 'No reason provided'}`);
+    return sendResponse(res, true, 'Order cancelled successfully', order);
+  } catch (error: any) {
+    if (error instanceof OrderCancelError) return sendError(res, error.message, undefined, error.statusCode);
+    throw error;
   }
-
-  if (['COMPLETED', 'CANCELLED'].includes(existing.status)) {
-    return sendError(res, `Cannot cancel ${existing.status.toLowerCase()} order`);
-  }
-
-  const { cancelReason } = req.body;
-
-  const order = await prisma.$transaction(async (tx) => {
-    const updated = await tx.sale.update({
-      where: { id },
-      data: {
-        status: 'CANCELLED',
-        cancelledAt: new Date(),
-        cancelReason: cancelReason || null,
-        cancelledBy: userId,
-        updatedAt: new Date(),
-      },
-      include: {
-        branch: { select: { id: true, name: true, code: true } },
-        table: { select: { id: true, tableNumber: true, name: true } },
-        items: { include: { modifiers: true } },
-      },
-    });
-
-    if (existing.tableId) {
-      const remainingActive = await tx.sale.count({
-        where: {
-          tableId: existing.tableId,
-          id: { not: id },
-          status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] },
-        },
-      });
-      if (remainingActive === 0) {
-        const table = await tx.table.findUnique({ where: { id: existing.tableId } });
-        if (table && table.status === 'OCCUPIED') {
-          await tx.table.update({
-            where: { id: existing.tableId },
-            data: { status: 'AVAILABLE' },
-          });
-        }
-      }
-    }
-
-    await tx.saleStatusHistory.create({
-      data: {
-        saleId: id,
-        status: 'CANCELLED',
-        notes: cancelReason || 'Order cancelled',
-        changedBy: userId,
-      },
-    });
-
-    return updated;
-  });
-
-  await createAuditLog(restaurantId, userId, 'CANCEL', 'Order', id, `Cancelled order ${order.orderNumber}. Reason: ${cancelReason || 'No reason provided'}`);
-  return sendResponse(res, true, 'Order cancelled successfully', order);
 };
 
 export const getPosMenu = async (req: AuthRequest, res: ExpressResponse) => {
@@ -1000,15 +1028,21 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
     }
 
     try {
-      // 1. Idempotency check: see if an order with this offline tag was already created
+      // 1. Idempotency: the offline id is the order's clientRequestId (unique per
+      // restaurant). Orders synced before that existed are found by their notes tag.
       const offlineTag = `[OfflineID: ${offlineId}]`;
-      const existing = await prisma.sale.findFirst({
-        where: {
-          restaurantId,
-          notes: { contains: offlineTag },
-        },
-        select: { id: true, orderNumber: true },
-      });
+      const offlineRequestId = normalizeClientRequestId(offlineId);
+      const existing =
+        (offlineRequestId
+          ? await prisma.sale.findUnique({
+              where: { restaurantId_clientRequestId: { restaurantId, clientRequestId: offlineRequestId } },
+              select: { id: true, orderNumber: true },
+            })
+          : null) ||
+        (await prisma.sale.findFirst({
+          where: { restaurantId, notes: { contains: offlineTag } },
+          select: { id: true, orderNumber: true },
+        }));
 
       if (existing) {
         syncedOrders.push({
@@ -1089,7 +1123,10 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
         customerId = customer?.id;
       }
 
-      // A promotion is re-validated on the server; it replaces any manual discount.
+      // A promotion is re-validated on the server, as of when the order was
+      // taken (a happy-hour order may sync hours later); it replaces any manual discount.
+      const takenAtRaw = offlineOrder.createdAt ? new Date(offlineOrder.createdAt) : null;
+      const takenAt = takenAtRaw && !Number.isNaN(takenAtRaw.getTime()) && takenAtRaw.getTime() <= Date.now() ? takenAtRaw : new Date();
       let offlinePromotion: any = undefined;
       if (offlineOrder.promotionId) {
         const offlineSubtotal = normalizedItems.reduce(
@@ -1097,7 +1134,7 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
           0,
         );
         try {
-          offlinePromotion = await validatePromotion(String(offlineOrder.promotionId), restaurantId, branchId, customerId, offlineSubtotal);
+          offlinePromotion = await validatePromotion(String(offlineOrder.promotionId), restaurantId, branchId, customerId, offlineSubtotal, takenAt);
         } catch (promoErr: any) {
           errors.push({ offlineId, error: `Promotion no longer valid: ${promoErr?.message || 'invalid promotion'}` });
           continue;
@@ -1167,6 +1204,7 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
         const newSale = await tx.sale.create({
           data: {
             orderNumber,
+            clientRequestId: offlineRequestId,
             orderType,
             customerName: offlineOrder.customerName ? String(offlineOrder.customerName).trim() : null,
             ...(customerId ? { customer: { connect: { id: customerId } } } : {}),
@@ -1235,6 +1273,14 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
         serverOrderNumber: createdSale.orderNumber,
       });
     } catch (orderErr: any) {
+      // Another sync of the same offline order won the race: report it as synced.
+      if (isUniqueViolationOn(orderErr, 'clientRequestId')) {
+        const winner = await prisma.sale.findFirst({ where: { restaurantId, clientRequestId: normalizeClientRequestId(offlineId) }, select: { id: true, orderNumber: true } });
+        if (winner) {
+          syncedOrders.push({ offlineId, serverOrderId: winner.id, serverOrderNumber: winner.orderNumber });
+          continue;
+        }
+      }
       console.error(`[OfflineSync] Error syncing offline order ${offlineId}:`, orderErr);
       errors.push({ offlineId, error: orderErr.message || 'Failed to sync order' });
     }

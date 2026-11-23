@@ -1,18 +1,26 @@
 import prisma from '../config/database';
+import { Prisma } from '@prisma/client';
 import { AuthRequest } from '../middleware/auth';
 import { Response as ExpressResponse } from 'express';
 import { sendResponse, sendError } from '../utils/response';
 import { createAuditLog } from './auditLogService';
+import { getRestaurantTimeZone, localDayRange, startOfLocalDay } from '../utils/timezone';
 
 const ACTIVE_STATUSES = ['PENDING', 'CONFIRMED', 'SEATED'];
 const VALID_STATUSES = ['PENDING', 'CONFIRMED', 'SEATED', 'COMPLETED', 'CANCELLED', 'NO_SHOW'];
 
-async function ensureTableAvailable(restaurantId: string, branchId: string, tableId: string | null, startAt: Date, endAt: Date, excludeId?: string) {
-  if (!tableId) return null;
-  const table = await prisma.table.findFirst({ where: { id: tableId, branchId, restaurantId } });
-  if (!table) throw new Error('INVALID_TABLE');
+/**
+ * Checks a table is free for [startAt, endAt). Must run inside the transaction
+ * that writes the reservation: it locks the table row first, so two bookings
+ * for the same table and time are serialised and the second sees the first.
+ */
+export async function ensureTableAvailable(tx: Prisma.TransactionClient, restaurantId: string, branchId: string, tableId: string | null, startAt: Date, endAt: Date, excludeId?: string) {
   if (endAt <= startAt) throw new Error('INVALID_TIME_RANGE');
-  const conflict = await prisma.reservation.findFirst({
+  if (!tableId) return null;
+  await tx.$queryRaw`SELECT id FROM "tables" WHERE id = ${tableId} FOR UPDATE`;
+  const table = await tx.table.findFirst({ where: { id: tableId, branchId, restaurantId } });
+  if (!table) throw new Error('INVALID_TABLE');
+  const conflict = await tx.reservation.findFirst({
     where: {
       restaurantId,
       branchId,
@@ -45,14 +53,14 @@ export const getReservations = async (req: AuthRequest, res: ExpressResponse) =>
     { customerName: { contains: search as string } },
     { phone: { contains: search as string } },
   ];
+  // Dates are the restaurant's local calendar days (the server runs in UTC).
+  const timeZone = await getRestaurantTimeZone(restaurantId);
   if (upcoming === 'true') {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    where.startAt = { gte: todayStart };
+    where.startAt = { gte: startOfLocalDay(timeZone) };
   } else if (date && date !== 'ALL') {
-    const start = new Date(`${date}T00:00:00`);
-    const end = new Date(`${date}T23:59:59.999`);
-    where.startAt = { gte: start, lte: end };
+    const range = localDayRange(String(date), timeZone);
+    if (!range) return sendError(res, 'Invalid date');
+    where.startAt = { gte: range.start, lte: range.end };
   }
 
   const reservations = await prisma.reservation.findMany({
@@ -94,18 +102,26 @@ export const createReservation = async (req: AuthRequest, res: ExpressResponse) 
   if (Number(partySize) < 1) return sendError(res, 'Party size must be at least 1');
   const branch = await prisma.branch.findFirst({ where: { id: branchId, restaurantId } });
   if (!branch) return sendError(res, 'Invalid branch', undefined, 400);
-  try { await ensureTableAvailable(restaurantId, branchId, tableId || null, startAt, endAt); } catch (e: any) {
-    const messages: any = { INVALID_TABLE: 'Selected table is invalid for this branch', TABLE_CONFLICT: 'Selected table is already reserved for this time', INVALID_TIME_RANGE: 'Invalid reservation time range' };
-    return sendError(res, messages[e.message] || 'Unable to create reservation');
-  }
   if (customerId) {
     const customer = await prisma.customer.findFirst({ where: { id: customerId, restaurantId } });
     if (!customer) return sendError(res, 'Invalid customer');
   }
-  const reservation = await prisma.reservation.create({
-    data: { restaurantId, branchId, customerId: customerId || null, tableId: tableId || null, customerName, phone: phone || null, email: email || null, partySize: Number(partySize), startAt, endAt, status: status && VALID_STATUSES.includes(status) ? status : 'PENDING', notes: notes || null, source: source || 'PHONE', createdBy },
-    include: { branch: { select: { id: true, name: true } }, table: { select: { id: true, tableNumber: true, name: true } } },
-  });
+  const finalStatus = status && VALID_STATUSES.includes(status) ? status : 'PENDING';
+  let reservation;
+  try {
+    reservation = await prisma.$transaction(async (tx) => {
+      if (ACTIVE_STATUSES.includes(finalStatus)) await ensureTableAvailable(tx, restaurantId, branchId, tableId || null, startAt, endAt);
+      else if (endAt <= startAt) throw new Error('INVALID_TIME_RANGE');
+      return tx.reservation.create({
+        data: { restaurantId, branchId, customerId: customerId || null, tableId: tableId || null, customerName, phone: phone || null, email: email || null, partySize: Number(partySize), startAt, endAt, status: finalStatus, notes: notes || null, source: source || 'PHONE', createdBy },
+        include: { branch: { select: { id: true, name: true } }, table: { select: { id: true, tableNumber: true, name: true } } },
+      });
+    });
+  } catch (e: any) {
+    const messages: any = { INVALID_TABLE: 'Selected table is invalid for this branch', TABLE_CONFLICT: 'Selected table is already reserved for this time', INVALID_TIME_RANGE: 'Invalid reservation time range' };
+    if (messages[e.message]) return sendError(res, messages[e.message], undefined, e.message === 'TABLE_CONFLICT' ? 409 : 400);
+    throw e;
+  }
   await createAuditLog(restaurantId, createdBy, 'CREATE', 'Reservation', reservation.id, `Created reservation for ${customerName}`);
   return sendResponse(res, true, 'Reservation created successfully', reservation, 201);
 };
@@ -117,11 +133,14 @@ export const updateReservation = async (req: AuthRequest, res: ExpressResponse) 
   const { customerId, tableId, customerName, phone, email, partySize, startAt: rawStartAt, endAt: rawEndAt, durationMinutes, notes, source, status } = req.body;
   const startAt = rawStartAt ? parseDate(rawStartAt) : existing.startAt;
   const endAt = rawEndAt ? parseDate(rawEndAt) : (durationMinutes ? new Date(startAt.getTime() + Number(durationMinutes) * 60000) : existing.endAt);
-  try { await ensureTableAvailable(restaurantId, existing.branchId, tableId !== undefined ? (tableId || null) : existing.tableId, startAt, endAt, existing.id); } catch (e: any) {
-    const messages: any = { INVALID_TABLE: 'Selected table is invalid for this branch', TABLE_CONFLICT: 'Selected table is already reserved for this time', INVALID_TIME_RANGE: 'Invalid reservation time range' };
-    return sendError(res, messages[e.message] || 'Unable to update reservation');
-  }
-  const updated = await prisma.reservation.update({
+  const nextStatus = status && VALID_STATUSES.includes(status) ? status : existing.status;
+  const nextTableId = tableId !== undefined ? (tableId || null) : existing.tableId;
+  let updated;
+  try {
+  updated = await prisma.$transaction(async (tx) => {
+  if (ACTIVE_STATUSES.includes(nextStatus)) await ensureTableAvailable(tx, restaurantId, existing.branchId, nextTableId, startAt, endAt, existing.id);
+  else if (endAt <= startAt) throw new Error('INVALID_TIME_RANGE');
+  return tx.reservation.update({
     where: { id: existing.id },
     data: {
       customerId: customerId !== undefined ? (customerId || null) : existing.customerId,
@@ -131,11 +150,17 @@ export const updateReservation = async (req: AuthRequest, res: ExpressResponse) 
       email: email !== undefined ? (email || null) : existing.email,
       partySize: partySize ? Number(partySize) : existing.partySize,
       startAt, endAt,
-      status: status && VALID_STATUSES.includes(status) ? status : existing.status,
+      status: nextStatus,
       notes: notes !== undefined ? (notes || null) : existing.notes,
       source: source || existing.source,
     },
   });
+  });
+  } catch (e: any) {
+    const messages: any = { INVALID_TABLE: 'Selected table is invalid for this branch', TABLE_CONFLICT: 'Selected table is already reserved for this time', INVALID_TIME_RANGE: 'Invalid reservation time range' };
+    if (messages[e.message]) return sendError(res, messages[e.message], undefined, e.message === 'TABLE_CONFLICT' ? 409 : 400);
+    throw e;
+  }
   await createAuditLog(restaurantId, req.user!.id, 'UPDATE', 'Reservation', updated.id, `Updated reservation for ${updated.customerName}`);
   return sendResponse(res, true, 'Reservation updated successfully', updated);
 };
@@ -146,14 +171,30 @@ export const updateReservationStatus = async (req: AuthRequest, res: ExpressResp
   if (!VALID_STATUSES.includes(status)) return sendError(res, `Invalid reservation status. Must be one of: ${VALID_STATUSES.join(', ')}`);
   const existing = await prisma.reservation.findFirst({ where: { id: req.params.id, restaurantId } });
   if (!existing) return sendError(res, 'Reservation not found', undefined, 404);
-  if (status === 'SEATED' && existing.tableId) {
-    await prisma.table.update({ where: { id: existing.tableId }, data: { status: 'OCCUPIED' } });
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      // Re-activating a cancelled / no-show booking must not double-book its table.
+      if (ACTIVE_STATUSES.includes(status) && !ACTIVE_STATUSES.includes(existing.status)) {
+        await ensureTableAvailable(tx, restaurantId, existing.branchId, existing.tableId, existing.startAt, existing.endAt, existing.id);
+      }
+      if (status === 'SEATED' && existing.tableId) {
+        await tx.table.update({ where: { id: existing.tableId }, data: { status: 'OCCUPIED' } });
+      }
+      if (['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(status) && existing.tableId) {
+        // Only free the table if nobody is still eating there.
+        const activeSale = await tx.sale.findFirst({
+          where: { restaurantId, tableId: existing.tableId, status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] } },
+          select: { id: true },
+        });
+        if (!activeSale) await tx.table.updateMany({ where: { id: existing.tableId, status: { in: ['OCCUPIED', 'RESERVED'] } }, data: { status: 'AVAILABLE' } });
+      }
+      return tx.reservation.update({ where: { id: existing.id }, data: { status } });
+    });
+  } catch (e: any) {
+    if (e.message === 'TABLE_CONFLICT') return sendError(res, 'That table has been booked for this time in the meantime. Choose another table first.', undefined, 409);
+    throw e;
   }
-  if (['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(status) && existing.tableId) {
-    const activeSale = await prisma.sale.findFirst({ where: { tableId: existing.tableId, status: { in: ['DRAFT', 'SUBMITTED', 'HELD'] } }, select: { id: true } });
-    if (!activeSale) await prisma.table.update({ where: { id: existing.tableId }, data: { status: 'AVAILABLE' } });
-  }
-  const updated = await prisma.reservation.update({ where: { id: existing.id }, data: { status } });
   await createAuditLog(restaurantId, req.user!.id, 'UPDATE', 'Reservation', updated.id, `Reservation ${updated.id} changed to ${status}`);
   return sendResponse(res, true, 'Reservation status updated successfully', updated);
 };

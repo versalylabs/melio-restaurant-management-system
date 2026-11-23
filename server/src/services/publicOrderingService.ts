@@ -9,6 +9,9 @@ import { notifyCustomerOrderUpdate, notifyCustomerReservation } from './customer
 import { isPaymentSimulationEnabled, settleOnlinePayment } from './onlinePaymentService';
 import { sendError, sendResponse } from '../utils/response';
 import { resolvePublicCustomer } from './customerAuthService';
+import { ensureTableAvailable } from './reservationService';
+import { getRestaurantTimeZone, zonedDateTimeToUtc } from '../utils/timezone';
+import { isUniqueViolationOn, normalizeClientRequestId } from '../utils/idempotency';
 import { Request, Response } from 'express';
 
 const PAYMENT_METHODS = ['CASH', 'CARD', 'MOBILE_MONEY'];
@@ -85,6 +88,22 @@ export const createPublicOrder = async (req: Request, res: Response) => {
   const branch = await prisma.branch.findFirst({ where: { id: branchId, restaurantId, status: 'ACTIVE' } });
   if (!branch) return sendError(res, 'Selected branch is unavailable', undefined, 404);
 
+  // A retried checkout (double tap, flaky mobile data) returns the order that
+  // already exists instead of placing and charging a second one.
+  const clientRequestId = normalizeClientRequestId(body.clientRequestId);
+  const replyWithExisting = async () => {
+    if (!clientRequestId) return null;
+    const existing = await prisma.sale.findUnique({
+      where: { restaurantId_clientRequestId: { restaurantId, clientRequestId } },
+      include: { onlineOrder: true },
+    });
+    if (!existing?.onlineOrder) return null;
+    const o = existing.onlineOrder;
+    return sendResponse(res, true, 'Online order already placed', { orderId: existing.id, orderNumber: existing.orderNumber, trackingToken: o.trackingToken, totalAmount: existing.totalAmount, paymentState: o.paymentState, trackingUrl: `/online-order/${o.trackingToken}` }, 200);
+  };
+  const earlier = await replyWithExisting();
+  if (earlier) return earlier;
+
   const normalized: Array<{ menuItemId: string; quantity: number }> = items.map((item: any) => ({ menuItemId: String(item.menuItemId || ''), quantity: Math.max(1, Math.min(50, Math.floor(Number(item.quantity || 1))) ) }));
   if (normalized.some((item: { menuItemId: string; quantity: number }) => !item.menuItemId)) return sendError(res, 'Invalid menu item');
 
@@ -122,7 +141,9 @@ export const createPublicOrder = async (req: Request, res: Response) => {
   if (!systemUser) return sendError(res, 'Online ordering is not configured for this restaurant', undefined, 409);
 
   const trackingToken = token();
-  const result = await prisma.$transaction(async (tx) => {
+  let result: any;
+  try {
+  result = await prisma.$transaction(async (tx) => {
     const counter = await tx.orderCounter.upsert({
       where: { restaurantId_branchId: { restaurantId, branchId } },
       create: { restaurantId, branchId, lastNumber: 1 },
@@ -132,7 +153,7 @@ export const createPublicOrder = async (req: Request, res: Response) => {
 
     const order = await tx.sale.create({
       data: {
-        restaurantId, branchId, orderNumber: `#${next}`, orderType: fulfillmentType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP', customerId: customer!.id, customerName,
+        restaurantId, branchId, orderNumber: `#${next}`, clientRequestId, orderType: fulfillmentType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP', customerId: customer!.id, customerName,
         status: 'SUBMITTED', paymentStatus: 'UNPAID', amountPaid: 0,
         subtotal: totals.subtotal, discountAmount: totals.discountAmount, discountReason: promotion ? `Promotion: ${promoCode}` : null,
         promotionId: promotionId || null, taxAmount: totals.taxAmount, serviceChargeAmount: totals.serviceChargeAmount, totalAmount: totals.totalAmount,
@@ -146,6 +167,13 @@ export const createPublicOrder = async (req: Request, res: Response) => {
     if (paymentMethod !== 'CASH') await tx.payment.create({ data: { restaurantId, branchId, saleId: order.id, method: paymentMethod, amount: totals.totalAmount, status: 'PENDING', notes: 'Online payment pending provider confirmation', createdBy: systemUser.id } });
     return order;
   });
+  } catch (err: any) {
+    if (isUniqueViolationOn(err, 'clientRequestId')) {
+      const winner = await replyWithExisting();
+      if (winner) return winner;
+    }
+    throw err;
+  }
 
   // Pay-on-pickup/delivery orders go to the kitchen now. Prepaid (M-Pesa/card)
   // orders go to the kitchen once the payment is confirmed (settleOnlinePayment),
@@ -267,19 +295,16 @@ export const createPublicReservation = async (req: Request, res: Response) => {
       include: { restaurant: { select: { id: true, name: true, phone: true } } },
     });
   }
-  if (!branch) {
-    branch = await prisma.branch.findFirst({
-      where: { status: 'ACTIVE' },
-      include: { restaurant: { select: { id: true, name: true, phone: true } } },
-    });
-  }
+  // No fallback to "any branch": a booking must never land in another restaurant.
   if (!branch) return sendError(res, 'Selected branch is unavailable', undefined, 404);
 
   const effectiveRestaurantId = branch.restaurantId;
   const effectiveBranchId = branch.id;
 
-  const startAt = new Date(`${dateStr}T${timeStr}:00`);
-  if (Number.isNaN(startAt.getTime())) return sendError(res, 'Invalid reservation date or time format');
+  // The guest picks a local date and time ("19:00" in Nairobi), not UTC.
+  const startAt = zonedDateTimeToUtc(dateStr, timeStr, await getRestaurantTimeZone(effectiveRestaurantId));
+  if (!startAt) return sendError(res, 'Invalid reservation date or time format');
+  if (startAt.getTime() < Date.now() - 5 * 60_000) return sendError(res, 'Please choose a time in the future');
   const endAt = new Date(startAt.getTime() + durationMinutes * 60000);
 
   // Link to the signed-in customer, or to a guest profile (never a registered account).
@@ -297,65 +322,71 @@ export const createPublicReservation = async (req: Request, res: Response) => {
       select: { id: true },
     });
   }
-  if (!systemUser) {
-    systemUser = await prisma.user.findFirst({
-      select: { id: true },
-    });
-  }
   if (!systemUser) return sendError(res, 'Reservations are not configured for this restaurant', undefined, 409);
-
-  // Check available tables for this branch
-  const tables = await prisma.table.findMany({
-    where: { branchId: effectiveBranchId, restaurantId: effectiveRestaurantId, status: { not: 'OUT_OF_SERVICE' }, capacity: { gte: partySize } },
-    orderBy: { capacity: 'asc' },
-  });
-
-  // Check table conflicts to find an automatically assignable table
-  let assignedTableId: string | null = null;
-  for (const table of tables) {
-    const conflict = await prisma.reservation.findFirst({
-      where: {
-        restaurantId: effectiveRestaurantId,
-        branchId: effectiveBranchId,
-        tableId: table.id,
-        status: { in: ['PENDING', 'CONFIRMED', 'SEATED'] },
-        startAt: { lt: endAt },
-        endAt: { gt: startAt },
-      },
-    });
-    if (!conflict) {
-      assignedTableId = table.id;
-      break;
-    }
-  }
 
   const notesText = [
     seatingArea ? `[Seating: ${seatingArea}]` : '',
     specialRequests ? specialRequests : '',
   ].filter(Boolean).join(' ');
 
-  const reservation = await prisma.reservation.create({
-    data: {
-      restaurantId: effectiveRestaurantId,
-      branchId: effectiveBranchId,
-      customerId: customer.id,
-      tableId: assignedTableId,
-      customerName,
-      phone: phone || null,
-      email: email || null,
-      partySize,
-      startAt,
-      endAt,
-      status: 'PENDING',
-      notes: notesText || null,
-      source: 'WEBSITE',
-      createdBy: systemUser.id,
-    },
-    include: {
-      branch: { select: { id: true, name: true, city: true, address: true, phone: true } },
-      table: { select: { id: true, tableNumber: true, name: true } },
-    },
-  });
+  let reservation;
+  try {
+    reservation = await prisma.$transaction(async (tx) => {
+      const branchTableCount = await tx.table.count({ where: { branchId: effectiveBranchId, restaurantId: effectiveRestaurantId, status: { notIn: ['OUT_OF_SERVICE', 'INACTIVE'] } } });
+      const tables = await tx.table.findMany({
+        where: { branchId: effectiveBranchId, restaurantId: effectiveRestaurantId, status: { notIn: ['OUT_OF_SERVICE', 'INACTIVE'] }, capacity: { gte: partySize } },
+        orderBy: [{ capacity: 'asc' }, { id: 'asc' }],
+        select: { id: true },
+      });
+
+      // Smallest free table that fits. Each candidate is locked before it is
+      // checked, so two guests can't be given the same table for the same time.
+      let assignedTableId: string | null = null;
+      for (const table of tables) {
+        try {
+          await ensureTableAvailable(tx, effectiveRestaurantId, effectiveBranchId, table.id, startAt, endAt);
+          assignedTableId = table.id;
+          break;
+        } catch (e: any) {
+          if (e.message !== 'TABLE_CONFLICT') throw e;
+        }
+      }
+
+      // Every suitable table is taken: refuse instead of overbooking. (Branches
+      // without tables set up, or parties bigger than any table, still go
+      // through as an unassigned request for staff to arrange.)
+      if (!assignedTableId && tables.length > 0) throw new Error('FULLY_BOOKED');
+      if (!assignedTableId && branchTableCount > 0) {
+        console.info(`[Reservations] Party of ${partySize} is larger than any table at branch ${effectiveBranchId}; saved unassigned for staff.`);
+      }
+
+      return tx.reservation.create({
+        data: {
+          restaurantId: effectiveRestaurantId,
+          branchId: effectiveBranchId,
+          customerId: customer.id,
+          tableId: assignedTableId,
+          customerName,
+          phone: phone || null,
+          email: email || null,
+          partySize,
+          startAt,
+          endAt,
+          status: 'PENDING',
+          notes: notesText || null,
+          source: 'WEBSITE',
+          createdBy: systemUser.id,
+        },
+        include: {
+          branch: { select: { id: true, name: true, city: true, address: true, phone: true } },
+          table: { select: { id: true, tableNumber: true, name: true } },
+        },
+      });
+    }, { timeout: 15_000 });
+  } catch (e: any) {
+    if (e?.message === 'FULLY_BOOKED') return sendError(res, 'Sorry, we are fully booked at that time. Please choose another time.', undefined, 409);
+    throw e;
+  }
 
   const reservationCode = `RES-${reservation.id.slice(-6).toUpperCase()}`;
 
@@ -487,26 +518,33 @@ export const getPublicReservationAvailability = async (req: Request, res: Respon
   }
 
   const tables = await prisma.table.findMany({
-    where: { branchId, restaurantId, status: { not: 'OUT_OF_SERVICE' }, capacity: { gte: partySize } },
+    where: { branchId, restaurantId, status: { notIn: ['OUT_OF_SERVICE', 'INACTIVE'] }, capacity: { gte: partySize } },
+    select: { id: true },
   });
 
+  const timeZone = await getRestaurantTimeZone(restaurantId);
+  if (!zonedDateTimeToUtc(dateStr, '00:00', timeZone)) return sendError(res, 'Invalid date');
   const slots = ['12:00', '12:30', '13:00', '13:30', '14:00', '18:00', '18:30', '19:00', '19:30', '20:00', '20:30', '21:00'];
   const availability = await Promise.all(
     slots.map(async (slot) => {
-      const slotStart = new Date(`${dateStr}T${slot}:00`);
+      const slotStart = zonedDateTimeToUtc(dateStr, slot, timeZone)!;
       const slotEnd = new Date(slotStart.getTime() + 90 * 60000);
 
-      const activeReservations = await prisma.reservation.count({
+      // Eligible tables (big enough) that have no overlapping active booking.
+      const busy = await prisma.reservation.findMany({
         where: {
           restaurantId,
           branchId,
+          tableId: { in: tables.map((t) => t.id) },
           status: { in: ['PENDING', 'CONFIRMED', 'SEATED'] },
           startAt: { lt: slotEnd },
           endAt: { gt: slotStart },
         },
+        select: { tableId: true },
+        distinct: ['tableId'],
       });
 
-      const availableTablesCount = Math.max(0, tables.length - activeReservations);
+      const availableTablesCount = Math.max(0, tables.length - busy.length);
       return {
         time: slot,
         available: availableTablesCount > 0,
