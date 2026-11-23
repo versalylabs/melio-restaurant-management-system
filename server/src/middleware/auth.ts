@@ -14,29 +14,48 @@ export interface AuthRequest extends Request {
   };
 }
 
-const permissionForRequest = (req: AuthRequest): string | null => {
-  const path = `${req.baseUrl}${req.path}`.replace(/\/+/g, '/');
-  const method = req.method.toUpperCase();
+const viewOrManage = (method: string, view: string, manage: string) => (method === 'GET' ? view : manage);
 
-  if (path.startsWith('/users')) return method === 'GET' ? 'users.view' : 'users.manage';
-  if (path.startsWith('/roles')) return 'roles.manage';
-  if (path.startsWith('/audit-logs')) return 'audit.view';
-  if (path.startsWith('/reports')) return 'reports.view';
-  if (path.startsWith('/promotions')) return method === 'GET' ? 'promotions.view' : 'promotions.manage';
-  if (path.startsWith('/payments')) return method === 'GET' ? 'payments.view' : 'payments.manage';
-  if (path.startsWith('/shifts')) return method === 'GET' ? 'shifts.view' : 'shifts.manage';
-  if (path.startsWith('/expenses')) return method === 'GET' ? 'expenses.view' : 'expenses.manage';
-  if (path.startsWith('/inventory')) return method === 'GET' ? 'inventory.view' : 'inventory.manage';
-  if (path.startsWith('/purchases')) return 'purchases.manage';
-  if (path.startsWith('/menu-items') || path.startsWith('/categories') || path.startsWith('/modifier-groups')) return method === 'GET' ? 'menu.view' : 'menu.manage';
-  if (path.startsWith('/customers')) return method === 'GET' ? 'customers.view' : 'customers.manage';
-  if (path.startsWith('/orders')) return method === 'GET' ? 'orders.view' : 'orders.manage';
-  if (path.startsWith('/kitchen')) return method === 'GET' ? 'kitchen.view' : 'kitchen.manage';
-  if (path.startsWith('/reservations')) return method === 'GET' ? 'reservations.view' : 'reservations.manage';
-  if (path.startsWith('/settings')) return 'settings.manage';
-  if (path.startsWith('/dashboard')) return 'dashboard.view';
+/**
+ * Maps a staff API request to the permission key (see middleware/permissions.ts)
+ * that grants it to custom roles. `authorize(...roles)` allows the listed
+ * system roles OR any role holding this permission.
+ *
+ * Every router mounted in routes/index.ts that uses authorize() must have an
+ * entry here; src/__tests__/platform.test.ts enforces that.
+ */
+export const permissionForPath = (rawPath: string, rawMethod: string): string | null => {
+  // req.baseUrl includes the app-level "/api" mount; strip it before matching.
+  const path = rawPath.replace(/\/+/g, '/').replace(/^\/api(?=\/|$)/, '');
+  const method = rawMethod.toUpperCase();
+  const is = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
+
+  if (is('/users')) return viewOrManage(method, 'users.view', 'users.manage');
+  if (is('/roles')) return 'roles.manage';
+  if (is('/audit-logs')) return 'audit.view';
+  if (is('/reports') || is('/analytics')) return 'reports.view';
+  if (is('/promotions')) return viewOrManage(method, 'promotions.view', 'promotions.manage');
+  if (is('/payments')) return viewOrManage(method, 'payments.view', 'payments.manage');
+  if (is('/shifts')) return viewOrManage(method, 'shifts.view', 'shifts.manage');
+  if (is('/expenses')) return viewOrManage(method, 'expenses.view', 'expenses.manage');
+  if (is('/inventory/purchase-orders') || is('/purchases')) return method === 'GET' ? 'inventory.view' : 'purchases.manage';
+  if (is('/inventory')) return viewOrManage(method, 'inventory.view', 'inventory.manage');
+  if (is('/menu-items') || is('/categories') || is('/modifier-groups')) return viewOrManage(method, 'menu.view', 'menu.manage');
+  if (/^\/customers\/[^/]+\/loyalty(\/|$)/.test(path)) return method === 'GET' ? 'customers.view' : 'loyalty.manage';
+  if (is('/customers')) return viewOrManage(method, 'customers.view', 'customers.manage');
+  if (is('/orders/pos') || is('/orders/sync-offline')) return 'pos.use';
+  if (is('/orders')) return viewOrManage(method, 'orders.view', 'orders.manage');
+  if (is('/kitchen')) return viewOrManage(method, 'kitchen.view', 'kitchen.manage');
+  if (is('/reservations')) return viewOrManage(method, 'reservations.view', 'reservations.manage');
+  if (is('/tables') || is('/sections') || is('/table-combinations')) return viewOrManage(method, 'orders.view', 'settings.manage');
+  if (is('/branches')) return viewOrManage(method, 'dashboard.view', 'settings.manage');
+  if (is('/settings') || is('/restaurant') || is('/website') || is('/automated-messaging')) return 'settings.manage';
+  if (is('/dashboard')) return 'dashboard.view';
+  if (is('/public/payments/notifications')) return 'payments.view';
   return null;
 };
+
+const permissionForRequest = (req: AuthRequest): string | null => permissionForPath(`${req.baseUrl}${req.path}`, req.method);
 
 export const authenticate = async (req: AuthRequest, res: ExpressResponse, next: NextFunction) => {
   try {

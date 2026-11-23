@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { securityHeaders, sanitizeInputs, getCorsOptionsDelegate } from './middleware/security';
 import { globalRateLimiter } from './middleware/rateLimiter';
+import { inlineMediaResponses, ignoreEchoedMediaUrls } from './middleware/inlineMedia';
 
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
@@ -51,6 +52,9 @@ app.use((req, res, next) => {
 });
 
 app.use(sanitizeInputs);
+// Inline (base64) images are served via /api/public/media instead of inside JSON.
+app.use(ignoreEchoedMediaUrls);
+app.use('/api', inlineMediaResponses);
 
 // 5. Enhanced Health Check Endpoint
 app.get(['/health', '/api/health'], async (_req, res) => {
@@ -67,11 +71,12 @@ app.get(['/health', '/api/health'], async (_req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
+    console.error('Health check database error:', err);
     res.status(503).json({
       success: false,
       status: 'unhealthy',
       database: 'unavailable',
-      error: err.message,
+      ...(isProduction ? {} : { error: err.message }),
       timestamp: new Date().toISOString(),
     });
   }

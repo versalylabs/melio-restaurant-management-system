@@ -31,6 +31,7 @@ import websiteRoutes from './website';
 import realtimeRoutes from './realtime';
 import publicPaymentsRoutes from './publicPayments';
 import automatedMessagingRoutes from './automatedMessaging';
+import mediaRoutes from './media';
 import { notFound } from '../middleware/errorHandler';
 import { errorHandler } from '../middleware/errorHandler';
 
@@ -59,6 +60,7 @@ router.use('/payments', paymentsRoutes);
 router.use('/reports', reportsRoutes);
 router.use('/reservations', reservationsRoutes);
 router.use('/promotions', promotionsRoutes);
+router.use('/public/media', mediaRoutes);
 router.use('/public', publicOrderingRoutes);
 router.use('/customer', customerRoutes);
 router.use('/notifications', notificationRoutes);

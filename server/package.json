@@ -10,7 +10,7 @@
     "build": "prisma generate && tsc",
     "start": "node dist/index.js",
     "lint": "eslint src/**/*.ts",
-    "test": "ts-node --transpile-only src/__tests__/security.test.ts",
+    "test": "ts-node --transpile-only src/__tests__/security.test.ts && ts-node --transpile-only src/__tests__/platform.test.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

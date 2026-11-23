@@ -8,6 +8,9 @@ export const errorHandler = (
 ) => {
   console.error('Error:', err);
 
+  // A response is already streaming (e.g. SSE): let Express close the connection.
+  if (res.headersSent) return next(err);
+
   if (err.name === 'PrismaClientKnownRequestError') {
     const isProd = process.env.NODE_ENV === 'production';
     const prismaCode = (err as any).code as string | undefined;
@@ -62,10 +65,11 @@ export const errorHandler = (
     });
   }
 
-  const isProdVercel = process.env.NODE_ENV === 'production' && !!process.env.VERCEL;
+  // Never expose internal error details in production (Vercel or Docker).
+  const isProd = process.env.NODE_ENV === 'production';
   res.status(500).json({
     success: false,
-    message: isProdVercel ? 'Internal server error' : (err.message || 'Internal server error'),
+    message: isProd ? 'Internal server error' : (err.message || 'Internal server error'),
   });
 };
 

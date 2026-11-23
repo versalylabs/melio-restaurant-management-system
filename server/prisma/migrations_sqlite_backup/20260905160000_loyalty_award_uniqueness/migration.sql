@@ -1,2 +1,0 @@
--- The unique loyalty transaction constraint is created with the customer/loyalty tables
--- in the preceding migration so Prisma can replay the history on a fresh shadow DB.

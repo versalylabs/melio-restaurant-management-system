@@ -61,12 +61,24 @@ docker compose ps
 
 ### 4. Initialize Database Schema & Seed Data
 ```bash
-# Switch to PostgreSQL and push schema into database
-docker compose exec server npx prisma db push
+# Apply versioned migrations (server/prisma/migrations is the only migrations folder)
+docker compose exec server npx prisma migrate deploy
 
-# (Optional) Seed initial restaurant branches & roles
+# (Optional) Seed initial restaurant branches & roles (SEED_USER_PASSWORD required in production)
 docker compose exec server npx prisma db seed
 ```
+
+#### Database migrations
+- `server/prisma/schema.prisma` and `server/prisma/migrations/` are the single source of truth.
+  `0_init_postgresql` is the baseline and matches the full current schema.
+- **Existing databases created with `prisma db push`** (e.g. the current Neon database) must be
+  marked as already at the baseline once, before the first `migrate deploy`:
+  ```bash
+  cd server && npx prisma migrate resolve --applied 0_init_postgresql
+  ```
+- For schema changes: edit `schema.prisma`, run `npm run db:migrate` locally to create a new
+  migration, commit it, then run `npm run db:deploy` against production. CI fails if the schema
+  and migrations drift apart.
 
 ### 5. Configure Nginx Reverse Proxy & Free SSL (Let's Encrypt)
 Install Nginx and Certbot on host:
