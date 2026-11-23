@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Clock,
@@ -76,6 +76,10 @@ export default function OnlineOrderTracking() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  // Shown when a refresh fails after the order has already loaded; the
+  // last known order stays on screen instead of becoming "Order Not Found".
+  const [refreshError, setRefreshError] = useState('');
+  const hasOrderRef = useRef(false);
 
   // Payment Modal States
   const [paymentModalType, setPaymentModalType] = useState<'MPESA' | 'CARD' | null>(null);
@@ -105,14 +109,25 @@ export default function OnlineOrderTracking() {
         isManual ? { headers: { 'x-refresh': 'true' }, params: { _refresh: Date.now() } } : undefined
       );
       if (res.data?.success) {
+        hasOrderRef.current = true;
         setData(res.data.data);
         if (res.data.data?.contactPhone && !mpesaPhone) {
           setMpesaPhone(res.data.data.contactPhone);
         }
       }
       setError('');
+      setRefreshError('');
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Unable to locate order.');
+      const notFound = err.response?.status === 404;
+      if (hasOrderRef.current && !notFound) {
+        // Network/server hiccup while refreshing: keep showing the order.
+        setRefreshError('Could not refresh right now. Showing the last update — try again in a moment.');
+      } else {
+        setError(
+          err.response?.data?.message ||
+            (err.response ? 'Unable to locate order.' : 'Unable to reach the server. Check your connection and try again.')
+        );
+      }
     } finally {
       setLoading(false);
       if (isManual) setRefreshing(false);
@@ -343,6 +358,12 @@ export default function OnlineOrderTracking() {
       </header>
 
       <main className="mx-auto max-w-4xl px-4 pt-8">
+        {refreshError && (
+          <div role="status" className="mb-4 flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+            <AlertCircle size={14} className="shrink-0" />
+            {refreshError}
+          </div>
+        )}
         {/* Main Status Hero Card */}
         <div className="rounded-3xl border border-white/10 bg-gradient-to-b from-white/10 to-white/5 backdrop-blur-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 right-0 w-96 h-96 bg-orange-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
