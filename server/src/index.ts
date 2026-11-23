@@ -29,7 +29,8 @@ app.use(globalRateLimiter);
 app.use(cors(getCorsOptionsDelegate({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Branch-ID', 'X-Restaurant-ID'],
+  // X-Refresh / X-Cache-Bypass: legacy client cache flags; accepted so older open tabs still work.
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Branch-ID', 'X-Restaurant-ID', 'X-Refresh', 'X-Cache-Bypass'],
 })));
 
 // 4. Request Body Parsing & Payload Sanitization

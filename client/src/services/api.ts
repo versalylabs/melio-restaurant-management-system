@@ -93,6 +93,14 @@ export const cachedGet = async <T = any>(
     config?.headers?.['x-cache-bypass'] === 'true' ||
     Boolean(config?.params?._refresh);
 
+  // 'x-refresh' / 'x-cache-bypass' are client-side cache flags only. Never send
+  // them: custom headers trigger a CORS preflight on the cross-origin API host,
+  // and the request is blocked if the server does not list them.
+  if (config?.headers) {
+    const { 'x-refresh': _refreshFlag, 'x-cache-bypass': _bypassFlag, ...headers } = config.headers;
+    config = { ...config, headers };
+  }
+
   const branchId = localStorage.getItem('rms-active-branch');
   const cacheKey = getCacheKey(url, config?.params, branchId);
 
@@ -101,10 +109,7 @@ export const cachedGet = async <T = any>(
     if (cached) {
       if (cached.isStale) {
         // Trigger background revalidation asynchronously
-        api.get<T>(url, {
-          ...config,
-          headers: { ...config?.headers, 'x-cache-bypass': 'true' },
-        })
+        api.get<T>(url, config)
           .then((res) => setCachedResponse(cacheKey, res))
           .catch((err) => console.warn('Background cache revalidation failed:', err));
       }
