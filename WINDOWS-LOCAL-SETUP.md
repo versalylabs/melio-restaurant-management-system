@@ -56,7 +56,7 @@ Use the **Staff / Sign In** link when you want the management dashboard.
 ## Demo staff accounts
 All supplied staff demo accounts use:
 
-`melio@2026`
+the password you set in `SEED_USER_PASSWORD`
 
 Emails:
 - `owner@example.com`

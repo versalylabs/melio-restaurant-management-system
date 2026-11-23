@@ -28,6 +28,7 @@ import {
 import { publicOrderingApi } from '../../services/api';
 import ReservationModal from '../website/components/ReservationModal';
 import { useCustomerAuth } from '../../contexts/CustomerAuthContext';
+import { usePaymentOptions } from '../../hooks/usePaymentOptions';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   Dock,
@@ -107,6 +108,11 @@ export default function OnlineOrdering() {
     notes: '',
     promoCode: '',
   });
+
+  const paymentOptions = usePaymentOptions();
+  useEffect(() => {
+    if (!paymentOptions.card && form.paymentMethod === 'CARD') setForm((f) => ({ ...f, paymentMethod: 'CASH' }));
+  }, [paymentOptions.card, form.paymentMethod]);
 
   // Pre-fill form from logged-in customer profile
   useEffect(() => {
@@ -838,12 +844,12 @@ export default function OnlineOrdering() {
 
               <div>
                 <label className="block text-xs font-semibold text-gray-300 mb-1">Payment Method</label>
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className={`grid ${paymentOptions.card ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5`}>
                   {[
                     { id: 'MOBILE_MONEY', label: 'M-Pesa', icon: Smartphone },
-                    { id: 'CARD', label: 'Card', icon: CreditCard },
+                    { id: 'CARD', label: paymentOptions.simulation ? 'Card (test)' : 'Card', icon: CreditCard },
                     { id: 'CASH', label: 'Cash', icon: Banknote },
-                  ].map((pm) => {
+                  ].filter((pm) => pm.id !== 'CARD' || paymentOptions.card).map((pm) => {
                     const Icon = pm.icon;
                     return (
                       <button

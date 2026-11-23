@@ -4,7 +4,8 @@ import { isPaymentSimulationEnabled, PaymentError, settleOnlinePayment } from '.
 
 export interface CardPaymentInput {
   trackingToken: string;
-  cardNumber?: string;
+  /** Last four digits only; full card numbers never reach this server. */
+  cardLast4?: string;
   cardName?: string;
 }
 
@@ -14,7 +15,7 @@ export interface CardPaymentInput {
  * (e.g. Stripe Checkout, Pesapal, Flutterwave) whose webhook calls
  * settleOnlinePayment(). Until then card payments only work in simulation mode.
  */
-export async function processCardPayment({ trackingToken, cardNumber, cardName }: CardPaymentInput) {
+export async function processCardPayment({ trackingToken, cardLast4, cardName }: CardPaymentInput) {
   if (!isPaymentSimulationEnabled()) {
     throw new PaymentError('CARD_PAYMENTS_UNAVAILABLE', 'Card payments are not available yet. Please pay with M-Pesa or on pickup.', 503);
   }
@@ -26,7 +27,7 @@ export async function processCardPayment({ trackingToken, cardNumber, cardName }
   const payableAmount = Math.max(0, online.sale.totalAmount - online.sale.amountPaid);
   if (payableAmount <= 0) throw new PaymentError('ORDER_ALREADY_PAID', 'This order has already been paid');
 
-  const last4 = (cardNumber || '').replace(/\D/g, '').slice(-4) || '0000';
+  const last4 = (cardLast4 || '').replace(/\D/g, '').slice(-4) || '0000';
   const reference = `SIM_CARD_${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
 
   await settleOnlinePayment({

@@ -67,13 +67,17 @@ FRONTEND_URL=http://localhost:5173
 
 ## Default Login
 
+Set `SEED_USER_PASSWORD` (8+ characters) in `server/.env` before running the seed. Seeding a production database fails without it.
+
+> **Never leave these demo accounts on a live restaurant.** Their e-mail addresses are public. On production, create real staff from the Staff page, then deactivate or delete every `@example.com` account.
+
 After running the seed:
 
-- **Owner**: `owner@example.com` / `melio@2026`
-- **Manager**: `manager@example.com` / `melio@2026`
-- **Cashier**: `cashier@example.com` / `melio@2026`
-- **Waiter**: `waiter@example.com` / `melio@2026`
-- **Chef**: `chef@example.com` / `melio@2026`
+- **Owner**: `owner@example.com` / the password you set in `SEED_USER_PASSWORD`
+- **Manager**: `manager@example.com` / the password you set in `SEED_USER_PASSWORD`
+- **Cashier**: `cashier@example.com` / the password you set in `SEED_USER_PASSWORD`
+- **Waiter**: `waiter@example.com` / the password you set in `SEED_USER_PASSWORD`
+- **Chef**: `chef@example.com` / the password you set in `SEED_USER_PASSWORD`
 
 ## API Endpoints
 

@@ -86,7 +86,7 @@ Use any seeded account with:
 
 Password:
 
-`melio@2026`
+the password you set in `SEED_USER_PASSWORD`
 
 ## Important workflow checks
 

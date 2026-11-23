@@ -7,9 +7,10 @@ import {
   handleMpesaCallback,
 } from '../services/mpesaService';
 import { processCardPayment } from '../services/cardPaymentService';
-import { PaymentError } from '../services/onlinePaymentService';
+import { PaymentError, isPaymentSimulationEnabled } from '../services/onlinePaymentService';
+import { clientIp } from '../middleware/rateLimiter';
 import { notificationHistory } from '../services/customerNotificationService';
-import { paymentRateLimiter } from '../middleware/rateLimiter';
+import { paymentRateLimiter, publicApiRateLimiter as publicStatusLimiter } from '../middleware/rateLimiter';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { safeRouter } from '../utils/safeRouter';
 
@@ -19,6 +20,23 @@ const sendPaymentError = (res: Response, err: unknown, fallback: string) => {
   if (err instanceof PaymentError) return sendError(res, err.message, undefined, err.statusCode);
   console.error(fallback, err);
   return sendError(res, fallback, undefined, 500);
+};
+
+// Which online payment options the website may offer. Card payments need a
+// hosted card processor; until one is integrated they exist only in simulation.
+router.get('/config', (_req: Request, res: Response) => {
+  const simulation = isPaymentSimulationEnabled();
+  return sendResponse(res, true, 'Payment options', { mpesa: true, card: simulation, simulation });
+});
+
+/**
+ * Optional extra check: MPESA_CALLBACK_ALLOWED_IPS="ip1,ip2" (Safaricom's
+ * published callback IPs). Empty = not enforced. The callback is also
+ * authenticated by its secret token and re-verified with Daraja.
+ */
+const callbackIpAllowed = (req: Request) => {
+  const allowed = (process.env.MPESA_CALLBACK_ALLOWED_IPS || '').split(',').map((ip) => ip.trim()).filter(Boolean);
+  return !allowed.length || allowed.includes(clientIp(req));
 };
 
 // M-Pesa STK Push Initiation
@@ -36,6 +54,10 @@ router.post('/mpesa/stk-push', paymentRateLimiter, async (req: Request, res: Res
 // Safaricom Daraja STK callback. Authenticated by the ?token= secret that we
 // append to CallBackURL when initiating the push.
 router.post('/mpesa/callback', async (req: Request, res: Response) => {
+  if (!callbackIpAllowed(req)) {
+    console.warn('[M-Pesa] Rejected callback from non-allowlisted IP', clientIp(req));
+    return res.status(403).json({ ResultCode: 1, ResultDesc: 'Forbidden' });
+  }
   try {
     const result = await handleMpesaCallback(req.body, req.query.token);
     if (!result.handled) console.warn('[M-Pesa] Callback not applied:', result.reason);
@@ -63,7 +85,7 @@ router.post('/mpesa/confirm', paymentRateLimiter, async (req: Request, res: Resp
 });
 
 // M-Pesa Transaction Status Query (reads from the database, so it works across serverless instances)
-router.get('/mpesa/status/:checkoutRequestId', async (req: Request, res: Response) => {
+router.get('/mpesa/status/:checkoutRequestId', publicStatusLimiter, async (req: Request, res: Response) => {
   const status = await getMpesaStatus(String(req.params.checkoutRequestId || '').trim());
   if (!status) return sendError(res, 'Transaction not found', undefined, 404);
   return sendResponse(res, true, 'Status retrieved', status);
@@ -72,12 +94,16 @@ router.get('/mpesa/status/:checkoutRequestId', async (req: Request, res: Respons
 // Card Payment (simulation only until a hosted card processor is integrated)
 router.post('/card/process', paymentRateLimiter, async (req: Request, res: Response) => {
   try {
-    const { trackingToken, cardNumber, cardName } = req.body || {};
+    const { trackingToken, cardLast4, cardName } = req.body || {};
     if (!trackingToken) return sendError(res, 'trackingToken is required');
+    // Full card numbers / CVCs are never accepted by this server (PCI-DSS).
+    if (req.body?.cardNumber || req.body?.cardCvc || req.body?.cardExp) {
+      return sendError(res, 'Card details must not be sent to this server.', undefined, 400);
+    }
     const result = await processCardPayment({
       trackingToken: String(trackingToken).trim(),
-      cardNumber: cardNumber ? String(cardNumber) : undefined,
-      cardName: cardName ? String(cardName).trim() : undefined,
+      cardLast4: cardLast4 ? String(cardLast4).replace(/\D/g, '').slice(-4) : undefined,
+      cardName: cardName ? String(cardName).trim().slice(0, 80) : undefined,
     });
     return sendResponse(res, true, 'Card payment processed successfully', result);
   } catch (err) {

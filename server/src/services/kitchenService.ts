@@ -1,4 +1,5 @@
 import prisma from '../config/database';
+import { safeErrorMessage } from '../utils/safeError';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
@@ -522,7 +523,7 @@ export const updateKitchenTicketStatus = async (req: AuthRequest, res: ExpressRe
     return sendResponse(res, true, 'Kitchen ticket updated successfully', updated);
   } catch (err: any) {
     console.error('updateKitchenTicketStatus error:', err);
-    return sendError(res, err.message || 'Failed to update kitchen ticket', undefined, 500);
+    return sendError(res, safeErrorMessage(err, 'Failed to update kitchen ticket'), undefined, 500);
   }
 };
 
@@ -593,7 +594,7 @@ export const updateKitchenTicketItemStatus = async (req: AuthRequest, res: Expre
     return sendResponse(res, true, 'Kitchen ticket item updated successfully');
   } catch (err: any) {
     console.error('updateKitchenTicketItemStatus error:', err);
-    return sendError(res, err.message || 'Failed to update item status', undefined, 500);
+    return sendError(res, safeErrorMessage(err, 'Failed to update item status'), undefined, 500);
   }
 };
 

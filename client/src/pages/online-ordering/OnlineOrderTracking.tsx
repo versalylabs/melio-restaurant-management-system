@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { publicOrderingApi, publicPaymentsApi } from '../../services/api';
 import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
+import { usePaymentOptions } from '../../hooks/usePaymentOptions';
 
 const STATUS_ORDER = ['SUBMITTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY', 'COMPLETED'];
 
@@ -86,11 +87,11 @@ export default function OnlineOrderTracking() {
   const [checkoutRequestId, setCheckoutRequestId] = useState('');
   const [mpesaSimulated, setMpesaSimulated] = useState(false);
 
-  // Card Form State
+  // Card payments only exist in simulation (test) mode until a hosted card
+  // processor is integrated. Only the last 4 digits are kept or sent.
+  const paymentOptions = usePaymentOptions();
   const [cardForm, setCardForm] = useState({
-    cardNumber: '',
-    cardExp: '',
-    cardCvc: '',
+    cardLast4: '',
     cardName: '',
   });
   const [cardLoading, setCardLoading] = useState(false);
@@ -249,9 +250,7 @@ export default function OnlineOrderTracking() {
     try {
       const res = await publicPaymentsApi.processCardPayment({
         trackingToken,
-        cardNumber: cardForm.cardNumber,
-        cardExp: cardForm.cardExp,
-        cardCvc: cardForm.cardCvc,
+        cardLast4: cardForm.cardLast4,
         cardName: cardForm.cardName,
       });
 
@@ -380,12 +379,14 @@ export default function OnlineOrderTracking() {
                       >
                         <Smartphone size={14} /> Pay M-Pesa
                       </button>
-                      <button
-                        onClick={() => setPaymentModalType('CARD')}
-                        className="rounded-xl bg-white/10 hover:bg-white/20 px-3 py-1.5 text-xs font-bold text-white border border-white/10 transition flex items-center gap-1.5"
-                      >
-                        <CreditCard size={14} /> Card
-                      </button>
+                      {paymentOptions.card && (
+                        <button
+                          onClick={() => setPaymentModalType('CARD')}
+                          className="rounded-xl bg-white/10 hover:bg-white/20 px-3 py-1.5 text-xs font-bold text-white border border-white/10 transition flex items-center gap-1.5"
+                        >
+                          <CreditCard size={14} /> Card (test)
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -631,7 +632,7 @@ export default function OnlineOrderTracking() {
       )}
 
       {/* ======================= CARD PAYMENT MODAL ======================= */}
-      {paymentModalType === 'CARD' && (
+      {paymentModalType === 'CARD' && paymentOptions.card && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
           <div className="w-full max-w-md rounded-3xl border border-white/15 bg-zinc-950 p-6 sm:p-8 text-white shadow-2xl relative animate-in fade-in zoom-in-95">
             <button
@@ -646,8 +647,8 @@ export default function OnlineOrderTracking() {
                 <CreditCard size={22} />
               </div>
               <div>
-                <h3 className="text-lg font-bold">Credit / Debit Card</h3>
-                <p className="text-xs text-gray-400">Secure 256-bit Encrypted Checkout</p>
+                <h3 className="text-lg font-bold">Test Card Payment</h3>
+                <p className="text-xs text-amber-300">Test mode: no real card is charged. Do not enter real card details.</p>
               </div>
             </div>
 
@@ -678,46 +679,22 @@ export default function OnlineOrderTracking() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5">
-                  Card Number
+                <label htmlFor="card-last4" className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5">
+                  Last 4 digits (test)
                 </label>
                 <input
+                  id="card-last4"
                   type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
                   required
-                  placeholder="•••• •••• •••• 4242"
-                  value={cardForm.cardNumber}
-                  onChange={(e) => setCardForm({ ...cardForm, cardNumber: e.target.value })}
+                  maxLength={4}
+                  pattern="[0-9]{4}"
+                  placeholder="4242"
+                  value={cardForm.cardLast4}
+                  onChange={(e) => setCardForm({ ...cardForm, cardLast4: e.target.value.replace(/\D/g, '').slice(0, 4) })}
                   className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none"
                 />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5">
-                    Expiry (MM/YY)
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="12/28"
-                    value={cardForm.cardExp}
-                    onChange={(e) => setCardForm({ ...cardForm, cardExp: e.target.value })}
-                    className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-300 mb-1.5">
-                    CVC
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="123"
-                    value={cardForm.cardCvc}
-                    onChange={(e) => setCardForm({ ...cardForm, cardCvc: e.target.value })}
-                    className="w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none"
-                  />
-                </div>
               </div>
 
               <button

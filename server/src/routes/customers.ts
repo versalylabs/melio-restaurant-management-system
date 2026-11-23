@@ -12,7 +12,8 @@ const CUSTOMER_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'];
 const LOYALTY_MANAGER_ROLES = ['OWNER', 'ADMIN', 'MANAGER'];
 const POINTS_PER_100 = 1;
 
-router.get('/', async (req: AuthRequest, res) => {
+// Customer records hold personal data (phone, e-mail, address): front-of-house roles only.
+router.get('/', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) => {
   try {
     const q = String(req.query.search || '').trim();
     const customers = await prisma.customer.findMany({
@@ -38,7 +39,7 @@ router.get('/loyalty/rules', async (_req: AuthRequest, res) => {
   });
 });
 
-router.get('/:id', async (req: AuthRequest, res) => {
+router.get('/:id', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) => {
   try {
     const customer = await prisma.customer.findFirst({
       where: { id: req.params.id, restaurantId: req.user!.restaurantId },

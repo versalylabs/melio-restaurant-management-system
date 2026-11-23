@@ -4,6 +4,56 @@ import { Request, Response } from 'express';
 import prisma from '../config/database';
 import { sendError, sendResponse } from '../utils/response';
 
+/** JWT secret for customer sessions. The server refuses to start in production without JWT_SECRET. */
+const customerJwtSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (secret) return secret;
+  if (process.env.NODE_ENV === 'production') throw new Error('JWT_SECRET is not configured');
+  return 'dev-only-customer-secret';
+};
+
+type PublicContact = { name: string; phone?: string | null; email?: string | null; address?: string | null; notes: string };
+
+/**
+ * Works out which customer record a public (website) order or reservation
+ * belongs to.
+ *
+ * - A signed-in customer (valid customer token) always gets their own account.
+ * - A guest is matched only to an existing *guest* profile (no password) with
+ *   the same phone/email, and that profile is never modified. Guests are never
+ *   attached to a registered account: a phone number or e-mail typed into a
+ *   form proves nothing, and attaching would let strangers add orders to, or
+ *   change the details of, someone else's account.
+ */
+export async function resolvePublicCustomer(req: Request, restaurantId: string, contact: PublicContact) {
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Bearer ')) {
+    try {
+      const decoded = jwt.verify(authHeader.slice(7), customerJwtSecret()) as { customerId?: string; type?: string };
+      if (decoded.type === 'CUSTOMER' && decoded.customerId) {
+        const account = await prisma.customer.findFirst({ where: { id: decoded.customerId, restaurantId, status: 'ACTIVE' } });
+        if (account) return account;
+      }
+    } catch {
+      // Invalid/expired token: fall through and treat the request as a guest.
+    }
+  }
+
+  const phone = contact.phone?.trim() || null;
+  const email = contact.email?.trim().toLowerCase() || null;
+  if (phone || email) {
+    const guest = await prisma.customer.findFirst({
+      where: { restaurantId, password: null, OR: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])] },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (guest) return guest;
+  }
+
+  return prisma.customer.create({
+    data: { restaurantId, name: contact.name, phone, email, address: contact.address || null, notes: contact.notes, status: 'ACTIVE' },
+  });
+}
+
 export interface CustomerAuthRequest extends Request {
   customer?: {
     id: string;
@@ -22,7 +72,7 @@ export const authenticateCustomer = async (req: CustomerAuthRequest, res: Respon
     }
 
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret-jwt-key') as {
+    const decoded = jwt.verify(token, customerJwtSecret()) as {
       customerId: string;
       restaurantId: string;
       type: string;
@@ -67,50 +117,41 @@ export const registerCustomer = async (req: Request, res: Response) => {
     restaurantId = defaultRest.id;
   }
 
-  // Check existing customer with same email or phone for this restaurant
-  const existing = await prisma.customer.findFirst({
+  // Only registered accounts (with a password) block a new registration.
+  const existingAccount = await prisma.customer.findFirst({
     where: {
       restaurantId,
+      password: { not: null },
       OR: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])],
     },
+    select: { id: true },
   });
+  if (existingAccount) {
+    return sendError(res, 'An account with this email/phone already exists. Please log in.', undefined, 409);
+  }
 
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  let customer;
-  if (existing) {
-    if (existing.password) {
-      return sendError(res, 'An account with this email/phone already exists. Please log in.');
-    }
-    // Claim existing guest profile
-    customer = await prisma.customer.update({
-      where: { id: existing.id },
-      data: {
-        name: name || existing.name,
-        email: email || existing.email,
-        phone: phone || existing.phone,
-        password: hashedPassword,
-        address: address || existing.address,
-      },
-    });
-  } else {
-    customer = await prisma.customer.create({
-      data: {
-        restaurantId,
-        name,
-        email: email || null,
-        phone: phone || null,
-        password: hashedPassword,
-        address: address || null,
-        status: 'ACTIVE',
-        loyaltyBalance: 0,
-      },
-    });
-  }
+  // A new account is always created. Guest profiles from earlier website
+  // orders are NOT claimed: knowing someone's phone number or e-mail must not
+  // reveal their order history, addresses or loyalty points. (Merging guest
+  // history safely needs a one-time code sent to that phone/e-mail.)
+  const customer = await prisma.customer.create({
+    data: {
+      restaurantId,
+      name,
+      email: email || null,
+      phone: phone || null,
+      password: hashedPassword,
+      address: address || null,
+      status: 'ACTIVE',
+      loyaltyBalance: 0,
+    },
+  });
 
   const token = jwt.sign(
     { customerId: customer.id, restaurantId, type: 'CUSTOMER' },
-    process.env.JWT_SECRET || 'secret-jwt-key',
+    customerJwtSecret(),
     { expiresIn: '30d' }
   );
 
@@ -153,12 +194,13 @@ export const loginCustomer = async (req: Request, res: Response) => {
   const customer = await prisma.customer.findFirst({
     where: {
       ...(restaurantId ? { restaurantId } : {}),
+      password: { not: null },
       OR: [{ email: identifier }, { phone: identifier }],
     },
   });
 
   if (!customer || !customer.password) {
-    return sendError(res, 'Invalid credentials or no password registered yet', undefined, 401);
+    return sendError(res, 'Invalid email/phone or password', undefined, 401);
   }
 
   if (customer.status !== 'ACTIVE') {
@@ -172,7 +214,7 @@ export const loginCustomer = async (req: Request, res: Response) => {
 
   const token = jwt.sign(
     { customerId: customer.id, restaurantId, type: 'CUSTOMER' },
-    process.env.JWT_SECRET || 'secret-jwt-key',
+    customerJwtSecret(),
     { expiresIn: '30d' }
   );
 

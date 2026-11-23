@@ -91,23 +91,17 @@ execSync('npx prisma db push --skip-generate', {
 
 // 6. Seed Neon Database
 console.log('\n[Neon Setup] Seeding initial data (restaurants, branches, categories, food items, staff accounts)...');
+// NODE_ENV=production makes the seed refuse to use the built-in demo password:
+// SEED_USER_PASSWORD must be set to a strong, private value.
 execSync('npx ts-node --transpile-only prisma/seed.ts', {
   cwd: path.resolve(__dirname, '..'),
   stdio: 'inherit',
-  env: { ...process.env, DATABASE_URL: connectionString, DIRECT_URL: directUrl },
+  env: { ...process.env, NODE_ENV: 'production', DATABASE_URL: connectionString, DIRECT_URL: directUrl },
 });
 
-// 7. Ensure demo users exist with melio@2026 password
-console.log('\n[Neon Setup] Ensuring pitch staff credentials (owner, manager, cashier, waiter, chef, delivery)...');
-try {
-  execSync('node scripts/ensure-users.js', {
-    cwd: path.resolve(__dirname, '..'),
-    stdio: 'inherit',
-    env: { ...process.env, DATABASE_URL: connectionString, DIRECT_URL: directUrl },
-  });
-} catch (e) {
-  console.warn('[Neon Setup] Note: ensure-users completed with notice:', e.message);
-}
+// 7. Demo staff accounts are intentionally NOT created here. This script
+// targets the production database; create real staff from the Staff page
+// (or run scripts/ensure-users.js against a local/dev database only).
 
 // 8. Update Vercel environment variable if logged in
 console.log('\n[Neon Setup] Syncing DATABASE_URL with Vercel project...');

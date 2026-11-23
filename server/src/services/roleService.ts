@@ -4,6 +4,7 @@ import { PERMISSIONS, parsePermissions } from '../middleware/permissions';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
 import { createAuditLog } from '../services/auditLogService';
+import { canEditRoleDefinition, filterGrantablePermissions, isReservedRoleName } from '../utils/roleGuards';
 
 const normalizePermissions = (value: unknown): string[] => {
   if (Array.isArray(value)) return [...new Set(value.filter((p): p is string => typeof p === 'string'))];
@@ -40,10 +41,12 @@ export const getRoles = async (req: AuthRequest, res: ExpressResponse) => {
 export const createRole = async (req: AuthRequest, res: ExpressResponse) => {
   const { name, description, permissions, maxDiscountPercent, maxDiscountAmount } = req.body as { name: string; description?: string; permissions?: unknown; maxDiscountPercent?: number; maxDiscountAmount?: number };
   if (!name?.trim()) return sendError(res, 'Role name is required');
+  if (isReservedRoleName(name)) return sendError(res, 'That name is reserved for a built-in role', undefined, 400);
   const existing = await prisma.role.findUnique({ where: { name: name.trim() } });
   if (existing) return sendError(res, 'Role with this name already exists', undefined, 409);
-  const normalized = normalizePermissions(permissions);
-  const role = await prisma.role.create({ data: { name: name.trim(), description, permissions: JSON.stringify(normalized), isSystem: false, maxDiscountPercent: typeof maxDiscountPercent === 'number' && Number.isFinite(maxDiscountPercent) ? Math.max(0, Math.min(100, maxDiscountPercent!)) : 100, maxDiscountAmount: typeof maxDiscountAmount === 'number' && Number.isFinite(maxDiscountAmount) ? Math.max(0, maxDiscountAmount!) : 1000000 } });
+  const { kept: normalized, rejected } = filterGrantablePermissions(req.user!.roleName, req.user!.permissions, normalizePermissions(permissions));
+  if (rejected.length) return sendError(res, `You cannot grant these permissions: ${rejected.join(', ')}`, undefined, 403);
+  const role = await prisma.role.create({ data: { name: name.trim(), description, permissions: JSON.stringify(normalized), isSystem: false, maxDiscountPercent: typeof maxDiscountPercent === 'number' && Number.isFinite(maxDiscountPercent) ? Math.max(0, Math.min(100, maxDiscountPercent!)) : 0, maxDiscountAmount: typeof maxDiscountAmount === 'number' && Number.isFinite(maxDiscountAmount) ? Math.max(0, maxDiscountAmount!) : 0 } });
   await createAuditLog(req.user!.restaurantId, req.user!.id, 'CREATE', 'Role', role.id, `Created role ${role.name}`, { permissions: normalized });
   return sendResponse(res, true, 'Role created successfully', { id: role.id, name: role.name, description: role.description, permissions: normalized, maxDiscountPercent: role.maxDiscountPercent, maxDiscountAmount: role.maxDiscountAmount, isSystem: role.isSystem, createdAt: role.createdAt }, 201);
 };
@@ -52,13 +55,25 @@ export const updateRole = async (req: AuthRequest, res: ExpressResponse) => {
   const { id } = req.params;
   const role = await prisma.role.findUnique({ where: { id } });
   if (!role) return sendError(res, 'Role not found', undefined, 404);
+  if (!canEditRoleDefinition(req.user!.roleName, role.name)) return sendError(res, 'Only an owner can change the Owner and Admin roles', undefined, 403);
   const { name, description, permissions, maxDiscountPercent, maxDiscountAmount } = req.body as { name?: string; description?: string; permissions?: unknown; maxDiscountPercent?: number; maxDiscountAmount?: number };
   if (role.isSystem && name && name !== role.name) return sendError(res, 'System role names cannot be changed', undefined, 403);
   if (!role.isSystem && name?.trim() && name.trim() !== role.name) {
+    if (isReservedRoleName(name)) return sendError(res, 'That name is reserved for a built-in role', undefined, 400);
     const conflict = await prisma.role.findUnique({ where: { name: name.trim() } });
     if (conflict) return sendError(res, 'A role with this name already exists', undefined, 409);
   }
-  const normalized = permissions === undefined ? parsePermissions(role.permissions) : normalizePermissions(permissions);
+  const currentPermissions = parsePermissions(role.permissions);
+  let normalized = currentPermissions;
+  if (permissions !== undefined) {
+    // Permissions the role already had are kept as-is; anything newly added
+    // must be something the editor is allowed to grant.
+    const requested = normalizePermissions(permissions);
+    const added = requested.filter((p) => !currentPermissions.includes(p));
+    const { rejected } = filterGrantablePermissions(req.user!.roleName, req.user!.permissions, added);
+    if (rejected.length) return sendError(res, `You cannot grant these permissions: ${rejected.join(', ')}`, undefined, 403);
+    normalized = requested;
+  }
   const updated = await prisma.role.update({ where: { id }, data: { name: role.isSystem ? role.name : (name?.trim() || role.name), description, permissions: JSON.stringify(normalized), maxDiscountPercent: typeof maxDiscountPercent === 'number' && Number.isFinite(maxDiscountPercent) ? Math.max(0, Math.min(100, maxDiscountPercent!)) : role.maxDiscountPercent, maxDiscountAmount: typeof maxDiscountAmount === 'number' && Number.isFinite(maxDiscountAmount) ? Math.max(0, maxDiscountAmount!) : role.maxDiscountAmount } });
   await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'Role', id, `Updated role ${updated.name}`, { permissions: normalized });
   return sendResponse(res, true, 'Role updated successfully', { id: updated.id, name: updated.name, description: updated.description, permissions: normalized, maxDiscountPercent: updated.maxDiscountPercent, maxDiscountAmount: updated.maxDiscountAmount, isSystem: updated.isSystem, createdAt: updated.createdAt, updatedAt: updated.updatedAt });

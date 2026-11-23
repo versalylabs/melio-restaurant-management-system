@@ -1,4 +1,5 @@
 import { Response as ExpressResponse } from 'express';
+import { safeErrorMessage } from '../utils/safeError';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import {
@@ -17,7 +18,7 @@ export const getAutomatedMessageTemplatesController = async (req: AuthRequest, r
     const templates = getTemplatesForRestaurant(restaurantId);
     return sendResponse(res, true, 'Automated message templates retrieved', { templates });
   } catch (err: any) {
-    return sendError(res, err.message || 'Failed to retrieve templates');
+    return sendError(res, safeErrorMessage(err, 'Failed to retrieve templates'));
   }
 };
 
@@ -40,7 +41,7 @@ export const updateAutomatedMessageTemplateController = async (req: AuthRequest,
       template: updated.find((t) => t.action === action),
     });
   } catch (err: any) {
-    return sendError(res, err.message || 'Failed to update template');
+    return sendError(res, safeErrorMessage(err, 'Failed to update template'));
   }
 };
 
@@ -123,6 +124,6 @@ export const sendTestMessageController = async (req: AuthRequest, res: ExpressRe
       recipient: emailTarget,
     });
   } catch (err: any) {
-    return sendError(res, err.message || 'Failed to send test message');
+    return sendError(res, safeErrorMessage(err, 'Failed to send test message'));
   }
 };

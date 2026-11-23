@@ -1,4 +1,11 @@
 import prisma from '../config/database';
+import { canAssignRole, canManageAccount } from '../utils/roleGuards';
+import { parsePermissions } from '../middleware/permissions';
+
+const permCtx = (req: AuthRequest, rolePermissions?: string | null) => ({
+  actorPermissions: req.user!.permissions || [],
+  targetPermissions: parsePermissions(rolePermissions),
+});
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
@@ -57,6 +64,11 @@ export const createUser = async (req: AuthRequest, res: ExpressResponse) => {
     return sendError(res, 'First name, last name, email, and role are required');
   }
 
+  // No default password: a shared fallback would let anyone sign in to new accounts.
+  if (typeof password !== 'string' || password.length < 8) {
+    return sendError(res, 'An initial password of at least 8 characters is required');
+  }
+
   const normalizedEmail = email.trim().toLowerCase();
 
   const existing = await prisma.user.findFirst({
@@ -74,6 +86,9 @@ export const createUser = async (req: AuthRequest, res: ExpressResponse) => {
   if (!role) {
     return sendError(res, 'Selected role does not exist', undefined, 400);
   }
+  if (!canAssignRole(req.user!.roleName, role.name, permCtx(req, role.permissions))) {
+    return sendError(res, `Only an owner can create ${role.name} accounts`, undefined, 403);
+  }
 
   if (branchId) {
     const validBranch = await prisma.branch.findFirst({
@@ -85,7 +100,7 @@ export const createUser = async (req: AuthRequest, res: ExpressResponse) => {
   }
 
   const bcrypt = await import('bcryptjs');
-  const passwordHash = await bcrypt.hash(password || 'melio@2026', 12);
+  const passwordHash = await bcrypt.hash(password!, 12);
   const uniqueStationIds = Array.isArray(stationIds) ? [...new Set(stationIds)] : [];
 
   const user = await prisma.$transaction(async (tx) => {
@@ -184,8 +199,12 @@ export const updateUser = async (req: AuthRequest, res: ExpressResponse) => {
 
   if (id === req.user!.id && status === 'INACTIVE') return sendError(res, 'You cannot deactivate your own account');
   const targetRole = await prisma.role.findUnique({ where: { id: user.roleId } });
-  if (targetRole?.name === 'OWNER' && req.user!.roleName !== 'OWNER' && (status === 'INACTIVE' || (roleId && roleId !== user.roleId))) {
-    return sendError(res, 'Only an owner can modify an owner account', undefined, 403);
+  const isSelf = id === req.user!.id;
+  if (!isSelf && !canManageAccount(req.user!.roleName, targetRole?.name, permCtx(req, targetRole?.permissions))) {
+    return sendError(res, `Only an owner can modify ${targetRole?.name} accounts`, undefined, 403);
+  }
+  if (roleId && roleId !== user.roleId && isSelf) {
+    return sendError(res, 'You cannot change your own role', undefined, 403);
   }
 
   const normalizedEmail = email ? email.trim().toLowerCase() : user.email;
@@ -205,6 +224,9 @@ export const updateUser = async (req: AuthRequest, res: ExpressResponse) => {
   if (roleId && roleId !== user.roleId) {
     const validRole = await prisma.role.findUnique({ where: { id: roleId } });
     if (!validRole) return sendError(res, 'Selected role does not exist', undefined, 400);
+    if (!canAssignRole(req.user!.roleName, validRole.name, permCtx(req, validRole.permissions))) {
+      return sendError(res, `Only an owner can assign the ${validRole.name} role`, undefined, 403);
+    }
   }
 
   if (branchId) {
@@ -309,6 +331,9 @@ export const deleteUser = async (req: AuthRequest, res: ExpressResponse) => {
   if (role?.name === 'OWNER') {
     return sendError(res, 'Owner accounts cannot be deleted', undefined, 403);
   }
+  if (!canManageAccount(req.user!.roleName, role?.name, permCtx(req, role?.permissions))) {
+    return sendError(res, `Only an owner can delete ${role?.name} accounts`, undefined, 403);
+  }
 
   const openShiftCount = await prisma.shift.count({
     where: { userId: id, status: 'OPEN' },
@@ -410,7 +435,7 @@ export const resetUserPassword = async (req: AuthRequest, res: ExpressResponse) 
   if (!user) return sendError(res, 'User not found', undefined, 404);
   if (user.roleId) {
     const targetRole = await prisma.role.findUnique({ where: { id: user.roleId } });
-    if (targetRole?.name === 'OWNER' && req.user!.roleName !== 'OWNER') return sendError(res, 'Only an owner can reset an owner password', undefined, 403);
+    if (id !== req.user!.id && !canManageAccount(req.user!.roleName, targetRole?.name, permCtx(req, targetRole?.permissions))) return sendError(res, `Only an owner can reset a ${targetRole?.name} password`, undefined, 403);
   }
   const bcrypt = await import('bcryptjs');
   const passwordHash = await bcrypt.hash(newPassword, 12);

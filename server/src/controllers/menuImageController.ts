@@ -1,4 +1,5 @@
 import { Response as ExpressResponse } from 'express';
+import { safeErrorMessage } from '../utils/safeError';
 import { AuthRequest } from '../middleware/auth';
 import prisma from '../config/database';
 import { sendError, sendResponse } from '../utils/response';
@@ -33,7 +34,7 @@ export const uploadMenuItemImage = async (req: AuthRequest, res: ExpressResponse
     return sendResponse(res, true, 'Menu image uploaded successfully', { image: imageUrl });
   } catch (error: any) {
     console.error('Menu image upload failed:', error);
-    return sendError(res, error?.message || 'Failed to upload menu image');
+    return sendError(res, safeErrorMessage(error, 'Failed to upload menu image'));
   }
 };
 
@@ -52,6 +53,6 @@ export const removeMenuItemImage = async (req: AuthRequest, res: ExpressResponse
     return sendResponse(res, true, 'Menu image removed successfully');
   } catch (error: any) {
     console.error('Menu image removal failed:', error);
-    return sendError(res, error?.message || 'Failed to remove menu image');
+    return sendError(res, safeErrorMessage(error, 'Failed to remove menu image'));
   }
 };

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { escapeHtml } from '../../lib/utils';
 import { Search, Eye, Trash2, CreditCard, Printer, RefreshCw } from 'lucide-react';
 import { orderApi, paymentApi } from '../../services/api';
 import type { Sale } from '../../types';
@@ -111,11 +112,11 @@ export default function Orders() {
       const data = response.data.data;
       const sale = data.sale;
       const receipt = data.receipt;
-      const rows = (sale.items || []).map((i: any) => `<tr><td>${i.quantity}x ${i.itemNameSnapshot}</td><td style="text-align:right">KES ${(i.subtotal || 0).toLocaleString()}</td></tr>`).join('');
-      const payments = (sale.payments || []).map((p: any) => `<div>${p.method}: KES ${(p.amount || 0).toLocaleString()}</div>`).join('');
+      const rows = (sale.items || []).map((i: any) => `<tr><td>${escapeHtml(i.quantity)}x ${escapeHtml(i.itemNameSnapshot)}</td><td style="text-align:right">KES ${(i.subtotal || 0).toLocaleString()}</td></tr>`).join('');
+      const payments = (sale.payments || []).map((p: any) => `<div>${escapeHtml(p.method)}: KES ${(p.amount || 0).toLocaleString()}</div>`).join('');
       const w = window.open('', '_blank', 'width=420,height=700');
       if (!w) return;
-      w.document.write(`<html><head><title>${receipt.receiptNumber}</title><style>body{font-family:Arial;padding:24px;max-width:380px;margin:auto}table{width:100%;border-collapse:collapse}td{padding:6px 0}.total{font-size:18px;font-weight:700;border-top:1px solid #ccc;padding-top:10px}</style></head><body><h2 style="text-align:center">${sale.branch.name}</h2><p style="text-align:center">Receipt ${receipt.receiptNumber}<br>Order ${sale.orderNumber}<br>${new Date(receipt.issuedAt).toLocaleString()}</p><table>${rows}</table><p class="total">Total: KES ${(sale.totalAmount || 0).toLocaleString()}</p><p>${payments}</p><p style="text-align:center">Thank you for dining with us.</p><script>window.print();</script></body></html>`);
+      w.document.write(`<html><head><title>${escapeHtml(receipt.receiptNumber)}</title><style>body{font-family:Arial;padding:24px;max-width:380px;margin:auto}table{width:100%;border-collapse:collapse}td{padding:6px 0}.total{font-size:18px;font-weight:700;border-top:1px solid #ccc;padding-top:10px}</style></head><body><h2 style="text-align:center">${escapeHtml(sale.branch?.name)}</h2><p style="text-align:center">Receipt ${escapeHtml(receipt.receiptNumber)}<br>Order ${escapeHtml(sale.orderNumber)}<br>${new Date(receipt.issuedAt).toLocaleString()}</p><table>${rows}</table><p class="total">Total: KES ${(sale.totalAmount || 0).toLocaleString()}</p><p>${payments}</p><p style="text-align:center">Thank you for dining with us.</p><script>window.print();</script></body></html>`);
       w.document.close();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to generate receipt');

@@ -1,4 +1,5 @@
 import { Request, Response as ExpressResponse } from 'express';
+import { safeErrorMessage } from '../utils/safeError';
 import { login, createInitialAdmin, getMe } from '../services/authService';
 import { sendResponse, sendError } from '../utils/response';
 import { AuthRequest } from '../middleware/auth';
@@ -29,7 +30,7 @@ export const loginController = async (req: Request, res: ExpressResponse) => {
 
     return sendResponse(res, true, 'Login successful', result);
   } catch (error) {
-    return sendError(res, error instanceof Error ? error.message : 'Login failed');
+    return sendError(res, safeErrorMessage(error, 'Login failed'));
   }
 };
 
@@ -59,7 +60,7 @@ export const setupController = async (req: Request, res: ExpressResponse) => {
 
     return sendResponse(res, true, 'Initial setup completed', result, 201);
   } catch (error) {
-    return sendError(res, error instanceof Error ? error.message : 'Setup failed');
+    return sendError(res, safeErrorMessage(error, 'Setup failed'));
   }
 };
 
@@ -68,7 +69,7 @@ export const getMeController = async (req: AuthRequest, res: ExpressResponse) =>
     const user = await getMe(req.user!.id);
     return sendResponse(res, true, 'User retrieved', user);
   } catch (error) {
-    return sendError(res, error instanceof Error ? error.message : 'Failed to retrieve user', undefined, 404);
+    return sendError(res, safeErrorMessage(error, 'Failed to retrieve user'), undefined, 404);
   }
 };
 
@@ -79,6 +80,6 @@ export const logoutController = async (req: AuthRequest, res: ExpressResponse) =
     await createAuditLog(req.user!.restaurantId, req.user!.id, 'LOGOUT', 'User', req.user!.id, 'User logged out');
     return sendResponse(res, true, 'Logged out successfully');
   } catch (error) {
-    return sendError(res, error instanceof Error ? error.message : 'Logout failed');
+    return sendError(res, safeErrorMessage(error, 'Logout failed'));
   }
 };
