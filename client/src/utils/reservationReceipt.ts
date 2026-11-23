@@ -1,3 +1,4 @@
+import { notify } from '../lib/dialogs';
 export interface ReservationReceiptData {
   id?: string;
   reservationId?: string;
@@ -48,7 +49,7 @@ export function printReservationReceipt(data: ReservationReceiptData) {
 
   const printWindow = window.open('', '_blank', 'width=540,height=780');
   if (!printWindow) {
-    alert('Please allow popups to print your reservation confirmation receipt.');
+    notify('Please allow pop-ups for this site to print the reservation receipt.');
     return;
   }
 

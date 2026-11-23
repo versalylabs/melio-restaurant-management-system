@@ -9,6 +9,7 @@ import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { useAuth } from '../../contexts/AuthContext';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
+import { confirmDialog } from '../../lib/dialogs';
 
 type Branch = { id: string; name: string; code: string; status?: string };
 
@@ -89,7 +90,7 @@ export default function Sections() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to deactivate this section?')) return;
+    if (!await confirmDialog('Are you sure you want to deactivate this section?')) return;
     try {
       setError('');
       await sectionApi.deleteSection(id);
@@ -134,8 +135,8 @@ export default function Sections() {
                 <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">{section.tableCount}</td>
                 <td className="px-6 py-4"><Badge variant={section.status === 'ACTIVE' ? 'success' : 'warning'}>{section.status}</Badge></td>
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                  <button onClick={() => { setEditingSection(section); setFormData({ name: section.name, description: section.description || '', displayOrder: section.displayOrder, status: section.status, branchId: section.branchId }); setShowModal(true); }} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 mr-3" title="Edit section"><Edit className="w-4 h-4" /></button>
-                  {section.status === 'ACTIVE' && <button onClick={() => handleDelete(section.id)} className="text-red-600 dark:text-red-400 hover:text-red-900" title="Deactivate section"><Trash2 className="w-4 h-4" /></button>}
+                  <button aria-label="Edit section" onClick={() => { setEditingSection(section); setFormData({ name: section.name, description: section.description || '', displayOrder: section.displayOrder, status: section.status, branchId: section.branchId }); setShowModal(true); }} className="text-orange-600 dark:text-orange-400 hover:text-orange-900 mr-3" title="Edit section"><Edit className="w-4 h-4" aria-hidden="true" /></button>
+                  {section.status === 'ACTIVE' && <button aria-label="Deactivate section" onClick={() => handleDelete(section.id)} className="text-red-600 dark:text-red-400 hover:text-red-900" title="Deactivate section"><Trash2 className="w-4 h-4" aria-hidden="true" /></button>}
                 </td>
               </tr>)}
               {!sections.length && <tr><td colSpan={6} className="px-6 py-8 text-center text-sm text-gray-500 dark:text-gray-400">No sections found for this branch</td></tr>}

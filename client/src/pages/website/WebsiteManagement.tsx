@@ -17,6 +17,7 @@ import {
   Share2,
   MapPin
 } from 'lucide-react';
+import { confirmDialog, notify } from '../../lib/dialogs';
 
 interface DiningHours {
   mondayThursday: string;
@@ -152,17 +153,17 @@ export default function WebsiteManagement() {
   const handleAddGalleryItem = async () => {
     const category = galleryCategory || filters[0]?.id || 'dishes';
     if (!galleryTitle.trim()) {
-      alert('Please provide an image title.');
+      notify('Please provide an image title.');
       return;
     }
 
     if (galleryMode === 'upload' && !galleryFile) {
-      alert('Please select an image file to upload.');
+      notify('Please select an image file to upload.');
       return;
     }
 
     if (galleryMode === 'url' && !galleryImageUrl.trim()) {
-      alert('Please provide an image URL.');
+      notify('Please provide an image URL.');
       return;
     }
 
@@ -187,7 +188,7 @@ export default function WebsiteManagement() {
       showNotification('Gallery image added successfully.');
       load();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to add gallery item.');
+      notify(err.response?.data?.message || 'Failed to add gallery item.');
     } finally {
       setUploadingGallery(false);
     }
@@ -219,7 +220,7 @@ export default function WebsiteManagement() {
   const handleSaveTestimonial = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!testimonialForm.name.trim() || !testimonialForm.text.trim()) {
-      alert('Name and testimonial text are required.');
+      notify('Name and testimonial text are required.');
       return;
     }
 
@@ -235,20 +236,20 @@ export default function WebsiteManagement() {
       setTestimonialModalOpen(false);
       load();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to save testimonial.');
+      notify(err.response?.data?.message || 'Failed to save testimonial.');
     } finally {
       setSavingTestimonial(false);
     }
   };
 
   const handleDeleteTestimonial = async (id: string) => {
-    if (!confirm('Are you sure you want to remove this testimonial?')) return;
+    if (!await confirmDialog('Are you sure you want to remove this testimonial?')) return;
     try {
       await websiteApi.removeTestimonial(id);
       showNotification('Testimonial removed.');
       load();
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to remove testimonial.');
+      notify(err.response?.data?.message || 'Failed to remove testimonial.');
     }
   };
 
@@ -262,7 +263,7 @@ export default function WebsiteManagement() {
       });
       showNotification(`${b.name} details saved successfully.`);
     } catch (err: any) {
-      alert(err.response?.data?.message || 'Failed to update branch.');
+      notify(err.response?.data?.message || 'Failed to update branch.');
     } finally {
       setSavingBranchId(null);
     }
@@ -364,13 +365,13 @@ export default function WebsiteManagement() {
                     }
                     placeholder="Filter label"
                   />
-                  <button
+                  <button aria-label="Remove filter"
                     type="button"
                     onClick={() => setFilters(filters.filter((_, j) => j !== i))}
                     className="p-2 text-gray-400 hover:text-red-500 transition"
                     title="Remove filter"
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={16} aria-hidden="true" />
                   </button>
                 </div>
               ))}
@@ -536,10 +537,10 @@ export default function WebsiteManagement() {
               </div>
               <div className="p-3.5 flex items-center justify-between">
                 <p className="font-semibold text-sm truncate text-gray-900 dark:text-gray-100">{g.title}</p>
-                <button
+                <button aria-label="Delete image"
                   type="button"
                   onClick={async () => {
-                    if (confirm(`Remove "${g.title}" from gallery?`)) {
+                    if (await confirmDialog(`Remove "${g.title}" from gallery?`)) {
                       await websiteApi.removeGallery(g.id);
                       load();
                     }
@@ -547,7 +548,7 @@ export default function WebsiteManagement() {
                   className="text-gray-400 hover:text-red-500 transition p-1"
                   title="Delete image"
                 >
-                  <Trash2 size={16} />
+                  <Trash2 size={16} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -589,21 +590,21 @@ export default function WebsiteManagement() {
                     ))}
                   </div>
                   <div className="flex items-center gap-1">
-                    <button
+                    <button aria-label="Edit"
                       type="button"
                       onClick={() => openTestimonialModal(t)}
                       className="p-1 text-gray-400 hover:text-orange-600 transition"
                       title="Edit"
                     >
-                      <Edit size={15} />
+                      <Edit size={15} aria-hidden="true" />
                     </button>
-                    <button
+                    <button aria-label="Delete"
                       type="button"
                       onClick={() => handleDeleteTestimonial(t.id)}
                       className="p-1 text-gray-400 hover:text-red-500 transition"
                       title="Delete"
                     >
-                      <Trash2 size={15} />
+                      <Trash2 size={15} aria-hidden="true" />
                     </button>
                   </div>
                 </div>

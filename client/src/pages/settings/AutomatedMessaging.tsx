@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { automatedMessagingApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
+import DialogOverlay from '../../components/ui/DialogOverlay';
 
 interface Template {
   action: string;
@@ -383,7 +384,7 @@ export default function AutomatedMessaging() {
 
       {/* Preview Modal */}
       {previewTemplate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+        <DialogOverlay onClose={() => setPreviewTemplate(null)} label="Message preview" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
           <div className="w-full max-w-lg rounded-3xl border border-white/20 bg-white/95 dark:bg-[#111116]/95 backdrop-blur-2xl shadow-2xl overflow-hidden p-6 space-y-4">
             <div className="flex items-center justify-between border-b border-orange-500/10 pb-3">
               <div className="flex items-center gap-2">
@@ -397,11 +398,11 @@ export default function AutomatedMessaging() {
                   <p className="text-[11px] text-gray-500">Trigger: {previewTemplate.name}</p>
                 </div>
               </div>
-              <button
+              <button aria-label="Close"
                 onClick={() => setPreviewTemplate(null)}
                 className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-gray-600"
               >
-                <X size={16} />
+                <X size={16} aria-hidden="true" />
               </button>
             </div>
 
@@ -434,12 +435,12 @@ export default function AutomatedMessaging() {
               </button>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {/* Test Message Modal */}
       {testModalTemplate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
+        <DialogOverlay onClose={() => setTestModalTemplate(null)} label="Send test message" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn">
           <form
             onSubmit={handleSendTest}
             className="w-full max-w-md rounded-3xl border border-white/20 bg-white/95 dark:bg-[#111116]/95 backdrop-blur-2xl shadow-2xl overflow-hidden p-6 space-y-4"
@@ -456,12 +457,12 @@ export default function AutomatedMessaging() {
                   <p className="text-[11px] text-gray-500">{testModalTemplate.name}</p>
                 </div>
               </div>
-              <button
+              <button aria-label="Close"
                 type="button"
                 onClick={() => setTestModalTemplate(null)}
                 className="p-1.5 rounded-xl hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-gray-600"
               >
-                <X size={16} />
+                <X size={16} aria-hidden="true" />
               </button>
             </div>
 
@@ -512,7 +513,7 @@ export default function AutomatedMessaging() {
               </button>
             </div>
           </form>
-        </div>
+        </DialogOverlay>
       )}
     </div>
   );

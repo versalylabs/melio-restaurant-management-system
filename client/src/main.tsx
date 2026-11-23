@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext'
 import { CustomerAuthProvider } from './contexts/CustomerAuthContext'
 import App from './App'
 import RootErrorBoundary from './components/RootErrorBoundary'
+import DialogHost from './components/ui/DialogHost'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -12,6 +13,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <AuthProvider>
         <CustomerAuthProvider>
           <App />
+          <DialogHost />
         </CustomerAuthProvider>
       </AuthProvider>
     </BrowserRouter>

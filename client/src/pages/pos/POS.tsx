@@ -749,8 +749,8 @@ export default function POS() {
             <CheckCircle className="w-4 h-4 text-emerald-500" />
             <span>{successMessage}</span>
           </div>
-          <button onClick={() => setSuccessMessage('')} className="text-emerald-500 hover:text-emerald-700">
-            <X className="w-3.5 h-3.5" />
+          <button type="button" onClick={() => setSuccessMessage('')} aria-label="Dismiss message" className="-m-2 p-2 text-emerald-500 hover:text-emerald-700">
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         </div>
       )}
@@ -761,8 +761,8 @@ export default function POS() {
             <AlertCircle className="w-4 h-4 text-red-500" />
             <span>{error}</span>
           </div>
-          <button onClick={() => setError('')} className="text-red-500 hover:text-red-700">
-            <X className="w-3.5 h-3.5" />
+          <button type="button" onClick={() => setError('')} aria-label="Dismiss error" className="-m-2 p-2 text-red-500 hover:text-red-700">
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         </div>
       )}
@@ -934,17 +934,21 @@ export default function POS() {
                       )}
                       <div className="flex items-center gap-2 mt-2.5">
                         <button
+                          type="button"
                           onClick={() => updateCartQuantity(index, -1)}
-                          className="w-6 h-6 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-orange-500 hover:text-white dark:hover:bg-orange-500 transition-colors"
+                          aria-label={`Remove one ${item.itemNameSnapshot}`}
+                          className="w-11 h-11 rounded-xl bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-orange-500 hover:text-white dark:hover:bg-orange-500 transition-colors"
                         >
-                          <Minus className="w-3 h-3" />
+                          <Minus className="w-4 h-4" aria-hidden="true" />
                         </button>
-                        <span className="text-sm font-bold w-7 text-center text-gray-900 dark:text-gray-100">{item.quantity}</span>
+                        <span className="text-sm font-bold w-7 text-center text-gray-900 dark:text-gray-100" aria-live="polite">{item.quantity}</span>
                         <button
+                          type="button"
                           onClick={() => updateCartQuantity(index, 1)}
-                          className="w-6 h-6 rounded-lg bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-orange-500 hover:text-white dark:hover:bg-orange-500 transition-colors"
+                          aria-label={`Add one ${item.itemNameSnapshot}`}
+                          className="w-11 h-11 rounded-xl bg-gray-100 dark:bg-white/10 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-orange-500 hover:text-white dark:hover:bg-orange-500 transition-colors"
                         >
-                          <Plus className="w-3 h-3" />
+                          <Plus className="w-4 h-4" aria-hidden="true" />
                         </button>
                       </div>
                     </div>
@@ -953,11 +957,13 @@ export default function POS() {
                         KES {((item.unitPrice + item.modifiers.reduce((s, m) => s + m.priceAdjustment, 0)) * item.quantity).toLocaleString()}
                       </p>
                       <button
+                        type="button"
                         onClick={() => removeFromCart(index)}
-                        className="text-red-400 hover:text-red-600 dark:hover:text-red-300 mt-1.5 p-1 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                        className="text-red-400 hover:text-red-600 dark:hover:text-red-300 mt-1 -mr-2 inline-flex h-11 w-11 items-center justify-center rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                         title="Remove item"
+                        aria-label={`Remove ${item.itemNameSnapshot} from order`}
                       >
-                        <X className="w-3.5 h-3.5" />
+                        <X className="w-4 h-4" aria-hidden="true" />
                       </button>
                     </div>
                   </div>

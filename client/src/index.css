@@ -15,16 +15,22 @@
     scroll-behavior: smooth;
   }
 
+  /* `clip` (not `hidden`) stops sideways scrolling without turning these
+     into scroll containers, which would break position: sticky (pinned
+     headers and menu category tabs). `hidden` stays as the fallback for
+     browsers without `clip` (Safari < 16). */
   html, body, #root {
     min-height: 100%;
     max-width: 100%;
     overflow-x: hidden;
+    overflow-x: clip;
   }
 
   body {
     margin: 0;
     width: 100%;
     overflow-x: hidden;
+    overflow-x: clip;
   }
 }
 
@@ -108,3 +114,23 @@ select { color-scheme: light; }
 .dark select { color-scheme: dark; }
 .dark select option { background: #111116; color: #f3f4f6; }
 select option { background: #ffffff; color: #1f2937; }
+
+/* Respect the system "reduce motion" setting: no looping pulses, parallax
+   or long transitions for people who get motion sickness. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Work screens (POS, kitchen display) run all day on modest tablets: use
+   solid surfaces instead of live background blur, which is expensive to
+   repaint on every update. The marketing site keeps the glass look. */
+.solid-surfaces, .solid-surfaces * {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.solid-surfaces .ambient-glow { display: none; }

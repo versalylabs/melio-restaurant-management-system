@@ -21,6 +21,7 @@ import {
 import { publicOrderingApi, publicPaymentsApi } from '../../services/api';
 import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
 import { usePaymentOptions } from '../../hooks/usePaymentOptions';
+import DialogOverlay from '../../components/ui/DialogOverlay';
 
 const STATUS_ORDER = ['SUBMITTED', 'PREPARING', 'READY', 'OUT_FOR_DELIVERY', 'COMPLETED'];
 
@@ -539,16 +540,16 @@ export default function OnlineOrderTracking() {
 
       {/* ======================= M-PESA PAYMENT MODAL ======================= */}
       {paymentModalType === 'MPESA' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+        <DialogOverlay onClose={() => { setPaymentModalType(null); setMpesaSuccess(false); }} label="Pay with M-Pesa" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
           <div className="w-full max-w-md rounded-3xl border border-emerald-500/30 bg-zinc-950 p-6 sm:p-8 text-white shadow-2xl relative animate-in fade-in zoom-in-95">
-            <button
+            <button aria-label="Close"
               onClick={() => {
                 setPaymentModalType(null);
                 setMpesaSuccess(false);
               }}
               className="absolute top-6 right-6 text-gray-400 hover:text-white"
             >
-              <X size={20} />
+              <X size={20} aria-hidden="true" />
             </button>
 
             <div className="flex items-center gap-3 mb-4">
@@ -649,18 +650,18 @@ export default function OnlineOrderTracking() {
               </div>
             )}
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {/* ======================= CARD PAYMENT MODAL ======================= */}
       {paymentModalType === 'CARD' && paymentOptions.card && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+        <DialogOverlay onClose={() => setPaymentModalType(null)} label="Card payment" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
           <div className="w-full max-w-md rounded-3xl border border-white/15 bg-zinc-950 p-6 sm:p-8 text-white shadow-2xl relative animate-in fade-in zoom-in-95">
-            <button
+            <button aria-label="Close"
               onClick={() => setPaymentModalType(null)}
               className="absolute top-6 right-6 text-gray-400 hover:text-white"
             >
-              <X size={20} />
+              <X size={20} aria-hidden="true" />
             </button>
 
             <div className="flex items-center gap-3 mb-4">
@@ -727,7 +728,7 @@ export default function OnlineOrderTracking() {
               </button>
             </form>
           </div>
-        </div>
+        </DialogOverlay>
       )}
     </div>
   );

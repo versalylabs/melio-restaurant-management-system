@@ -6,6 +6,7 @@ import Input from '../../components/ui/Input';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
 import { useAuth } from '../../contexts/AuthContext';
+import { confirmDialog, notify } from '../../lib/dialogs';
 
 type Branch = { id: string; name: string; code: string; city?: string; status: string };
 type Ingredient = { id: string; name: string; unit: string };
@@ -53,20 +54,20 @@ export default function Branches() {
       setToBranchId(''); setIngredientId(''); setQuantity(''); setNotes('');
       await load();
     } catch (e: any) {
-      alert(e?.response?.data?.message || 'Could not create transfer');
+      notify(e?.response?.data?.message || 'Could not create transfer');
     } finally { setSaving(false); }
   };
 
   const complete = async (id: string) => {
-    if (!confirm('Complete this transfer and move the stock?')) return;
+    if (!await confirmDialog('Complete this transfer and move the stock?')) return;
     try { await branchApi.completeTransfer(id); await load(); }
-    catch (e: any) { alert(e?.response?.data?.message || 'Could not complete transfer'); }
+    catch (e: any) { notify(e?.response?.data?.message || 'Could not complete transfer'); }
   };
 
   const cancel = async (id: string) => {
-    if (!confirm('Cancel this draft transfer?')) return;
+    if (!await confirmDialog('Cancel this draft transfer?')) return;
     try { await branchApi.cancelTransfer(id); await load(); }
-    catch (e: any) { alert(e?.response?.data?.message || 'Could not cancel transfer'); }
+    catch (e: any) { notify(e?.response?.data?.message || 'Could not cancel transfer'); }
   };
 
   return <div className="p-6 space-y-6">

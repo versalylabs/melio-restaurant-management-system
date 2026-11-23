@@ -38,7 +38,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import GalleryLightbox, { GalleryItem } from './components/GalleryLightbox';
 import ReservationModal from './components/ReservationModal';
 import CustomerAuthModal from './components/CustomerAuthModal';
-import { Dock, GlassIcon, SpotlightCard, ShinyText, CountUp } from '../../components/react-bits';
+import { Dock, GlassIcon, SpotlightCard, ShinyText } from '../../components/react-bits';
 import { OptimizedImage } from '../../components/common/OptimizedImage';
 import { preloadImages } from '../../utils/imagePreloader';
 
@@ -70,36 +70,14 @@ const money = (value: number, currency = 'KES') =>
   new Intl.NumberFormat('en-KE', { style: 'currency', currency, maximumFractionDigits: 0 }).format(value);
 
 import { resolveImageUrl, getGalleryFallback } from '../../utils/imageUtils';
+import DialogOverlay from '../../components/ui/DialogOverlay';
+import { setPageMeta, setStructuredData } from '../../lib/seo';
 
 const menuImage = (item?: Pick<MenuItem, 'name' | 'image'> | null) =>
   resolveImageUrl(item?.image, item?.name);
 
 const GALLERY_ITEMS: GalleryItem[] = getGalleryFallback();
 
-// Curated Testimonials
-const TESTIMONIALS = [
-  {
-    name: 'Victoria Montgomery',
-    role: 'Food & Wine Critic',
-    rating: 5,
-    text: 'An exceptional gastronomic experience. The flavours are layered with exquisite finesse, and the ambience balances luxury and warmth flawlessly.',
-    date: 'February 2026',
-  },
-  {
-    name: 'David Kimani',
-    role: 'Verified Guest',
-    rating: 5,
-    text: 'Hands down the best dining experience in town. From seamless table booking to impeccable table service and fast online delivery, they never miss.',
-    date: 'January 2026',
-  },
-  {
-    name: 'Elena Rostova',
-    role: 'Private Event Host',
-    rating: 5,
-    text: 'We celebrated our anniversary here and were treated like royalty. The signature dishes and cocktail pairings are world-class.',
-    date: 'December 2025',
-  },
-];
 
 export default function RestaurantWebsite() {
   const navigate = useNavigate();
@@ -119,6 +97,48 @@ export default function RestaurantWebsite() {
   const [websiteConfig, setWebsiteConfig] = useState<any>(null);
   const [websiteGallery, setWebsiteGallery] = useState<any[]>([]);
   const [websiteTestimonials, setWebsiteTestimonials] = useState<any[]>([]);
+  const hasReviews = websiteTestimonials.length > 0;
+  const averageRating = hasReviews
+    ? websiteTestimonials.reduce((sum: number, t: any) => sum + Math.min(5, Math.max(1, Number(t.rating) || 5)), 0) / websiteTestimonials.length
+    : 0;
+
+
+  // Search engines and link previews: the restaurant's own name, a real
+  // description, and schema.org Restaurant data (branches, menu, booking).
+  useEffect(() => {
+    if (!restaurant) return;
+    const origin = window.location.origin;
+    const description =
+      restaurant.description ||
+      `Order online or book a table at ${restaurant.name}${restaurant.city ? `, ${restaurant.city}` : ''}.`;
+    setPageMeta({ title: `${restaurant.name} — Order online & book a table`, description });
+    const branches = restaurant.branches || [];
+    setStructuredData('restaurant-jsonld', {
+      '@context': 'https://schema.org',
+      '@type': 'Restaurant',
+      name: restaurant.name,
+      url: origin + '/',
+      ...(restaurant.description ? { description: restaurant.description } : {}),
+      ...(restaurant.phone ? { telephone: restaurant.phone } : {}),
+      ...(restaurant.email ? { email: restaurant.email } : {}),
+      hasMenu: origin + '/order-online',
+      acceptsReservations: true,
+      ...(restaurant.currency ? { currenciesAccepted: restaurant.currency } : {}),
+      ...(branches.length
+        ? {
+            department: branches.map((b) => ({
+              '@type': 'Restaurant',
+              name: b.name,
+              ...(b.phone || b.callPhone ? { telephone: b.callPhone || b.phone } : {}),
+              ...(b.address || b.city
+                ? { address: { '@type': 'PostalAddress', streetAddress: b.address || undefined, addressLocality: b.city || undefined, addressCountry: 'KE' } }
+                : {}),
+            })),
+          }
+        : {}),
+    });
+    return () => setStructuredData('restaurant-jsonld', null);
+  }, [restaurant]);
 
   // Customer Auth Modal state
   const [customerAuthOpen, setCustomerAuthOpen] = useState(false);
@@ -312,7 +332,7 @@ export default function RestaurantWebsite() {
               { label: 'Our Story', href: '#about' },
               { label: 'Gallery', href: '#gallery' },
               { label: 'Locations', href: '#locations' },
-              { label: 'Reviews', href: '#testimonials' },
+              ...(hasReviews ? [{ label: 'Reviews', href: '#testimonials' }] : []),
               { label: 'Contact', href: '#contact' },
             ].map((item) => (
               <a
@@ -395,16 +415,16 @@ export default function RestaurantWebsite() {
 
       {/* Mobile Navigation Drawer */}
       {mobileMenuOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-sm lg:hidden">
+        <DialogOverlay onClose={() => setMobileMenuOpen(false)} label="Menu" className="fixed inset-0 z-50 flex justify-end bg-black/80 backdrop-blur-sm lg:hidden">
           <div className="w-4/5 max-w-sm h-full bg-zinc-950 border-l border-white/10 p-6 flex flex-col justify-between text-white shadow-2xl animate-in slide-in-from-right">
             <div>
               <div className="flex items-center justify-between pb-6 border-b border-white/10">
                 <span className="font-serif text-lg font-bold">{restaurant?.name || 'Melio'}</span>
-                <button
+                <button aria-label="Close"
                   onClick={() => setMobileMenuOpen(false)}
                   className="p-2 text-gray-400 hover:text-white"
                 >
-                  <X size={20} />
+                  <X size={20} aria-hidden="true" />
                 </button>
               </div>
               <nav className="mt-6 flex flex-col gap-4 text-base font-medium">
@@ -414,7 +434,7 @@ export default function RestaurantWebsite() {
                   { label: 'Our Story & Philosophy', href: '#about' },
                   { label: 'Culinary Gallery', href: '#gallery' },
                   { label: 'Locations & Hours', href: '#locations' },
-                  { label: 'Guest Reviews', href: '#testimonials' },
+                  ...(hasReviews ? [{ label: 'Guest Reviews', href: '#testimonials' }] : []),
                   { label: 'Contact & Enquiries', href: '#contact' },
                 ].map((item) => (
                   <a
@@ -499,7 +519,7 @@ export default function RestaurantWebsite() {
               </Link>
             </div>
           </div>
-        </div>
+        </DialogOverlay>
       )}
 
       {error && (
@@ -576,8 +596,8 @@ export default function RestaurantWebsite() {
               <div className="mt-12 pt-8 border-t border-white/10 grid grid-cols-3 gap-3 sm:gap-6 max-w-2xl w-full mx-auto">
                 <GlassIcon
                   icon={<Award size={22} />}
-                  label="Michelin Craft"
-                  sublabel="Master Chefs"
+                  label="Chef Crafted"
+                  sublabel="Made to Order"
                   color="orange"
                   size="md"
                 />
@@ -782,38 +802,17 @@ export default function RestaurantWebsite() {
                   </p>
 
                   <div className="mt-8 grid grid-cols-2 gap-4">
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
-                      <div className="font-serif text-3xl font-bold text-orange-400">
-                        <CountUp to={100} suffix="%" />
+                    {[
+                      { value: String(items.length), label: 'Dishes on the menu' },
+                      { value: String(categories.length), label: 'Menu categories' },
+                      { value: String(restaurant?.branches?.length || 1), label: (restaurant?.branches?.length || 1) === 1 ? 'Location' : 'Locations' },
+                      { value: 'Daily', label: 'Freshly prepared' },
+                    ].map((stat) => (
+                      <div key={stat.label} className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
+                        <div className="font-serif text-3xl font-bold text-orange-400">{stat.value}</div>
+                        <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-gray-300">{stat.label}</div>
                       </div>
-                      <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-gray-300">
-                        Fresh Daily Catch
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
-                      <div className="font-serif text-3xl font-bold text-orange-400">
-                        <CountUp to={4.9} decimals={1} prefix="★ " />
-                      </div>
-                      <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-gray-300">
-                        Dining Hospitality
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
-                      <div className="font-serif text-3xl font-bold text-orange-400">
-                        <CountUp to={18} suffix="+" />
-                      </div>
-                      <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-gray-300">
-                        Culinary Awards
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
-                      <div className="font-serif text-3xl font-bold text-orange-400">
-                        <CountUp to={28500} suffix="+" />
-                      </div>
-                      <div className="mt-1 text-xs font-semibold uppercase tracking-wider text-gray-300">
-                        Delighted Diners
-                      </div>
-                    </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -1016,7 +1015,7 @@ export default function RestaurantWebsite() {
         </section>
 
         {/* ======================= TESTIMONIALS & REVIEWS SECTION ======================= */}
-        <section id="testimonials" className="relative border-t border-orange-500/10 bg-[#faf9f7] py-24 dark:bg-[#111116]">
+        {hasReviews && <section id="testimonials" className="relative border-t border-orange-500/10 bg-[#faf9f7] py-24 dark:bg-[#111116]">
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="text-center max-w-2xl mx-auto">
               <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
@@ -1026,18 +1025,18 @@ export default function RestaurantWebsite() {
                 Cherished By Discerning Diners
               </h2>
               <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-orange-500/10 px-4 py-1 text-xs font-bold text-orange-500">
-                <span>★★★★★</span> 4.9 / 5.0 Average Rating (500+ Verified Diners)
+                <span>★</span> {averageRating.toFixed(1)} / 5 from {websiteTestimonials.length} {websiteTestimonials.length === 1 ? 'review' : 'reviews'}
               </div>
             </div>
 
             <div className="mt-12 grid gap-6 md:grid-cols-3">
-              {(websiteTestimonials.length ? websiteTestimonials.map((t: any) => ({
+              {websiteTestimonials.map((t: any) => ({
                 name: t.name,
                 role: t.role || 'Verified Guest',
                 rating: t.rating || 5,
                 text: t.text,
                 date: t.dateLabel || 'Recent Visit'
-              })) : TESTIMONIALS).map((review, i) => (
+              })).map((review: { name: string; role: string; rating: number; text: string; date: string }, i: number) => (
                 <div
                   key={i}
                   className="relative rounded-3xl border border-orange-500/10 bg-white p-8 shadow-sm transition hover:shadow-xl dark:bg-zinc-900/90 dark:border-white/5 flex flex-col justify-between"
@@ -1067,7 +1066,7 @@ export default function RestaurantWebsite() {
               ))}
             </div>
           </div>
-        </section>
+        </section>}
 
         {/* ======================= CONTACT & ENQUIRY FORM ======================= */}
         <section id="contact" className="relative border-t border-orange-500/10 bg-white py-24 dark:bg-[#0d0d11]">
@@ -1285,7 +1284,7 @@ export default function RestaurantWebsite() {
                 <li><a href="#about" onClick={(e) => scrollToSection(e, '#about')} className="hover:text-white transition cursor-pointer">Story & Philosophy</a></li>
                 <li><a href="#gallery" onClick={(e) => scrollToSection(e, '#gallery')} className="hover:text-white transition cursor-pointer">Culinary Gallery</a></li>
                 <li><a href="#locations" onClick={(e) => scrollToSection(e, '#locations')} className="hover:text-white transition cursor-pointer">Locations & Hours</a></li>
-                <li><a href="#testimonials" onClick={(e) => scrollToSection(e, '#testimonials')} className="hover:text-white transition cursor-pointer">Guest Reviews</a></li>
+                {hasReviews && <li><a href="#testimonials" onClick={(e) => scrollToSection(e, '#testimonials')} className="hover:text-white transition cursor-pointer">Guest Reviews</a></li>}
               </ul>
             </div>
 

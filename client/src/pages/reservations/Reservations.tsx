@@ -23,6 +23,7 @@ import Modal from '../../components/ui/Modal';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
 import { printReservationReceipt } from '../../utils/reservationReceipt';
 import { useRealtimeEvents } from '../../hooks/useRealtimeEvents';
+import { confirmDialog } from '../../lib/dialogs';
 
 const statusVariant: any = {
   PENDING: 'warning',
@@ -203,7 +204,7 @@ export default function Reservations() {
   const setStatusFor = async (id: string, next: string) => {
     if (['CANCELLED', 'NO_SHOW'].includes(next)) {
       const label = next === 'NO_SHOW' ? 'No Show' : 'Cancelled';
-      if (!window.confirm(`Mark this reservation as ${label}?`)) return;
+      if (!await confirmDialog(`Mark this reservation as ${label}?`)) return;
     }
     setUpdatingId(id);
     setError('');

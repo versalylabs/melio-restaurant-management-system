@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { escapeHtml } from '../../lib/utils';
-import { Clock, Play, CheckCircle, AlertTriangle, Printer, Flag, WifiOff, RefreshCw } from 'lucide-react';
+import { Clock, Play, CheckCircle, AlertTriangle, Printer, Flag, WifiOff, RefreshCw, Volume2, VolumeX } from 'lucide-react';
 import { kitchenApi, branchApi } from '../../services/api';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
 import type { KitchenTicket, KitchenStation } from '../../types';
@@ -24,6 +24,35 @@ function isLate(receivedAt: string): boolean {
   return Date.now() - new Date(receivedAt).getTime() > LATE_THRESHOLD_MINUTES * 60000;
 }
 
+const WARN_THRESHOLD_MINUTES = 8;
+
+/** Ticket age at a glance: green, then amber, then red (late). */
+function ageStyle(receivedAt: string) {
+  const minutes = (Date.now() - new Date(receivedAt).getTime()) / 60000;
+  if (minutes > LATE_THRESHOLD_MINUTES) return { level: 'late', card: 'border-red-400 bg-red-50 dark:bg-red-900/30 dark:border-red-700', text: 'text-red-600 dark:text-red-400 font-semibold' };
+  if (minutes > WARN_THRESHOLD_MINUTES) return { level: 'warn', card: 'border-amber-400 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700', text: 'text-amber-700 dark:text-amber-400 font-semibold' };
+  return { level: 'fresh', card: 'border-emerald-300 bg-white dark:bg-[#111116] dark:border-emerald-800', text: 'text-emerald-700 dark:text-emerald-400' };
+}
+
+const SOUND_KEY = 'rms-kitchen-sound';
+
+/** Short two-tone chime via Web Audio (no audio file to load). */
+function playChime(ctx: AudioContext) {
+  const now = ctx.currentTime;
+  [880, 1175].forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, now + i * 0.18);
+    gain.gain.exponentialRampToValueAtTime(0.25, now + i * 0.18 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.18 + 0.35);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now + i * 0.18);
+    osc.stop(now + i * 0.18 + 0.4);
+  });
+}
+
 const priorityRank: Record<string, number> = { URGENT: 0, HIGH: 1, NORMAL: 2, LOW: 3 };
 
 export default function KitchenDisplay() {
@@ -39,6 +68,66 @@ export default function KitchenDisplay() {
   const [selectedTicket, setSelectedTicket] = useState<KitchenTicket | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
+
+  // Re-render every 30s so ticket ages and colours stay current.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // New-ticket chime. Browsers only allow sound after a user gesture, so the
+  // switch is remembered per screen and the audio is unlocked by the first
+  // tap or key press after a reload ("Tap to enable sound" until then).
+  const [soundOn, setSoundOn] = useState(() => {
+    try { return localStorage.getItem(SOUND_KEY) === 'on'; } catch { return false; }
+  });
+  const [audioReady, setAudioReady] = useState(false);
+  const audioRef = useRef<AudioContext | null>(null);
+  const seenTicketIds = useRef<Set<string> | null>(null);
+
+  const unlockAudio = useCallback(async () => {
+    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return false;
+    audioRef.current = audioRef.current || new Ctx();
+    try { await audioRef.current.resume(); } catch { /* still blocked */ }
+    const ready = audioRef.current.state === 'running';
+    setAudioReady(ready);
+    return ready;
+  }, []);
+
+  useEffect(() => {
+    if (!soundOn || audioReady) return;
+    const onGesture = () => { void unlockAudio(); };
+    window.addEventListener('pointerdown', onGesture, { once: true });
+    window.addEventListener('keydown', onGesture, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+    };
+  }, [soundOn, audioReady, unlockAudio]);
+
+  const toggleSound = async () => {
+    // "Tap to enable sound": this tap only unlocks audio, it doesn't switch off.
+    if (soundOn && !audioReady) {
+      if ((await unlockAudio()) && audioRef.current) playChime(audioRef.current);
+      return;
+    }
+    const next = !soundOn;
+    setSoundOn(next);
+    try { localStorage.setItem(SOUND_KEY, next ? 'on' : 'off'); } catch { /* ignore */ }
+    if (next && (await unlockAudio()) && audioRef.current) playChime(audioRef.current);
+  };
+
+  useEffect(() => {
+    const ids = new Set(tickets.map((t) => t.id));
+    const previous = seenTicketIds.current;
+    seenTicketIds.current = ids;
+    if (!previous) return; // first load: nothing is "new"
+    const arrived = tickets.some((t) => t.status === 'NEW' && !previous.has(t.id));
+    // Only play when audio is actually unlocked; never queue chimes.
+    if (arrived && soundOn && audioRef.current?.state === 'running') playChime(audioRef.current);
+  }, [tickets, soundOn]);
 
   const fetchData = useCallback(async (isManualRefresh = false) => {
     if (isManualRefresh) setRefreshing(true);
@@ -220,7 +309,16 @@ export default function KitchenDisplay() {
         <p className="text-sm text-gray-500 dark:text-gray-400">Branch: <span className="font-semibold text-orange-600 dark:text-orange-400">{branchName || user?.branchName || 'Not assigned'}</span> • {stationName} • {filteredTickets.length} active tickets</p>
       </div>
       <div className="flex items-center gap-2.5">
-        <select value={selectedStation} onChange={e => setSelectedStation(e.target.value)} className="flex h-10 rounded-xl border border-orange-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-[#111116] dark:text-gray-100">
+        <button
+          type="button"
+          onClick={toggleSound}
+          aria-pressed={soundOn}
+          className={`inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-medium transition ${soundOn ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-orange-200 bg-white text-gray-600 dark:border-gray-700 dark:bg-[#111116] dark:text-gray-300'}`}
+        >
+          {soundOn ? <Volume2 className="h-4 w-4" aria-hidden="true" /> : <VolumeX className="h-4 w-4" aria-hidden="true" />}
+          {!soundOn ? 'Sound off' : audioReady ? 'Sound on' : 'Tap to enable sound'}
+        </button>
+        <select aria-label="Kitchen station" value={selectedStation} onChange={e => setSelectedStation(e.target.value)} className="flex h-10 rounded-xl border border-orange-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-[#111116] dark:text-gray-100">
           <option value="">All Stations</option>
           {stations.map(s => <option key={s.id} value={s.id}>{s.name}{s.branchName ? ` — ${s.branchName}` : ''}</option>)}
         </select>
@@ -235,10 +333,10 @@ export default function KitchenDisplay() {
       </div>
     </div>
     {error && <div className="mx-4 mt-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-md text-sm">{error}</div>}
-    <div className="flex-1 overflow-x-auto"><div className="flex gap-6 p-6 h-full">
+    <div className="flex-1 overflow-y-auto"><div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 lg:gap-6 lg:p-6">
       {columns.map(col => {
         const list = byStatus(col.key);
-        return <div key={col.key} className="flex-1 min-w-[300px]"><div className="flex items-center justify-between mb-4"><h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{col.title}</h2><Badge variant={col.variant}>{list.length}</Badge></div><div className="space-y-4">
+        return <section key={col.key} aria-label={`${col.title} tickets`} className="min-w-0"><div className="flex items-center justify-between mb-4"><h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{col.title}</h2><Badge variant={col.variant}>{list.length}</Badge></div><div className="space-y-4">
           {list.map(ticket => <TicketCard key={ticket.id} ticket={ticket} selectedStation={selectedStation} onAction={() => col.action(ticket)} onView={() => { setSelectedTicket(ticket); setShowDetailModal(true); }} onPrint={() => printTicket(ticket)} updating={updating === ticket.id} />)}
           {!list.length && (
             <div className="text-center py-12 px-4 rounded-xl border border-dashed border-gray-200 dark:border-gray-800 bg-white/40 dark:bg-[#111116]/40">
@@ -246,7 +344,7 @@ export default function KitchenDisplay() {
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Orders in this state will appear here</p>
             </div>
           )}
-        </div></div>;
+        </div></section>;
       })}
     </div></div>
 
@@ -270,10 +368,10 @@ export default function KitchenDisplay() {
 
 function TicketCard({ ticket, selectedStation, onAction, onView, onPrint, updating }: { ticket: KitchenTicket; selectedStation: string; onAction: () => void; onView: () => void; onPrint: () => void; updating: boolean }) {
   const visibleItems = selectedStation ? ticket.items.filter(i => (i.stationIds || []).includes(selectedStation) || (ticket.stationIds || []).includes(selectedStation)) : ticket.items;
-  const late = isLate(ticket.receivedAt);
-  return <div className={`rounded-lg border-2 p-4 cursor-pointer transition-all ${late ? 'border-red-300 bg-red-50 dark:bg-red-900/30 dark:border-red-800' : 'border-gray-200 bg-white dark:bg-[#111116] dark:border-gray-700'} ${updating ? 'opacity-50' : ''}`} onClick={onView}>
-    <div className="flex items-start justify-between mb-3"><div><div className="flex items-center gap-2"><h3 className="font-bold text-gray-900 dark:text-gray-100">#{ticket.orderNumber}</h3><Badge variant={ticket.priority === 'URGENT' ? 'danger' : ticket.priority === 'HIGH' ? 'warning' : 'default'} className="text-xs"><Flag className="w-3 h-3 mr-1 inline"/>{ticket.priority}</Badge></div><p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{ticket.orderType}{ticket.tableNumber ? ` • Table ${ticket.tableNumber}` : ''}</p></div><div className={`flex items-center gap-1 text-xs ${late ? 'text-red-600' : 'text-gray-500'}`}><Clock className="w-3 h-3"/>{formatDuration(ticket.receivedAt)}</div></div>
+  const age = ageStyle(ticket.receivedAt);
+  return <div className={`rounded-lg border-2 p-4 cursor-pointer transition-all ${age.card} ${updating ? 'opacity-50' : ''}`} onClick={onView}>
+    <div className="flex items-start justify-between mb-3"><div><div className="flex items-center gap-2"><h3 className="font-bold text-gray-900 dark:text-gray-100">{ticket.orderNumber?.startsWith('#') ? '' : '#'}{ticket.orderNumber}</h3><Badge variant={ticket.priority === 'URGENT' ? 'danger' : ticket.priority === 'HIGH' ? 'warning' : 'default'} className="text-xs"><Flag className="w-3 h-3 mr-1 inline"/>{ticket.priority}</Badge></div><p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{ticket.orderType}{ticket.tableNumber ? ` • Table ${ticket.tableNumber}` : ''}</p></div><div className={`flex items-center gap-1 text-sm ${age.text}`} title={age.level === 'late' ? 'Waiting too long' : age.level === 'warn' ? 'Getting late' : 'On time'}>{age.level === 'late' ? <AlertTriangle className="w-4 h-4" aria-hidden="true"/> : <Clock className="w-4 h-4" aria-hidden="true"/>}{formatDuration(ticket.receivedAt)}</div></div>
     <div className="space-y-2 mb-4">{visibleItems.map(item => <div key={item.id} className="flex items-center justify-between gap-2"><div><p className="text-sm text-gray-900 dark:text-gray-100">{item.quantity}× {item.itemNameSnapshot}</p>{item.stationNames?.length ? <p className="text-[10px] text-gray-500">{item.stationNames.join(' • ')}</p>:null}</div><Badge variant={item.status === 'READY' ? 'success' : item.status === 'PREPARING' ? 'warning' : 'default'} className="text-xs">{item.status}</Badge></div>)}</div>
-    <div className="flex gap-2"><Button size="sm" onClick={e => {e.stopPropagation();onAction();}} disabled={updating} className="flex-1">{ticket.status === 'NEW' ? 'Start Preparing' : ticket.status === 'PREPARING' ? 'Ready' : 'Served'}</Button><Button size="sm" variant="secondary" onClick={e=>{e.stopPropagation();onPrint();}} disabled={updating}><Printer className="w-4 h-4"/></Button></div>
+    <div className="flex gap-2"><Button size="sm" onClick={e => {e.stopPropagation();onAction();}} disabled={updating} className="flex-1">{ticket.status === 'NEW' ? 'Start Preparing' : ticket.status === 'PREPARING' ? 'Ready' : 'Served'}</Button><Button size="sm" variant="secondary" aria-label={`Print ticket ${ticket.orderNumber}`} onClick={e=>{e.stopPropagation();onPrint();}} disabled={updating}><Printer className="w-4 h-4" aria-hidden="true"/></Button></div>
   </div>;
 }

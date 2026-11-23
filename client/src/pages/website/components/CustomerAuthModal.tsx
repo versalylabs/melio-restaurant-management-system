@@ -18,6 +18,7 @@ import { useCustomerAuth } from '../../../contexts/CustomerAuthContext';
 import { useAuth } from '../../../contexts/AuthContext';
 import { authApi } from '../../../services/api';
 import { getDefaultRoute } from '../../../lib/access';
+import DialogOverlay from '../../../components/ui/DialogOverlay';
 
 interface CustomerAuthModalProps {
   isOpen: boolean;
@@ -119,7 +120,7 @@ export default function CustomerAuthModal({
 
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
+    <DialogOverlay onClose={onClose} label="Sign in" className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
       <div className="relative w-full max-w-md rounded-3xl bg-zinc-950 border border-orange-500/20 text-white shadow-2xl p-6 sm:p-8">
         <button
           onClick={onClose}
@@ -353,6 +354,6 @@ export default function CustomerAuthModal({
           </div>
         )}
       </div>
-    </div>
+    </DialogOverlay>
   );
 }

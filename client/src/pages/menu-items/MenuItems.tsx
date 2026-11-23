@@ -26,6 +26,7 @@ import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { OptimizedImage } from '../../components/common/OptimizedImage';
 import { preloadImages } from '../../utils/imagePreloader';
+import { confirmDialog } from '../../lib/dialogs';
 
 export default function MenuItems() {
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -216,7 +217,7 @@ export default function MenuItems() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to permanently delete "${name}"?`)) return;
+    if (!await confirmDialog(`Are you sure you want to permanently delete "${name}"?`)) return;
     setActingId(id);
     setError('');
     setSuccess('');
@@ -403,19 +404,19 @@ export default function MenuItems() {
                     <Badge variant={item.available ? 'success' : 'danger'}>{item.available ? 'Available' : 'Unavailable'}</Badge>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
+                    <button aria-label="View details"
                       onClick={() => setViewingItem(item)}
                       className="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200 mr-3"
                       title="View details"
                     >
-                      <Eye className="w-4 h-4" />
+                      <Eye className="w-4 h-4" aria-hidden="true" />
                     </button>
-                    <button
+                    <button aria-label="Edit item"
                       onClick={() => openEdit(item)}
                       className="text-orange-600 hover:text-orange-900 dark:text-orange-400 dark:hover:text-orange-300 mr-3"
                       title="Edit item"
                     >
-                      <Edit className="w-4 h-4" />
+                      <Edit className="w-4 h-4" aria-hidden="true" />
                     </button>
                     <button
                       onClick={() => handleDuplicate(item.id, item.name)}
@@ -425,13 +426,13 @@ export default function MenuItems() {
                     >
                       {actingId === item.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
                     </button>
-                    <button
+                    <button aria-label="Delete item"
                       onClick={() => handleDelete(item.id, item.name)}
                       disabled={actingId === item.id}
                       className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
                       title="Delete item"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4" aria-hidden="true" />
                     </button>
                   </td>
                 </tr>
@@ -747,7 +748,7 @@ function ModifierGroupsManagerModal({
   };
 
   const handleDelete = async (id: string, groupName: string) => {
-    if (!confirm(`Deactivate modifier group "${groupName}"?`)) return;
+    if (!await confirmDialog(`Deactivate modifier group "${groupName}"?`)) return;
     setDeletingId(id);
     setError('');
     try {
@@ -840,8 +841,8 @@ function ModifierGroupsManagerModal({
                   />
                 </div>
                 {options.length > 1 && (
-                  <button type="button" onClick={() => removeOptionRow(idx)} className="p-1.5 text-red-500 hover:text-red-700">
-                    <X className="w-4 h-4" />
+                  <button aria-label="Remove" type="button" onClick={() => removeOptionRow(idx)} className="p-1.5 text-red-500 hover:text-red-700">
+                    <X className="w-4 h-4" aria-hidden="true" />
                   </button>
                 )}
               </div>
