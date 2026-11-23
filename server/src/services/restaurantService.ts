@@ -30,7 +30,20 @@ export const updateRestaurant = async (req: AuthRequest, res: ExpressResponse) =
     timezone,
     taxRate,
     serviceChargeRate,
+    kraPin,
+    vatRegistered,
+    pricesIncludeTax,
+    tourismLevyRate,
   } = req.body;
+
+  // KRA PINs look like P051234567X: a letter, nine digits, a letter.
+  let pin: string | null | undefined;
+  if (kraPin !== undefined) {
+    pin = String(kraPin || '').trim().toUpperCase() || null;
+    if (pin && !/^[A-Z]\d{9}[A-Z]$/.test(pin)) return sendError(res, 'Enter the KRA PIN as it appears on your PIN certificate, e.g. P051234567X');
+  }
+  const levy = tourismLevyRate !== undefined ? Number(tourismLevyRate) : undefined;
+  if (levy !== undefined && (!Number.isFinite(levy) || levy < 0 || levy > 10)) return sendError(res, 'The Tourism Levy rate must be between 0% and 10%');
 
   const restaurant = await prisma.restaurant.update({
     where: { id: req.user!.restaurantId },
@@ -48,6 +61,10 @@ export const updateRestaurant = async (req: AuthRequest, res: ExpressResponse) =
       timezone: timezone || undefined,
       taxRate: taxRate !== undefined ? Math.max(0, Number(taxRate) || 0) / 100 : undefined,
       serviceChargeRate: serviceChargeRate !== undefined ? Math.max(0, Number(serviceChargeRate) || 0) / 100 : undefined,
+      kraPin: pin,
+      vatRegistered: vatRegistered !== undefined ? !!vatRegistered : undefined,
+      pricesIncludeTax: pricesIncludeTax !== undefined ? !!pricesIncludeTax : undefined,
+      tourismLevyRate: levy !== undefined ? levy / 100 : undefined,
     },
   });
 

@@ -9,7 +9,7 @@ import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
 import { createAuditLog } from './auditLogService';
-import { calculateOrderTotals, OrderCalculationInput } from './orderCalculationService';
+import { calculateOrderTotals, OrderCalculationInput, taxFields } from './orderCalculationService';
 import { createKitchenTicketForOrder } from './kitchenService';
 import { completeOrder } from './orderCompletionService';
 import { validatePromotion } from './promotionService';
@@ -462,6 +462,7 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
           ? { promotion: { connect: { id: promotionId } } }
           : {}),
         taxAmount: totals.taxAmount,
+        ...taxFields(totals),
         serviceChargeAmount: totals.serviceChargeAmount,
         totalAmount: totals.totalAmount,
         notes: notes ? String(notes).trim() : null,
@@ -720,6 +721,8 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
       items: normalizedItems,
       discountAmount: requestedDiscount,
       discountType: req.body.discountType || 'FIXED',
+      // Keep the VAT mode the bill was created with, even if the setting changed since.
+      pricesIncludeTax: existing.taxInclusive,
       restaurantId,
       branchId: existing.branchId,
       promotion: promotion ? { discountType: promotion.discountType, value: promotion.value, scope: promotion.scope, menuItemId: promotion.menuItemId, maxDiscountAmount: promotion.maxDiscountAmount } : undefined,
@@ -734,6 +737,7 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     // Recorded only when this edit needed (and got) a manager's approval.
     updateData.discountApprovedBy = totals.discountAmount > 0 && updateApprover ? updateApprover.id : null;
     updateData.taxAmount = totals.taxAmount;
+    Object.assign(updateData, taxFields(totals));
     updateData.serviceChargeAmount = totals.serviceChargeAmount;
     updateData.totalAmount = totals.totalAmount;
 
@@ -1037,6 +1041,7 @@ export const getPosMenu = async (req: AuthRequest, res: ExpressResponse) => {
         description: item.description,
         sellingPrice: item.sellingPrice,
         taxRate: item.taxRate,
+        taxCategory: item.taxCategory,
         image: item.image,
         modifierGroups: item.modifierGroups.map((mg) => ({
           id: mg.modifierGroup.id,
@@ -1324,6 +1329,7 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
             ...(offlinePromotion ? { promotion: { connect: { id: offlinePromotion.id } } } : {}),
             discountAppliedBy: totals.discountAmount > 0 ? userId : null,
             taxAmount: totals.taxAmount,
+            ...taxFields(totals),
             serviceChargeAmount: totals.serviceChargeAmount,
             totalAmount: totals.totalAmount,
             notes: notesWithTag,

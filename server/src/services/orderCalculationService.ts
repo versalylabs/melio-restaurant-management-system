@@ -5,6 +5,8 @@ export interface OrderCalculationInput {
     menuItemId: string;
     unitPrice: number;
     quantity: number;
+    /** STANDARD | ZERO_RATED | EXEMPT; looked up from the menu item when not given. */
+    taxCategory?: string;
     modifiers?: Array<{
       modifierOptionId?: string;
       priceAdjustment?: number;
@@ -16,6 +18,8 @@ export interface OrderCalculationInput {
   branchId?: string;
   taxRate?: number;
   serviceChargeRate?: number;
+  /** Menu prices already include VAT; looked up from the restaurant when not given. */
+  pricesIncludeTax?: boolean;
   promotion?: { discountType: 'FIXED'|'PERCENTAGE'; value: number; scope: 'ORDER'|'PRODUCT'; menuItemId?: string|null; maxDiscountAmount?: number|null };
 }
 
@@ -26,22 +30,54 @@ export interface OrderCalculationResult {
   serviceChargeAmount: number;
   totalAmount: number;
   itemCount: number;
+  /** Frozen on the bill: how VAT was worked out, and the base of each VAT category after discount, excluding VAT. */
+  taxInclusive: boolean;
+  taxableAmount: number;
+  zeroRatedAmount: number;
+  exemptAmount: number;
 }
+
+export const TAX_CATEGORIES = ['STANDARD', 'ZERO_RATED', 'EXEMPT'] as const;
+export type TaxCategory = (typeof TAX_CATEGORIES)[number];
+const asCategory = (value: unknown): TaxCategory => (TAX_CATEGORIES.includes(value as TaxCategory) ? (value as TaxCategory) : 'STANDARD');
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** The VAT fields to store on a bill from its calculated totals. */
+export const taxFields = (totals: OrderCalculationResult) => ({
+  taxInclusive: totals.taxInclusive,
+  taxableAmount: totals.taxableAmount,
+  zeroRatedAmount: totals.zeroRatedAmount,
+  exemptAmount: totals.exemptAmount,
+});
 
 export const calculateOrderTotals = async (input: OrderCalculationInput): Promise<OrderCalculationResult> => {
   let taxRate = input.taxRate;
   let serviceChargeRate = input.serviceChargeRate;
+  let pricesIncludeTax = input.pricesIncludeTax;
 
-  if ((taxRate === undefined || serviceChargeRate === undefined) && input.restaurantId) {
+  if ((taxRate === undefined || serviceChargeRate === undefined || pricesIncludeTax === undefined) && input.restaurantId) {
     const restaurant = await prisma.restaurant.findUnique({
       where: { id: input.restaurantId },
-      select: { taxRate: true, serviceChargeRate: true },
+      select: { taxRate: true, serviceChargeRate: true, pricesIncludeTax: true },
     });
     if (restaurant) {
       if (taxRate === undefined) taxRate = restaurant.taxRate;
       if (serviceChargeRate === undefined) serviceChargeRate = restaurant.serviceChargeRate;
+      if (pricesIncludeTax === undefined) pricesIncludeTax = restaurant.pricesIncludeTax;
     }
   }
+  const inclusive = !!pricesIncludeTax;
+
+  // Each item's VAT category (zero-rated and exempt items carry no VAT).
+  const missing = [...new Set(input.items.filter((i) => !i.taxCategory).map((i) => i.menuItemId))];
+  const categoryById = new Map<string, TaxCategory>();
+  // Only real orders (which always name their restaurant) look categories up; anything
+  // else counts as standard-rated. Scoped to the restaurant's own menu.
+  if (missing.length && input.restaurantId) {
+    const rows = await prisma.menuItem.findMany({ where: { id: { in: missing }, restaurantId: input.restaurantId }, select: { id: true, taxCategory: true } });
+    rows.forEach((r) => categoryById.set(r.id, asCategory(r.taxCategory)));
+  }
+  const byCategory: Record<TaxCategory, number> = { STANDARD: 0, ZERO_RATED: 0, EXEMPT: 0 };
 
   taxRate = Math.max(0, Number(taxRate ?? 16) || 0);
   serviceChargeRate = Math.max(0, Number(serviceChargeRate ?? 0) || 0);
@@ -59,6 +95,7 @@ export const calculateOrderTotals = async (input: OrderCalculationInput): Promis
       modifierTotal += modAdjustment * qty;
     }
     subtotal += itemSubtotal + modifierTotal;
+    byCategory[item.taxCategory ? asCategory(item.taxCategory) : categoryById.get(item.menuItemId) || 'STANDARD'] += itemSubtotal + modifierTotal;
     itemCount += qty;
   }
 
@@ -101,9 +138,30 @@ export const calculateOrderTotals = async (input: OrderCalculationInput): Promis
   const normalizedTaxRate = taxRate > 1 ? taxRate / 100 : taxRate;
   const normalizedServiceChargeRate = serviceChargeRate > 1 ? serviceChargeRate / 100 : serviceChargeRate;
 
-  const taxAmount = Math.round(afterDiscount * normalizedTaxRate * 100) / 100;
-  const serviceChargeAmount = Math.round(afterDiscount * normalizedServiceChargeRate * 100) / 100;
-  const totalAmount = Math.round((afterDiscount + taxAmount + serviceChargeAmount) * 100) / 100;
+  // Which VAT category the discount comes off: a promotion on one product comes off
+  // that product's category; an order-wide or manual discount is spread in proportion.
+  const promoItem = input.promotion && input.promotion.scope !== 'ORDER' && input.promotion.menuItemId
+    ? input.items.find((i) => i.menuItemId === input.promotion!.menuItemId)
+    : undefined;
+  const productCategory: TaxCategory | null = promoItem
+    ? promoItem.taxCategory ? asCategory(promoItem.taxCategory) : categoryById.get(promoItem.menuItemId) || 'STANDARD'
+    : null;
+  const after = (category: TaxCategory) => {
+    const amount = byCategory[category];
+    if (productCategory) return category === productCategory ? Math.max(0, amount - discountAmount) : amount;
+    return subtotal > 0 ? amount - (discountAmount * amount) / subtotal : 0;
+  };
+  const standardAfterDiscount = after('STANDARD');
+  const zeroRatedAmount = round2(after('ZERO_RATED'));
+  const exemptAmount = round2(after('EXEMPT'));
+
+  // Inclusive prices: VAT is the part of the price already paid (r / (1 + r)), not added on top.
+  const taxAmount = inclusive
+    ? round2((standardAfterDiscount * normalizedTaxRate) / (1 + normalizedTaxRate))
+    : round2(standardAfterDiscount * normalizedTaxRate);
+  const taxableAmount = round2(inclusive ? standardAfterDiscount - taxAmount : standardAfterDiscount);
+  const serviceChargeAmount = round2(afterDiscount * normalizedServiceChargeRate);
+  const totalAmount = round2(afterDiscount + (inclusive ? 0 : taxAmount) + serviceChargeAmount);
 
   return {
     subtotal,
@@ -112,6 +170,10 @@ export const calculateOrderTotals = async (input: OrderCalculationInput): Promis
     serviceChargeAmount,
     totalAmount,
     itemCount,
+    taxInclusive: inclusive,
+    taxableAmount,
+    zeroRatedAmount,
+    exemptAmount,
   };
 };
 

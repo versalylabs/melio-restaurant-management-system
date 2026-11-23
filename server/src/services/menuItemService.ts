@@ -1,3 +1,5 @@
+import { TAX_CATEGORIES } from './orderCalculationService';
+const TAX_CATEGORY_LIST: readonly string[] = TAX_CATEGORIES;
 import prisma from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
@@ -54,6 +56,7 @@ export const getMenuItems = async (req: AuthRequest, res: ExpressResponse) => {
       sellingPrice: item.sellingPrice,
       costPrice: showCostPrice ? item.costPrice : undefined,
       taxRate: item.taxRate,
+      taxCategory: item.taxCategory,
       preparationTime: item.preparationTime,
       status: item.status,
       available: item.available,
@@ -121,6 +124,7 @@ export const createMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
     sellingPrice,
     costPrice,
     taxRate,
+    taxCategory,
     preparationTime,
     categoryId,
     available,
@@ -169,6 +173,7 @@ export const createMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
       sellingPrice,
       costPrice,
       taxRate: taxRate ?? 0,
+      taxCategory: TAX_CATEGORY_LIST.includes(taxCategory) ? taxCategory : 'STANDARD',
       preparationTime,
       categoryId,
       available: available ?? true,
@@ -209,6 +214,7 @@ export const updateMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
     sellingPrice,
     costPrice,
     taxRate,
+    taxCategory,
     preparationTime,
     categoryId,
     available,
@@ -264,6 +270,7 @@ export const updateMenuItem = async (req: AuthRequest, res: ExpressResponse) => 
       sellingPrice,
       costPrice,
       taxRate,
+      ...(taxCategory !== undefined ? { taxCategory: TAX_CATEGORY_LIST.includes(taxCategory) ? taxCategory : 'STANDARD' } : {}),
       preparationTime,
       categoryId,
       available,
@@ -385,6 +392,7 @@ export const duplicateMenuItem = async (req: AuthRequest, res: ExpressResponse) 
       sellingPrice: existing.sellingPrice,
       costPrice: existing.costPrice,
       taxRate: existing.taxRate,
+      taxCategory: existing.taxCategory,
       preparationTime: existing.preparationTime,
       categoryId: existing.categoryId,
       available: existing.available,

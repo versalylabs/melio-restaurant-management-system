@@ -71,6 +71,7 @@ interface OrderQuote {
   taxAmount: number;
   serviceChargeAmount: number;
   totalAmount: number;
+  taxInclusive?: boolean;
 }
 
 // The cart survives a refresh: only ids and quantities are stored, and lines
@@ -1054,7 +1055,7 @@ export default function OnlineOrdering() {
                 )}
                 {!!quote?.taxAmount && (
                   <div className="flex justify-between">
-                    <dt>Tax</dt>
+                    <dt>{quote.taxInclusive ? 'VAT (included in prices)' : 'VAT'}</dt>
                     <dd className="font-mono">{money(quote.taxAmount, currency)}</dd>
                   </div>
                 )}

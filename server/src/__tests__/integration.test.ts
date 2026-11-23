@@ -511,6 +511,145 @@ async function run() {
   });
   delete process.env.PAYMENT_SIMULATION;
 
+  console.log('\n--- Tax: VAT, credit notes, monthly summary ---');
+  const { calculateOrderTotals } = require('../services/orderCalculationService');
+  const near2 = (a: number, b: number) => Math.abs(a - b) < 0.011;
+  await test('VAT added on top: 16% on standard-rated items only', async () => {
+    const t = await calculateOrderTotals({
+      items: [
+        { menuItemId: 'a', unitPrice: 1000, quantity: 1, taxCategory: 'STANDARD' },
+        { menuItemId: 'b', unitPrice: 500, quantity: 1, taxCategory: 'ZERO_RATED' },
+      ],
+      taxRate: 0.16, serviceChargeRate: 0, pricesIncludeTax: false,
+    });
+    assert.ok(near2(t.taxAmount, 160) && near2(t.totalAmount, 1660) && near2(t.taxableAmount, 1000) && near2(t.zeroRatedAmount, 500), JSON.stringify(t));
+  });
+  await test('Prices include VAT: VAT is extracted, the total is the menu price', async () => {
+    const t = await calculateOrderTotals({
+      items: [{ menuItemId: 'a', unitPrice: 1160, quantity: 1, taxCategory: 'STANDARD' }],
+      taxRate: 0.16, serviceChargeRate: 0, pricesIncludeTax: true,
+    });
+    assert.ok(near2(t.taxAmount, 160) && near2(t.totalAmount, 1160) && near2(t.taxableAmount, 1000) && t.taxInclusive, JSON.stringify(t));
+  });
+  await test('A discount is spread over VAT categories in proportion', async () => {
+    const t = await calculateOrderTotals({
+      items: [
+        { menuItemId: 'a', unitPrice: 1000, quantity: 1, taxCategory: 'STANDARD' },
+        { menuItemId: 'b', unitPrice: 1000, quantity: 1, taxCategory: 'EXEMPT' },
+      ],
+      discountAmount: 200, discountType: 'FIXED', taxRate: 0.16, serviceChargeRate: 0, pricesIncludeTax: false,
+    });
+    assert.ok(near2(t.taxableAmount, 900) && near2(t.exemptAmount, 900) && near2(t.taxAmount, 144), JSON.stringify(t));
+  });
+
+  const restaurantBefore = await prisma.restaurant.findUnique({ where: { id: restaurantId } });
+  const itemBefore = await prisma.menuItem.findUnique({ where: { id: menuItem.id } });
+  try {
+    await prisma.restaurant.update({ where: { id: restaurantId }, data: { taxRate: 0.16, serviceChargeRate: 0, pricesIncludeTax: true, tourismLevyRate: 0.02, vatRegistered: true, kraPin: 'P051234567X' } });
+    await test('A bill stores its VAT breakdown, frozen at the time', async () => {
+      const order = (await newOrder()).body.data;
+      const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+      assert.ok(sale?.taxInclusive, 'inclusive flag stored');
+      assert.ok(near2(sale!.totalAmount, menuItem.sellingPrice * 2), 'total is the menu price');
+      assert.ok(near2(sale!.taxableAmount + sale!.taxAmount, menuItem.sellingPrice * 2), JSON.stringify(sale));
+    });
+    await test('A zero-rated item carries no VAT', async () => {
+      await prisma.menuItem.update({ where: { id: menuItem.id }, data: { taxCategory: 'ZERO_RATED' } });
+      const order = (await newOrder()).body.data;
+      const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+      assert.strictEqual(sale?.taxAmount, 0);
+      assert.ok(near2(sale!.zeroRatedAmount, menuItem.sellingPrice * 2));
+      await prisma.menuItem.update({ where: { id: menuItem.id }, data: { taxCategory: 'STANDARD' } });
+    });
+    await test('Refunding a closed sale issues numbered credit notes with the VAT share', async () => {
+      const issue = async () => {
+        const order = (await newOrder()).body.data;
+        const pay = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+        await require('../services/orderCompletionService').completeOrder(order.id, restaurantId, owner.id);
+        const refund = await call('POST', `/payments/${pay.body.data.payment.id}/refund`, ownerToken, { reason: 'test', approval });
+        assert.strictEqual(refund.status, 200, JSON.stringify(refund.body));
+        return { order, note: refund.body.data.creditNote };
+      };
+      const first = await issue();
+      const second = await issue();
+      assert.ok(first.note && second.note, 'credit notes issued');
+      assert.ok(/^CN-\d{6}$/.test(first.note.number));
+      assert.strictEqual(Number(second.note.number.slice(3)), Number(first.note.number.slice(3)) + 1, 'numbers run in sequence');
+      const sale = await prisma.sale.findUnique({ where: { id: first.order.id } });
+      assert.ok(near2(first.note.vatAmount, sale!.taxAmount), 'a full refund reverses all the VAT');
+    });
+    await test('A refund before the sale is closed issues no credit note', async () => {
+      const order = (await newOrder()).body.data;
+      const pay = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+      const refund = await call('POST', `/payments/${pay.body.data.payment.id}/refund`, ownerToken, { reason: 'test', approval });
+      assert.strictEqual(refund.body.data.creditNote, null);
+    });
+    await test('Monthly tax summary: VAT, credit notes, levy and a CSV', async () => {
+      const month = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Nairobi' }).slice(0, 7);
+      const res = await call('GET', `/reports/tax-summary?month=${month}`, ownerToken);
+      assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+      const t = res.body.data.totals;
+      assert.ok(t.bills >= 2 && t.outputVat > 0 && t.creditNotes > 0, JSON.stringify(t));
+      assert.ok(near2(t.netVat, t.outputVat - t.creditNoteVat));
+      assert.ok(res.body.data.tourismLevy.due > 0 && /-10$/.test(res.body.data.tourismLevy.dueDate));
+      const csv = await fetch(`${base}/api/reports/tax-summary?month=${month}&format=csv`, { headers: { Authorization: `Bearer ${ownerToken}` } });
+      assert.strictEqual(csv.status, 200);
+      assert.ok((csv.headers.get('content-type') || '').includes('text/csv'));
+      const text = await csv.text();
+      assert.ok(text.includes('P051234567X') && text.includes('Net VAT'), 'CSV has the PIN and totals');
+      const bad = await call('GET', '/reports/tax-summary?month=nope', ownerToken);
+      assert.strictEqual(bad.status, 400);
+    });
+    await test('A refund that is paid again does not reduce VAT', async () => {
+      const month = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Nairobi' }).slice(0, 7);
+      const before = (await call('GET', `/reports/tax-summary?month=${month}`, ownerToken)).body.data.totals;
+      const order = (await newOrder()).body.data;
+      const pay = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+      await require('../services/orderCompletionService').completeOrder(order.id, restaurantId, owner.id);
+      await call('POST', `/payments/${pay.body.data.payment.id}/refund`, ownerToken, { reason: 'wrong method', approval });
+      await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CARD', amount: order.totalAmount });
+      const after = (await call('GET', `/reports/tax-summary?month=${month}`, ownerToken)).body.data.totals;
+      const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+      assert.ok(near2(after.outputVat - before.outputVat, sale!.taxAmount), 'the sale counts once');
+      assert.ok(near2(after.creditNoteVat, before.creditNoteVat), 'the re-paid refund is not counted');
+    });
+    await test('A promotion on one zero-rated product does not lower VAT on the rest', async () => {
+      const t = await calculateOrderTotals({
+        items: [
+          { menuItemId: 'z', unitPrice: 1000, quantity: 1, taxCategory: 'ZERO_RATED' },
+          { menuItemId: 's', unitPrice: 1000, quantity: 1, taxCategory: 'STANDARD' },
+        ],
+        promotion: { discountType: 'PERCENTAGE', value: 50, scope: 'PRODUCT', menuItemId: 'z' },
+        taxRate: 0.16, serviceChargeRate: 0, pricesIncludeTax: false,
+      });
+      assert.ok(near2(t.taxAmount, 160) && near2(t.zeroRatedAmount, 500) && near2(t.taxableAmount, 1000), JSON.stringify(t));
+    });
+    await test('Changing "prices include VAT" does not change an open bill', async () => {
+      const held = (await newOrder({ status: 'HELD' })).body.data;
+      const before = await prisma.sale.findUnique({ where: { id: held.id } });
+      await prisma.restaurant.update({ where: { id: restaurantId }, data: { pricesIncludeTax: !before!.taxInclusive } });
+      const edited = await call('PATCH', `/orders/${held.id}`, cashierToken, { notes: 'x', items: [{ menuItemId: menuItem.id, quantity: 2, modifiers: [] }] });
+      assert.strictEqual(edited.status, 200, JSON.stringify(edited.body));
+      const after = await prisma.sale.findUnique({ where: { id: held.id } });
+      assert.strictEqual(after!.taxInclusive, before!.taxInclusive);
+      assert.ok(near2(after!.totalAmount, before!.totalAmount));
+      await prisma.restaurant.update({ where: { id: restaurantId }, data: { pricesIncludeTax: before!.taxInclusive } });
+    });
+    await test('An invalid KRA PIN is refused', async () => {
+      const res = await call('PUT', '/restaurant', ownerToken, { kraPin: '12345' });
+      assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    });
+  } finally {
+    await prisma.restaurant.update({
+      where: { id: restaurantId },
+      data: {
+        taxRate: restaurantBefore!.taxRate, serviceChargeRate: restaurantBefore!.serviceChargeRate, pricesIncludeTax: restaurantBefore!.pricesIncludeTax,
+        tourismLevyRate: restaurantBefore!.tourismLevyRate, vatRegistered: restaurantBefore!.vatRegistered, kraPin: restaurantBefore!.kraPin,
+      },
+    });
+    await prisma.menuItem.update({ where: { id: menuItem.id }, data: { taxCategory: itemBefore!.taxCategory } });
+  }
+
   server.close();
   await prisma.$disconnect();
   console.log(`\n========================================\nIntegration Results: ${passed} Passed, ${failed} Failed\n========================================`);

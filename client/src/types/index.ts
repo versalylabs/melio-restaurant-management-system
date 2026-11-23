@@ -118,6 +118,7 @@ export interface MenuItem {
   sellingPrice: number;
   costPrice?: number;
   taxRate: number;
+  taxCategory?: string;
   preparationTime?: number;
   status: string;
   available: boolean;
@@ -268,6 +269,8 @@ export interface PosMenuItem {
   description?: string;
   sellingPrice: number;
   taxRate: number;
+  /** STANDARD | ZERO_RATED | EXEMPT */
+  taxCategory?: string;
   image?: string;
   modifierGroups: Array<{
     id: string;

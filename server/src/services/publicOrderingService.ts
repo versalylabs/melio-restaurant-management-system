@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import prisma from '../config/database';
-import { calculateOrderTotals, OrderCalculationInput } from './orderCalculationService';
+import { calculateOrderTotals, taxFields, OrderCalculationInput } from './orderCalculationService';
 import { validatePromotion } from './promotionService';
 import { createKitchenTicketForOrder } from './kitchenService';
 import { notifyRestaurantStaff } from './notificationService';
@@ -136,6 +136,7 @@ export const quotePublicOrder = async (req: Request, res: Response) => {
     taxAmount: t.taxAmount,
     serviceChargeAmount: t.serviceChargeAmount,
     totalAmount: t.totalAmount,
+    taxInclusive: t.taxInclusive,
     promoApplied: !!priced.promotionId,
   });
 };
@@ -220,7 +221,7 @@ export const createPublicOrder = async (req: Request, res: Response) => {
         restaurantId, branchId, orderNumber: `#${next}`, clientRequestId, orderType: fulfillmentType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP', customerId: customer!.id, customerName,
         status: 'SUBMITTED', paymentStatus: 'UNPAID', amountPaid: 0,
         subtotal: totals.subtotal, discountAmount: totals.discountAmount, discountReason: promotion ? `Promotion: ${promoCode}` : null,
-        promotionId: promotionId || null, taxAmount: totals.taxAmount, serviceChargeAmount: totals.serviceChargeAmount, totalAmount: totals.totalAmount,
+        promotionId: promotionId || null, taxAmount: totals.taxAmount, ...taxFields(totals), serviceChargeAmount: totals.serviceChargeAmount, totalAmount: totals.totalAmount,
         notes: notes || null, createdBy: systemUser.id,
         items: { create: normalized.map((item: { menuItemId: string; quantity: number }) => { const menu = menuMap.get(item.menuItemId)!; return { menuItemId: menu.id, itemNameSnapshot: menu.name, unitPrice: menu.sellingPrice, quantity: item.quantity, subtotal: menu.sellingPrice * item.quantity }; }) },
       },

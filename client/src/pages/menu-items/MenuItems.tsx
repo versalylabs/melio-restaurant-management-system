@@ -59,6 +59,7 @@ export default function MenuItems() {
     sellingPrice: '',
     costPrice: '',
     taxRate: '0',
+    taxCategory: 'STANDARD',
     preparationTime: '',
     categoryId: '',
     available: true,
@@ -158,6 +159,7 @@ export default function MenuItems() {
         sellingPrice: parseFloat(formData.sellingPrice),
         costPrice: formData.costPrice ? parseFloat(formData.costPrice) : undefined,
         taxRate: parseFloat(formData.taxRate),
+        taxCategory: formData.taxCategory,
         preparationTime: formData.preparationTime ? parseInt(formData.preparationTime) : undefined,
       };
       const response = editingItem
@@ -183,6 +185,7 @@ export default function MenuItems() {
         sellingPrice: '',
         costPrice: '',
         taxRate: '0',
+        taxCategory: 'STANDARD',
         preparationTime: '',
         categoryId: '',
         available: true,
@@ -244,6 +247,7 @@ export default function MenuItems() {
       sellingPrice: '',
       costPrice: '',
       taxRate: '0',
+      taxCategory: 'STANDARD',
       preparationTime: '',
       categoryId: categories[0]?.id || '',
       available: true,
@@ -266,6 +270,7 @@ export default function MenuItems() {
       sellingPrice: item.sellingPrice.toString(),
       costPrice: item.costPrice?.toString() || '',
       taxRate: item.taxRate.toString(),
+      taxCategory: item.taxCategory || 'STANDARD',
       preparationTime: item.preparationTime?.toString() || '',
       categoryId: item.categoryId,
       available: item.available,
@@ -523,7 +528,14 @@ export default function MenuItems() {
               <Input id="costPrice" type="number" min="0" step="0.01" label="Cost Price (KSh)" value={formData.costPrice} onChange={(e) => setFormData({ ...formData, costPrice: e.target.value })} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input id="taxRate" type="number" min="0" max="100" step="0.01" label="Tax Rate (%)" value={formData.taxRate} onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })} />
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                VAT
+                <select value={formData.taxCategory} onChange={(e) => setFormData({ ...formData, taxCategory: e.target.value })} className="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111116]">
+                  <option value="STANDARD">Standard rate (restaurant VAT rate)</option>
+                  <option value="ZERO_RATED">Zero-rated (0%)</option>
+                  <option value="EXEMPT">Exempt</option>
+                </select>
+              </label>
               <Input id="displayOrder" type="number" min="0" label="Display Order" value={formData.displayOrder} onChange={(e) => setFormData({ ...formData, displayOrder: parseInt(e.target.value) || 0 })} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

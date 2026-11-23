@@ -5,7 +5,7 @@ import { sendError, sendResponse } from '../utils/response';
 import { createAuditLog } from './auditLogService';
 import { blockingPaymentsForCancel, lockSale } from './saleLedgerService';
 import { validatePromotion } from './promotionService';
-import { calculateOrderTotals } from './orderCalculationService';
+import { calculateOrderTotals, taxFields } from './orderCalculationService';
 import { realtimeService } from './realtimeService';
 import { NOT_FIRED_STATUSES } from './orderCancellationService';
 import { sendApprovalError, verifyApproval } from './approvalService';
@@ -119,6 +119,7 @@ export async function voidOrderItem(req: AuthRequest, res: Response) {
       const totals = await calculateOrderTotals({
         items,
         restaurantId,
+        pricesIncludeTax: order.taxInclusive,
         branchId: order.branchId,
         // A manual discount shrinks with the bill (keeps a % discount a %; never grows a fixed one).
         discountAmount: p ? 0 : oldBase > 0 ? round2(order.discountAmount * (newBase / oldBase)) : 0,
@@ -133,6 +134,7 @@ export async function voidOrderItem(req: AuthRequest, res: Response) {
           subtotal: totals.subtotal,
           discountAmount: totals.discountAmount,
           taxAmount: totals.taxAmount,
+          ...taxFields(totals),
           serviceChargeAmount: totals.serviceChargeAmount,
           totalAmount: totals.totalAmount,
         },

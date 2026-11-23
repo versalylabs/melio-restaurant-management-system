@@ -30,6 +30,10 @@ export default function Settings() {
     timezone: 'Africa/Nairobi',
     taxRate: 0,
     serviceChargeRate: 0,
+    kraPin: '',
+    vatRegistered: false,
+    pricesIncludeTax: false,
+    tourismLevyRate: 0,
   });
 
   useEffect(() => {
@@ -53,6 +57,10 @@ export default function Settings() {
             timezone: data.timezone || 'Africa/Nairobi',
             taxRate: (data.taxRate || 0) * 100,
             serviceChargeRate: (data.serviceChargeRate || 0) * 100,
+            kraPin: data.kraPin || '',
+            vatRegistered: !!data.vatRegistered,
+            pricesIncludeTax: !!data.pricesIncludeTax,
+            tourismLevyRate: Math.round((data.tourismLevyRate || 0) * 10000) / 100,
           });
         }
       } catch (err: any) {
@@ -205,9 +213,31 @@ export default function Settings() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input id="taxRate" type="number" min="0" max="100" step="0.01" label="Tax Rate (%)" value={formData.taxRate} onChange={e=>setFormData({...formData,taxRate:Number(e.target.value)})} />
+            <Input id="taxRate" type="number" min="0" max="100" step="0.01" label="VAT rate (%)" value={formData.taxRate} onChange={e=>setFormData({...formData,taxRate:Number(e.target.value)})} />
             <Input id="serviceChargeRate" type="number" min="0" max="100" step="0.01" label="Service Charge (%)" value={formData.serviceChargeRate} onChange={e=>setFormData({...formData,serviceChargeRate:Number(e.target.value)})} />
           </div>
+
+          <fieldset className="rounded-xl border border-gray-200 p-4 dark:border-white/10">
+            <legend className="px-1 text-sm font-semibold">Tax (KRA)</legend>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Input id="kraPin" label="KRA PIN" placeholder="P051234567X" maxLength={11} value={formData.kraPin} onChange={e=>setFormData({...formData,kraPin:e.target.value.toUpperCase()})} />
+              <Input id="tourismLevyRate" type="number" min="0" max="10" step="0.01" label="Tourism Levy (%)" value={formData.tourismLevyRate} onChange={e=>setFormData({...formData,tourismLevyRate:Number(e.target.value)})} />
+            </div>
+            <label className="mt-4 flex items-start gap-3 text-sm">
+              <input type="checkbox" className="mt-1 h-4 w-4" checked={formData.vatRegistered} onChange={e=>setFormData({...formData,vatRegistered:e.target.checked})} />
+              <span><strong>Registered for VAT.</strong> Receipts show your KRA PIN and the VAT charged.</span>
+            </label>
+            <label className="mt-3 flex items-start gap-3 text-sm">
+              <input type="checkbox" className="mt-1 h-4 w-4" checked={formData.pricesIncludeTax} onChange={e=>setFormData({...formData,pricesIncludeTax:e.target.checked})} />
+              <span><strong>Menu prices already include VAT.</strong> Bills total the menu prices and show the VAT inside them, instead of adding VAT on top. Only new bills change.</span>
+            </label>
+            {!formData.vatRegistered && Number(formData.taxRate) > 0 && (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                Bills charge {formData.taxRate}% VAT, but the business is not marked as VAT-registered. Only charge VAT if you are registered with KRA.
+              </p>
+            )}
+            <p className="mt-3 text-xs text-gray-500">The Tourism Levy is worked out on your monthly sales in the tax summary; it is not added to bills. Melio is not an eTIMS system: keep issuing eTIMS invoices through KRA tools.</p>
+          </fieldset>
 
           <Input
             id="logo"

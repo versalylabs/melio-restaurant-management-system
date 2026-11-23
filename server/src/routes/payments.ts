@@ -8,6 +8,7 @@ import { ensureReceipt, lockSale, syncPaymentState } from '../services/saleLedge
 import { completeOrder } from '../services/orderCompletionService';
 import { confirmSimulatedMpesaPayment, getStaffMpesaStatus, initiateStaffMpesaPrompt, mpesaReceiptLockKey, PROMPT_IN_FLIGHT_MS, reverifyAwaitingPayment } from '../services/mpesaService';
 import { isPaymentSimulationEnabled, PaymentError } from '../services/onlinePaymentService';
+import { issueCreditNote } from '../services/taxService';
 import { realtimeService } from '../services/realtimeService';
 import { sendApprovalError, verifyApproval } from '../services/approvalService';
 
@@ -258,8 +259,14 @@ router.post('/:id/refund', authorize(...REFUND_ROLES), async (req: AuthRequest, 
       // DUPLICATE: money that arrived for a bill already paid, kept so it can be refunded.
       if (payment.status !== 'COMPLETED' && payment.status !== 'DUPLICATE') throw new Error('PAYMENT_ALREADY_REFUNDED');
       await tx.payment.update({ where: { id: payment.id }, data: { status: 'REFUNDED', refundedAt: new Date(), refundReason: reason, refundedBy: req.user!.id, refundApprovedBy: approver.id } });
+      // A refund of money counted in a closed sale reverses that sale for VAT and the levy:
+      // it gets a credit note. Money that was never part of the sale (paid twice) does not.
+      const sale = await tx.sale.findUnique({ where: { id: payment.saleId }, select: { status: true } });
+      const creditNote = payment.status === 'COMPLETED' && sale?.status === 'COMPLETED'
+        ? await issueCreditNote(tx, { restaurantId: payment.restaurantId, branchId: payment.branchId, saleId: payment.saleId, paymentId: payment.id, amount: payment.amount, reason, createdBy: req.user!.id })
+        : null;
       const state = await syncPaymentState(tx, payment.saleId);
-      return { paymentId: payment.id, ...state };
+      return { paymentId: payment.id, creditNote: creditNote ? { number: creditNote.number, amount: creditNote.amount, vatAmount: creditNote.vatAmount } : null, ...state };
     });
     await createAuditLog(req.user!.restaurantId, req.user!.id, 'REFUND', 'Payment', req.params.id, `Refunded payment, approved by ${approver.name}: ${reason}`);
     return sendResponse(res, true, 'Payment refunded', result);
@@ -276,10 +283,27 @@ router.get('/orders/:orderId/receipt', authorize(...ORDER_PAYMENT_VIEW_ROLES), a
       const sale = await tx.sale.findFirst({ where: { id: req.params.orderId, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) }, include: { items: true, payments: { where: { status: 'COMPLETED' }, orderBy: { createdAt: 'asc' } }, receipt: true, branch: true, customer: true } });
       if (!sale) throw new Error('ORDER_NOT_FOUND');
       const paid = sale.payments.reduce((s: number, p: any) => s + p.amount, 0);
-      if (paid + 0.005 < sale.totalAmount) throw new Error('ORDER_NOT_PAID');
+      // A bill that was paid and then refunded (with a credit note) can still be printed.
+      const credited = (await tx.creditNote.aggregate({ where: { saleId: sale.id }, _sum: { amount: true } }))._sum.amount || 0;
+      if (paid + credited + 0.005 < sale.totalAmount) throw new Error('ORDER_NOT_PAID');
       const receipt = sale.receipt || await ensureReceipt(tx, sale);
       const updatedReceipt = await tx.receipt.update({ where: { id: receipt.id }, data: { printCount: { increment: 1 }, lastPrintedAt: new Date() } });
-      return { sale, receipt: updatedReceipt };
+      const business = await tx.restaurant.findUnique({
+        where: { id: sale.restaurantId },
+        select: { name: true, legalName: true, kraPin: true, vatRegistered: true, taxRate: true },
+      });
+      const creditNotes = await tx.creditNote.findMany({ where: { saleId: sale.id }, select: { number: true, amount: true, createdAt: true }, orderBy: { createdAt: 'asc' } });
+      // What a receipt may say about tax. Never "tax invoice" or eTIMS: Melio is not KRA-certified.
+      const tax = {
+        businessName: business?.legalName || business?.name,
+        kraPin: business?.kraPin || null,
+        vatRegistered: !!business?.vatRegistered,
+        // The rate this bill was charged at, not today's setting.
+        vatRate: sale.taxableAmount > 0 ? Math.round((sale.taxAmount / sale.taxableAmount) * 10000) / 10000 : business ? (business.taxRate > 1 ? business.taxRate / 100 : business.taxRate) : 0,
+        taxInclusive: sale.taxInclusive,
+        vatAmount: sale.taxAmount,
+      };
+      return { sale, receipt: updatedReceipt, tax, creditNotes };
     });
     return sendResponse(res, true, 'Receipt retrieved', result);
   } catch (e: any) {
