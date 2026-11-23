@@ -4,6 +4,7 @@ import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
 import { createAuditLog } from './auditLogService';
 import { convertQuantity } from '../utils/units';
+import { alertMarginChanges, costOfRecipe, recordIngredientPrice } from './foodCostService';
 import { notifyRestaurantStaff } from './notificationService';
 import { boundedLimit } from '../utils/pagination';
 
@@ -1331,22 +1332,12 @@ export const getFoodCost = async (req: AuthRequest, res: ExpressResponse) => {
     return sendError(res, 'No recipe defined for this menu item', undefined, 404);
   }
 
-  let totalCost = 0;
-  const breakdown = menuItem.recipe.ingredients.map((ri) => {
-    const cost = ri.quantity * ri.ingredient.costPerUnit;
-    totalCost += cost;
-    return {
-      ingredientId: ri.ingredientId,
-      ingredientName: ri.ingredient.name,
-      quantity: ri.quantity,
-      unit: ri.unit,
-      costPerUnit: ri.ingredient.costPerUnit,
-      lineCost: cost,
-    };
-  });
-
+  // Recipe quantities are converted into each ingredient's own unit (g against a per-kg cost).
   const servings = menuItem.recipe.servings || 1;
-  const costPerServing = totalCost / servings;
+  const costed = costOfRecipe(menuItem.recipe.ingredients, servings);
+  const breakdown = costed.breakdown;
+  const costPerServing = costed.costPerServing;
+  const totalCost = Math.round(costPerServing * servings * 100) / 100;
   const foodCostPercentage = menuItem.sellingPrice > 0
     ? (costPerServing / menuItem.sellingPrice) * 100
     : 0;
@@ -1367,6 +1358,7 @@ export const getFoodCost = async (req: AuthRequest, res: ExpressResponse) => {
     grossMargin,
     grossMarginPercentage,
     breakdown,
+    unconvertible: costed.unconvertible,
   });
 };
 
@@ -2038,6 +2030,8 @@ export const receivePurchaseOrder = async (req: AuthRequest, res: ExpressRespons
   }
 
   type ReceiveResult = { __error?: string; po?: any };
+  // Prices paid on this delivery, for the margin alert after it is saved.
+  const priceChanges: Array<{ ingredientId: string; previousCost: number; newCost: number } | null> = [];
 
   const result = await prisma.$transaction(async (tx) => {
     const po = await tx.purchaseOrder.findFirst({
@@ -2085,15 +2079,18 @@ export const receivePurchaseOrder = async (req: AuthRequest, res: ExpressRespons
       });
 
       if (existingStock) {
-        const newQty = existingStock.quantity + qty;
-        const newCost = newQty > 0
-          ? ((existingStock.quantity * existingStock.costPerUnit) + (qty * item.unitPrice)) / newQty
+        // The delivery may be in another unit than the stock (bought in kg, counted in g).
+        const stockQty = convertQuantity(qty, item.unit, existingStock.unit) ?? qty;
+        const pricePerStockUnit = stockQty > 0 ? (qty * item.unitPrice) / stockQty : item.unitPrice;
+        const valued = existingStock.costPerUnit > 0 ? Math.max(0, existingStock.quantity) : 0;
+        const newCost = valued + stockQty > 0
+          ? (valued * existingStock.costPerUnit + stockQty * pricePerStockUnit) / (valued + stockQty)
           : existingStock.costPerUnit;
         await tx.inventoryStock.update({
           where: { id: existingStock.id },
           data: {
-            quantity: newQty,
-            costPerUnit: newCost,
+            quantity: { increment: stockQty },
+            costPerUnit: Math.round(newCost * 1e6) / 1e6,
             lastRestockedAt: receiveTimestamp,
           },
         });
@@ -2147,6 +2144,12 @@ export const receivePurchaseOrder = async (req: AuthRequest, res: ExpressRespons
         where: { id: item.id },
         data: { receivedQuantity: newReceived },
       });
+
+      // What was paid becomes the ingredient's current cost, with a history entry.
+      priceChanges.push(await recordIngredientPrice(tx, {
+        restaurantId, branchId: po.branchId, ingredientId: item.ingredientId, supplierId: po.supplierId,
+        quantity: qty, unit: item.unit, totalPaid: qty * item.unitPrice, source: 'PURCHASE_ORDER', referenceId: po.id, recordedBy: userId,
+      }));
 
       anyReceived = true;
     }
@@ -2204,6 +2207,7 @@ export const receivePurchaseOrder = async (req: AuthRequest, res: ExpressRespons
     id,
     `Received purchase order ${(result.po as any).orderNumber} (status: ${(result.po as any).status})`
   );
+  await alertMarginChanges(restaurantId, (result.po as any).branchId, priceChanges).catch((err) => console.error('Margin alert failed:', err));
 
   return sendResponse(res, true, 'Purchase order received and stock updated', result.po);
 };
@@ -2820,7 +2824,9 @@ export const getStocktakes = async (req: AuthRequest, res: ExpressResponse) => {
         ...(await prisma.stocktake.findMany({ where: { ...where, status: 'DRAFT' }, orderBy: { createdAt: 'desc' }, include })),
         ...(await prisma.stocktake.findMany({ where: { ...where, status: { not: 'DRAFT' } }, orderBy: { createdAt: 'desc' }, take, include })),
       ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  return sendResponse(res, true, 'Stocktakes retrieved', { items: stocktakes });
+  const seesCosts = COST_ROLES.includes(req.user!.roleName);
+  const items = seesCosts ? stocktakes : stocktakes.map((st) => ({ ...st, items: st.items.map(({ unitCost, varianceValue, ...rest }) => rest) }));
+  return sendResponse(res, true, 'Stocktakes retrieved', { items });
 };
 
 export const createStocktake = async (req: AuthRequest, res: ExpressResponse) => {
@@ -2868,7 +2874,8 @@ export const completeStocktake = async (req: AuthRequest, res: ExpressResponse) 
         await tx.inventoryStock.update({ where: { id: stock.id }, data: { quantity: item.countedQty } });
         await tx.stockMovement.create({ data: { restaurantId, branchId: st.branchId, ingredientId: item.ingredientId, quantity: variance, unit: item.unit, type: 'STOCKTAKE', reason: `Stocktake ${st.reference}`, referenceId: st.id, referenceType: 'STOCKTAKE', userId: req.user!.id, notes: 'Physical count adjustment' } });
       }
-      await tx.stocktakeItem.update({ where: { id: item.id }, data: { expectedQty: stock.quantity, variance } });
+      // Value the difference at the stock's cost, so a shortage reads in shillings.
+      await tx.stocktakeItem.update({ where: { id: item.id }, data: { expectedQty: stock.quantity, variance, unitCost: stock.costPerUnit, varianceValue: Math.round(variance * stock.costPerUnit * 100) / 100 } });
     }
     return await tx.stocktake.update({ where: { id }, data: { status: 'COMPLETED', completedBy: req.user!.id, completedAt: new Date() }, include: { items: true, branch: true } });
   });

@@ -326,6 +326,11 @@ export const inventoryApi = {
 
   // Food Cost
   getFoodCost: (menuItemId: string) => cachedGet(`/inventory/food-cost/${menuItemId}`),
+  // Not cached: these change with every purchase.
+  getFoodCostOverview: () => api.get('/inventory/food-cost'),
+  setFoodCostTarget: (menuItemId: string, targetFoodCostPct: number | null) => api.put(`/inventory/food-cost/${menuItemId}/target`, { targetFoodCostPct }),
+  getPriceHistory: (ingredientId: string) => api.get(`/inventory/ingredients/${ingredientId}/price-history`),
+  quickPurchase: (data: { ingredientId: string; quantity: number; unit: string; totalPaid: number; paidFrom: string; vendor?: string; branchId?: string; clientRequestId?: string; confirmPriceJump?: boolean }) => api.post('/inventory/quick-purchase', data),
 
   // Dashboard
   getInventoryDashboard: () => cachedGet('/inventory/dashboard'),

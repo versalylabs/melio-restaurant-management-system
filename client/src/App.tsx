@@ -28,6 +28,8 @@ const Payments = lazy(() => import('./pages/payments/Payments'));
 const Reports = lazy(() => import('./pages/reports/Reports'));
 const LossPrevention = lazy(() => import('./pages/reports/LossPrevention'));
 const TaxSummary = lazy(() => import('./pages/reports/TaxSummary'));
+const QuickPurchase = lazy(() => import('./pages/inventory/QuickPurchase'));
+const FoodCost = lazy(() => import('./pages/inventory/FoodCost'));
 const Reservations = lazy(() => import('./pages/reservations/Reservations'));
 const Branches = lazy(() => import('./pages/branches/Branches'));
 const Promotions = lazy(() => import('./pages/promotions/Promotions'));
@@ -130,6 +132,8 @@ const ROUTE_TITLES: Record<string, string> = {
   '/reports': 'Financial Reports — Melio',
   '/loss-prevention': 'Loss Prevention — Melio',
   '/tax-summary': 'Tax Summary — Melio',
+  '/quick-purchase': 'Quick Purchase — Melio',
+  '/food-cost': 'Food Cost — Melio',
   '/analytics': 'Business Analytics — Melio',
   '/shifts': 'Shift Management — Melio',
   '/branches': 'Branch Management — Melio',
@@ -327,6 +331,8 @@ function App() {
         <Route path="/reports" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><ReportsErrorBoundary><Reports /></ReportsErrorBoundary></ProtectedRoute>} />
         <Route path="/loss-prevention" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><LossPrevention /></ProtectedRoute>} />
         <Route path="/tax-summary" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><TaxSummary /></ProtectedRoute>} />
+        <Route path="/quick-purchase" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER','CASHIER']}><QuickPurchase /></ProtectedRoute>} />
+        <Route path="/food-cost" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER']}><FoodCost /></ProtectedRoute>} />
         {/* Public landing page: visiting localhost:5173 always opens the Melio website. */}
         <Route path="/" element={<RestaurantWebsite />} />
         <Route path="*" element={<Navigate to="/" replace />} />

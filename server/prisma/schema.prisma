@@ -376,6 +376,8 @@ model MenuItem {
   taxRate         Float    @default(0)
   /// VAT treatment: STANDARD (restaurant VAT rate), ZERO_RATED (0%) or EXEMPT.
   taxCategory     String   @default("STANDARD")
+  /// Highest acceptable food cost as % of the selling price (e.g. 35); an alert is raised above it.
+  targetFoodCostPct Float?
   preparationTime Int?
   status          String   @default("ACTIVE")
   available       Boolean  @default(true)
@@ -812,6 +814,7 @@ model Ingredient {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  priceHistory         IngredientPriceHistory[]
   restaurant           Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   category             IngredientCategory    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   stocks               InventoryStock[]
@@ -939,6 +942,9 @@ model StocktakeItem {
   countedQty   Float
   variance     Float
   unit         String
+  /// Cost per unit when the count was completed, so the loss can be valued in KES.
+  unitCost     Float?
+  varianceValue Float?
   notes        String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -1459,4 +1465,34 @@ model CreditNoteCounter {
   lastNumber   Int    @default(0)
 
   @@map("credit_note_counters")
+}
+
+/// What was paid for an ingredient each time it was bought, per the ingredient's own unit.
+model IngredientPriceHistory {
+  id           String   @id @default(uuid())
+  restaurantId String
+  branchId     String?
+  ingredientId String
+  supplierId   String?
+  /// Cost per ingredient unit (e.g. per kg) for this purchase.
+  unitCost     Float
+  /// The ingredient's cost before this purchase, to restore it if the purchase is rejected.
+  previousUnitCost Float?
+  /// Set when the purchase was rejected and undone; such entries are ignored.
+  reversedAt   DateTime?
+  quantity     Float
+  unit         String
+  totalPaid    Float
+  /// PURCHASE_ORDER | QUICK_PURCHASE
+  source       String
+  referenceId  String?
+  vendor       String?
+  recordedBy   String
+  createdAt    DateTime @default(now())
+
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@index([ingredientId, createdAt])
+  @@index([restaurantId, createdAt])
+  @@map("ingredient_price_history")
 }

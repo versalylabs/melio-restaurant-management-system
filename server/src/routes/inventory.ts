@@ -55,12 +55,39 @@ import {
 } from '../controllers/inventoryController';
 import { authenticate, authorize } from '../middleware/auth';
 
+import { createQuickPurchase, getIngredientPriceHistory } from '../services/quickPurchaseService';
+import { COST_ROLES, DEFAULT_TARGET_FOOD_COST_PCT, foodCostOverview } from '../services/foodCostService';
+import prisma from '../config/database';
+import { sendError, sendResponse } from '../utils/response';
+import { AuthRequest } from '../middleware/auth';
+import { createAuditLog } from '../services/auditLogService';
+
 const router = safeRouter();
 
 router.use(authenticate);
 
 // Dashboard
 router.get('/dashboard', getInventoryDashboardController);
+
+// Food cost: market buying, price history and dishes over their cost target.
+router.post('/quick-purchase', authorize('OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER', 'CASHIER'), createQuickPurchase);
+router.get('/ingredients/:id/price-history', authorize('OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER'), getIngredientPriceHistory);
+router.get('/food-cost', authorize('OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER'), async (req: AuthRequest, res) => {
+  // Custom roles pass authorize() with inventory.view, but costs are for these roles only.
+  if (!COST_ROLES.includes(req.user!.roleName)) return sendError(res, 'Only managers can see food costs', undefined, 403);
+  const dishes = await foodCostOverview(req.user!.restaurantId);
+  return sendResponse(res, true, 'Food cost overview', { dishes, defaultTargetPct: DEFAULT_TARGET_FOOD_COST_PCT });
+});
+router.put('/food-cost/:menuItemId/target', authorize('OWNER', 'ADMIN', 'MANAGER'), async (req: AuthRequest, res) => {
+  const raw = req.body?.targetFoodCostPct;
+  const target = raw === null || raw === '' || raw === undefined ? null : Number(raw);
+  if (target !== null && (!Number.isFinite(target) || target < 1 || target > 99)) return sendError(res, 'The target must be between 1% and 99%');
+  const item = await prisma.menuItem.findFirst({ where: { id: req.params.menuItemId, restaurantId: req.user!.restaurantId }, select: { id: true, name: true } });
+  if (!item) return sendError(res, 'Dish not found', undefined, 404);
+  await prisma.menuItem.update({ where: { id: item.id }, data: { targetFoodCostPct: target } });
+  await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'MenuItem', item.id, `Set food-cost target for ${item.name} to ${target === null ? 'the default' : `${target}%`}`);
+  return sendResponse(res, true, 'Target saved', { menuItemId: item.id, targetFoodCostPct: target });
+});
 
 // Batch & expiry tracking
 router.get('/batches', getInventoryBatchesController);

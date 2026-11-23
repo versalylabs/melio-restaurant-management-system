@@ -28,7 +28,8 @@ const cashSummary = async (shift: any, endAt = new Date()) => {
   });
   const byMethod = (m: string) => round2(payments.find((p) => p.method === m)?._sum.amount || 0);
   const expenses = await prisma.expense.findMany({
-    where: { shiftId: shift.id, status: 'APPROVED', paymentMethod: 'CASH' },
+    // Pending too: the cash has already left the till; a rejected expense is not counted.
+    where: { shiftId: shift.id, status: { in: ['APPROVED', 'PENDING'] }, paymentMethod: 'CASH' },
     select: { amount: true },
   });
   const cashPayments = byMethod('CASH');
