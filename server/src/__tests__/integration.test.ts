@@ -192,6 +192,30 @@ async function run() {
     assert.ok(recorded.notes.includes('REFUND REQUIRED'));
   });
 
+  console.log('\n--- Automated messages ---');
+  await test('message templates are saved in the database and validated', async () => {
+    const saved = await call('PUT', '/automated-messaging/ORDER_READY', ownerToken, { subject: 'Ready {orderNumber}', template: 'Come get {orderNumber}', channel: 'SMS' });
+    assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+    const list = await call('GET', '/automated-messaging', ownerToken);
+    const ready = list.body.data.templates.find((t: any) => t.action === 'ORDER_READY');
+    assert.strictEqual(ready.template, 'Come get {orderNumber}');
+    assert.strictEqual(ready.channel, 'SMS');
+    const row = await prisma.messageTemplate.findUnique({ where: { restaurantId_action: { restaurantId, action: 'ORDER_READY' } } });
+    assert.ok(row, 'stored in the database');
+    const bad = await call('PUT', '/automated-messaging/ORDER_READY', ownerToken, { channel: 'FAX' });
+    assert.strictEqual(bad.status, 400);
+    const unknown = await call('PUT', '/automated-messaging/NOT_A_THING', ownerToken, { subject: 'x' });
+    assert.strictEqual(unknown.status, 404);
+    await prisma.messageTemplate.deleteMany({ where: { restaurantId, action: 'ORDER_READY' } });
+  });
+  await test('a switched-off message is not sent (no default fallback)', async () => {
+    const { resolveMessage } = require('../services/automatedMessagingService');
+    await call('PUT', '/automated-messaging/ORDER_PREPARING', ownerToken, { enabled: false });
+    const msg = await resolveMessage(restaurantId, 'ORDER_PREPARING', { orderNumber: 'X1' });
+    assert.ok(msg && msg.enabled === false, 'resolveMessage reports disabled');
+    await call('PUT', '/automated-messaging/ORDER_PREPARING', ownerToken, { enabled: true });
+  });
+
   console.log('\n--- Kitchen and completion ---');
   await test('kitchen SERVED on an unpaid order serves it but does not close it', async () => {
     const order = (await newOrder({ orderType: 'TAKEAWAY' })).body.data;

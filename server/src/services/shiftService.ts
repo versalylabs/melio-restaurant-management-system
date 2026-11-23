@@ -3,6 +3,7 @@ import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response } from 'express';
 import { createAuditLog } from './auditLogService';
+import { boundedLimit } from '../utils/pagination';
 
 const scope = (req: AuthRequest) => req.user!.branchId
   ? { restaurantId: req.user!.restaurantId, branchId: req.user!.branchId }
@@ -38,6 +39,8 @@ export const getShifts = async (req: AuthRequest, res: Response) => {
     ...(from ? { gte: new Date(from) } : {}),
     ...(to ? { lte: new Date(to) } : {}),
   };
+  // Unfiltered view: open shifts plus anything opened in the last 30 days.
+  else if (!status) where.OR = [{ status: 'OPEN' }, { openedAt: { gte: new Date(Date.now() - 30 * 86_400_000) } }];
 
   const shifts = await prisma.shift.findMany({
     where,
@@ -48,6 +51,7 @@ export const getShifts = async (req: AuthRequest, res: Response) => {
       closer: { select: { firstName: true, lastName: true } },
     },
     orderBy: { openedAt: 'desc' },
+    take: boundedLimit(req.query.limit, 200, 500),
   });
 
   const data = await Promise.all(shifts.map(async (shift) => {

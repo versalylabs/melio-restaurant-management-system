@@ -22,8 +22,6 @@
     "db:seed": "cd server && npx prisma db seed",
     "db:studio": "cd server && npx prisma studio",
     "db:reset": "cd server && npx prisma migrate reset --force",
-    "db:use:postgres": "node server/scripts/db-switch.js postgres",
-    "db:use:sqlite": "node server/scripts/db-switch.js sqlite",
     "db:setup:neon": "node server/scripts/setup-neon.js",
     "setup": "npm install && npm run db:generate && npm run db:migrate && npm run db:seed",
     "test": "cd server && npm test",

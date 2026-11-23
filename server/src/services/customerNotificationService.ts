@@ -56,7 +56,7 @@ export async function notifyCustomerOrderUpdate({
 
   // Check if owner has configured a custom automated message template for this action
   if (restaurantId) {
-    const custom = resolveMessage(restaurantId, `ORDER_${status}`, {
+    const custom = await resolveMessage(restaurantId, `ORDER_${status}`, {
       restaurantName,
       customerName: customerName || 'Valued Customer',
       orderNumber,
@@ -66,7 +66,12 @@ export async function notifyCustomerOrderUpdate({
       deliveryAddress: deliveryAddress ? deliveryAddress.replace(/\s*\[geo:[-\d.]+,\s*[-\d.]+\]/, '') : 'Provided address',
     });
 
-    if (custom) {
+    if (custom && !custom.enabled) {
+      // The owner turned this message off: keep the live tracking update below,
+      // but send no SMS or email.
+      sendEmail = false;
+      sendSms = false;
+    } else if (custom) {
       message = custom.body;
       subject = custom.subject;
       if (custom.channel === 'EMAIL') sendSms = false;

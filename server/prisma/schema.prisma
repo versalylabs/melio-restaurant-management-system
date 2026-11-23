@@ -68,6 +68,7 @@ model Restaurant {
   websiteSettings WebsiteSettings?
   galleryItems WebsiteGalleryItem[]
   testimonials WebsiteTestimonial[]
+  messageTemplates MessageTemplate[]
 
   @@map("restaurants")
 }
@@ -1348,4 +1349,24 @@ model StockTransferItem {
 
   @@unique([transferId, ingredientId])
   @@map("stock_transfer_items")
+}
+
+/// A restaurant's edits to an automated customer message. Only overrides are
+/// stored; anything missing falls back to the built-in default template.
+model MessageTemplate {
+  id           String   @id @default(uuid())
+  restaurantId String
+  action       String
+  enabled      Boolean  @default(true)
+  channel      String   @default("BOTH")
+  subject      String
+  template     String
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, action])
+  @@map("message_templates")
 }
