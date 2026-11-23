@@ -410,6 +410,107 @@ async function run() {
     await prisma.user.update({ where: { id: owner.id }, data: { pinFailedCount: 0, pinLockedUntil: null } });
   });
 
+  console.log('\n--- M-Pesa at the till ---');
+  const freshCode = () => `T${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`.slice(0, 10).padEnd(10, 'X');
+  await test('an M-Pesa payment typed in by staff needs a real-looking code', async () => {
+    const order = (await newOrder()).body.data;
+    const res = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: order.totalAmount });
+    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+  });
+  await test('the same M-Pesa code cannot pay two orders (any letter case)', async () => {
+    const code = freshCode();
+    const first = (await newOrder()).body.data;
+    const ok = await call('POST', `/payments/orders/${first.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: first.totalAmount, reference: code });
+    assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+    const second = (await newOrder()).body.data;
+    const again = await call('POST', `/payments/orders/${second.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: second.totalAmount, reference: code.toLowerCase() });
+    assert.strictEqual(again.status, 409, JSON.stringify(again.body));
+    assert.ok(String(again.body.message).includes(first.orderNumber));
+  });
+  await test('two tills entering the same new code at once: only one is accepted', async () => {
+    const code = freshCode();
+    const a = (await newOrder()).body.data;
+    const b = (await newOrder()).body.data;
+    const results = await Promise.all([
+      call('POST', `/payments/orders/${a.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: a.totalAmount, reference: code }),
+      call('POST', `/payments/orders/${b.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: b.totalAmount, reference: code }),
+    ]);
+    assert.deepStrictEqual(results.map((r) => r.status).sort(), [201, 409]);
+  });
+  // Prompts need Daraja; these tests use the simulated M-Pesa (test mode) for this block only.
+  process.env.PAYMENT_SIMULATION = 'true';
+  await test('staff send a prompt for a bill; Safaricom confirming marks it paid against the cashier', async () => {
+    const order = (await newOrder()).body.data;
+    const sent = await call('POST', `/payments/orders/${order.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678' });
+    assert.strictEqual(sent.status, 201, JSON.stringify(sent.body));
+    const id = sent.body.data.checkoutRequestId;
+    const tooSoon = await call('POST', `/payments/orders/${order.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678' });
+    assert.strictEqual(tooSoon.status, 409, 'a second prompt right away is refused');
+    assert.strictEqual((await call('GET', `/payments/mpesa/${id}`, cashierToken)).body.data.status, 'PENDING');
+    const sim = await call('POST', `/payments/mpesa/${id}/simulate`, cashierToken);
+    assert.strictEqual(sim.status, 200, JSON.stringify(sim.body));
+    const status = (await call('GET', `/payments/mpesa/${id}`, cashierToken)).body.data;
+    assert.strictEqual(status.status, 'SUCCESS');
+    const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+    assert.strictEqual(sale?.paymentStatus, 'PAID');
+    const payment = await prisma.payment.findFirst({ where: { saleId: order.id, status: 'COMPLETED' } });
+    assert.strictEqual(payment?.createdBy, cashier.id, 'counts toward the cashier shift');
+  });
+  await test('a prompt for more than the balance is refused; a part payment splits the bill', async () => {
+    const order = (await newOrder()).body.data;
+    const tooMuch = await call('POST', `/payments/orders/${order.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678', amount: order.totalAmount + 100 });
+    assert.strictEqual(tooMuch.status, 400);
+    const half = Math.floor(order.totalAmount / 2);
+    const sent = await call('POST', `/payments/orders/${order.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678', amount: half });
+    await call('POST', `/payments/mpesa/${sent.body.data.checkoutRequestId}/simulate`, cashierToken);
+    const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+    assert.strictEqual(sale?.paymentStatus, 'PARTIAL');
+  });
+  await test('a prompt paid after the bill was settled is kept and flagged for refund', async () => {
+    const order = (await newOrder()).body.data;
+    const sent = await call('POST', `/payments/orders/${order.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678' });
+    const blocked = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+    assert.strictEqual(blocked.status, 409, 'no other payment while a prompt is on the phone');
+    // Two minutes later the customer still hasn't paid; the cashier takes cash, then the late prompt is paid.
+    await prisma.payment.updateMany({ where: { reference: sent.body.data.checkoutRequestId }, data: { createdAt: new Date(Date.now() - 120_000) } });
+    const cash = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+    assert.strictEqual(cash.status, 201, JSON.stringify(cash.body));
+    await call('POST', `/payments/mpesa/${sent.body.data.checkoutRequestId}/simulate`, cashierToken);
+    const status = (await call('GET', `/payments/mpesa/${sent.body.data.checkoutRequestId}`, cashierToken)).body.data;
+    assert.strictEqual(status.status, 'REFUND_REQUIRED');
+    const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+    assert.ok(Math.abs((sale?.amountPaid || 0) - order.totalAmount) < 0.01, 'the duplicate is not counted as paid');
+  });
+  await test('a receipt typed in by hand is not counted again when the prompt confirms it', async () => {
+    const order = (await newOrder()).body.data;
+    const sent = await call('POST', `/payments/orders/${order.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678' });
+    const id = sent.body.data.checkoutRequestId;
+    await prisma.payment.updateMany({ where: { reference: id }, data: { createdAt: new Date(Date.now() - 120_000) } });
+    const code = freshCode();
+    const manual = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: order.totalAmount, reference: code });
+    assert.strictEqual(manual.status, 201, JSON.stringify(manual.body));
+    // Safaricom now confirms the prompt with the very same receipt.
+    const { settleStaffStkPayment } = require('../services/mpesaService');
+    const pending = await prisma.payment.findFirst({ where: { reference: id } });
+    const out = await settleStaffStkPayment(pending!.id, id, code, order.totalAmount);
+    assert.strictEqual(out.status, 'ALREADY_RECORDED');
+    const completed = await prisma.payment.count({ where: { saleId: order.id, status: 'COMPLETED' } });
+    assert.strictEqual(completed, 1, 'the bill is paid once');
+    assert.strictEqual((await prisma.payment.findUnique({ where: { id: pending!.id } }))?.status, 'CANCELLED');
+  });
+  await test('a part-amount prompt on a website order settles as a till payment', async () => {
+    const { online } = await placeOnlineMpesaOrder();
+    const sale = await prisma.sale.findUnique({ where: { id: online.saleId } });
+    await prisma.payment.updateMany({ where: { saleId: online.saleId, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+    const half = Math.floor(sale!.totalAmount / 2);
+    const sent = await call('POST', `/payments/orders/${online.saleId}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678', amount: half });
+    assert.strictEqual(sent.status, 201, JSON.stringify(sent.body));
+    await call('POST', `/payments/mpesa/${sent.body.data.checkoutRequestId}/simulate`, cashierToken);
+    const after = await prisma.sale.findUnique({ where: { id: online.saleId } });
+    assert.strictEqual(after?.paymentStatus, 'PARTIAL');
+  });
+  delete process.env.PAYMENT_SIMULATION;
+
   server.close();
   await prisma.$disconnect();
   console.log(`\n========================================\nIntegration Results: ${passed} Passed, ${failed} Failed\n========================================`);

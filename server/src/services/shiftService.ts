@@ -20,7 +20,8 @@ const cashSummary = async (shift: any, endAt = new Date()) => {
       restaurantId: shift.restaurantId,
       branchId: shift.branchId,
       createdBy: shift.userId,
-      status: 'COMPLETED',
+      // DUPLICATE: paid twice and awaiting a refund; the money is in the till until then.
+      status: { in: ['COMPLETED', 'DUPLICATE'] },
       createdAt: { gte: shift.openedAt, lte: endAt },
     },
     _sum: { amount: true },
