@@ -3,12 +3,17 @@ import prisma from '../config/database';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { createAuditLog } from '../services/auditLogService';
+import { createKitchenTicketForOrder } from '../services/kitchenService';
+import { reverifyAwaitingPayment } from '../services/mpesaService';
+import { realtimeService } from '../services/realtimeService';
 
 import { safeRouter } from '../utils/safeRouter';
 const router = safeRouter();
 router.use(authenticate);
 const PAYMENT_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'CASHIER'];
 const REFUND_ROLES = ['OWNER', 'ADMIN', 'MANAGER'];
+// Waiters can see an order's payment status and receipt, but not the full payments ledger.
+const ORDER_PAYMENT_VIEW_ROLES = [...PAYMENT_ROLES, 'WAITER'];
 const METHODS = ['CASH', 'CARD', 'MOBILE_MONEY'];
 
 async function syncPaymentState(tx: any, saleId: string) {
@@ -37,7 +42,7 @@ async function ensureReceipt(tx: any, sale: any) {
   return tx.receipt.create({ data: { restaurantId: sale.restaurantId, branchId: sale.branchId, saleId: sale.id, receiptNumber: `R-${String(next).padStart(6, '0')}` } });
 }
 
-router.get('/', async (req: AuthRequest, res) => {
+router.get('/', authorize(...PAYMENT_ROLES), async (req: AuthRequest, res) => {
   try {
     const search = String(req.query.search || '').trim();
     const method = String(req.query.method || '').trim();
@@ -51,8 +56,17 @@ router.get('/', async (req: AuthRequest, res) => {
   } catch (e) { console.error(e); return sendError(res, 'Unable to load payments.', undefined, 500); }
 });
 
-router.get('/order/:orderId', async (req: AuthRequest, res) => {
+router.get('/order/:orderId', authorize(...ORDER_PAYMENT_VIEW_ROLES), async (req: AuthRequest, res) => {
   try {
+    // M-Pesa payments whose callback couldn't be verified with Safaricom at the
+    // time are re-checked here, so they settle even if the customer closed the page.
+    const awaiting = await prisma.payment.findMany({
+      where: { saleId: req.params.orderId, restaurantId: req.user!.restaurantId, method: 'MOBILE_MONEY', status: 'PENDING', notes: { contains: '[AWAITING_VERIFICATION' } },
+      select: { reference: true },
+    });
+    for (const p of awaiting) {
+      if (p.reference) await reverifyAwaitingPayment(p.reference).catch((err) => console.error('M-Pesa re-verification failed:', err));
+    }
     const sale = await prisma.sale.findFirst({ where: { id: req.params.orderId, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) }, include: { payments: { orderBy: { createdAt: 'desc' } }, receipt: true, items: true, branch: true, customer: true } });
     if (!sale) return sendError(res, 'Order not found', undefined, 404);
     const paid = sale.payments.filter((p: any) => p.status === 'COMPLETED').reduce((s: number, p: any) => s + p.amount, 0);
@@ -103,8 +117,24 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
       const state = await syncPaymentState(tx, sale.id);
       let receipt = null;
       if (state.paymentStatus === 'PAID') receipt = await ensureReceipt(tx, sale);
-      return { payment, ...state, receipt, orderNumber: sale.orderNumber };
+      return { payment, ...state, receipt, orderNumber: sale.orderNumber, saleId: sale.id, branchId: sale.branchId };
     });
+
+    // Prepaid website orders are held back from the kitchen until paid. If staff
+    // take the payment instead (e.g. the customer pays at the counter), release
+    // the order to the kitchen now. Idempotent if a ticket already exists.
+    const online = await prisma.onlineOrder.findUnique({ where: { saleId: result.saleId }, select: { id: true } });
+    if (online) {
+      try {
+        const existingTicket = await prisma.kitchenTicket.findFirst({ where: { orderId: result.saleId }, select: { id: true } });
+        await createKitchenTicketForOrder(result.saleId, req.user!.restaurantId, result.branchId);
+        if (!existingTicket) {
+          realtimeService.broadcast(`kitchen:${result.branchId}`, 'ticket_created', { orderId: result.saleId, orderNumber: result.orderNumber, placedAt: new Date().toISOString() });
+        }
+      } catch (err) {
+        console.error('Kitchen ticket creation after staff payment failed:', err);
+      }
+    }
 
     await createAuditLog(req.user!.restaurantId, req.user!.id, 'CREATE', 'Payment', result.payment.id, `Recorded ${method} payment of KES ${requested.toFixed(2)} for ${result.orderNumber}`);
     return sendResponse(res, true, 'Payment recorded', result, 201);
@@ -141,7 +171,7 @@ router.post('/:id/refund', authorize(...REFUND_ROLES), async (req: AuthRequest, 
   }
 });
 
-router.get('/orders/:orderId/receipt', async (req: AuthRequest, res) => {
+router.get('/orders/:orderId/receipt', authorize(...ORDER_PAYMENT_VIEW_ROLES), async (req: AuthRequest, res) => {
   try {
     const result = await prisma.$transaction(async (tx) => {
       const sale = await tx.sale.findFirst({ where: { id: req.params.orderId, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) }, include: { items: true, payments: { where: { status: 'COMPLETED' }, orderBy: { createdAt: 'asc' } }, receipt: true, branch: true, customer: true } });

@@ -31,7 +31,7 @@ npm run dev
 
 Then test the following end-to-end:
 
-1. Sign in with `owner@example.com` / `melio@2026`.
+1. Sign in with `owner@example.com` / the password you set in `SEED_USER_PASSWORD`.
 2. Select **Melio - Moi Avenue (MA)** in the top branch selector.
 3. Open POS, add several items, and verify the cart remains readable while the discount/total area is visible.
 4. Submit an order and confirm it appears in Orders.

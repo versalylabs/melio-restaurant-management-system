@@ -34,7 +34,15 @@ api.interceptors.request.use((config) => {
     config.url?.startsWith('/public') ||
     config.url?.startsWith('/orders/public');
 
-  if (config.url?.startsWith('/customer') && !isPublicEndpoint && customerToken) {
+  // Website orders and bookings carry the customer's session (if signed in) so
+  // they are linked to the customer's own account rather than matched by phone.
+  const isCustomerCheckout =
+    config.method?.toLowerCase() === 'post' &&
+    (config.url === '/public/orders' || config.url === '/public/reservations');
+
+  if (isCustomerCheckout && customerToken) {
+    config.headers.Authorization = `Bearer ${customerToken}`;
+  } else if (config.url?.startsWith('/customer') && !isPublicEndpoint && customerToken) {
     config.headers.Authorization = `Bearer ${customerToken}`;
   } else if (!isPublicEndpoint && staffToken) {
     config.headers.Authorization = `Bearer ${staffToken}`;
@@ -394,13 +402,12 @@ export const publicPaymentsApi = {
     api.post('/public/payments/mpesa/confirm', data),
   getMpesaStatus: (checkoutRequestId: string) =>
     api.get(`/public/payments/mpesa/status/${checkoutRequestId}`),
+  getConfig: () => api.get('/public/payments/config'),
+  // Only the last 4 digits are ever sent; full card numbers/CVCs must not reach our server.
   processCardPayment: (data: {
     trackingToken: string;
-    cardNumber?: string;
-    cardExp?: string;
-    cardCvc?: string;
+    cardLast4?: string;
     cardName?: string;
-    amount?: number;
   }) => api.post('/public/payments/card/process', data),
   getRecentNotifications: () => cachedGet('/public/payments/notifications/recent'),
 };

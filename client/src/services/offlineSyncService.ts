@@ -37,6 +37,7 @@ export interface OfflineOrder {
   subtotal: number;
   discountAmount: number;
   discountType?: 'FIXED' | 'PERCENTAGE';
+  promotionId?: string;
   discountReason?: string;
   taxAmount: number;
   serviceChargeAmount: number;

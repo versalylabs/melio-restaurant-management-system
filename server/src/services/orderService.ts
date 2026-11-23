@@ -1,4 +1,5 @@
 import prisma from '../config/database';
+import { manualDiscountError } from '../utils/discountPolicy';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
@@ -299,12 +300,13 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     }
   }
   const role = await prisma.role.findUnique({ where: { id: req.user!.roleId }, select: { maxDiscountPercent: true, maxDiscountAmount: true } });
-  if (!promotion && Number(discountAmount || 0) > 0) {
-    const isPct = req.body.discountType === 'PERCENTAGE';
-    const numDisc = Number(discountAmount);
-    if (!Number.isFinite(numDisc) || numDisc < 0) return sendError(res, 'Invalid discount amount');
-    if (isPct && numDisc > (role?.maxDiscountPercent ?? 100)) return sendError(res, 'Discount percentage exceeds your approval limit');
-    if (!isPct && numDisc > (role?.maxDiscountAmount ?? 1000000)) return sendError(res, 'Discount amount exceeds your approval limit');
+  if (!promotion && Number(discountAmount || 0) !== 0) {
+    const discountError = manualDiscountError(req.user!.roleName, role, {
+      type: req.body.discountType === 'PERCENTAGE' ? 'PERCENTAGE' : 'FIXED',
+      value: Number(discountAmount),
+      subtotal: baseSubtotal,
+    });
+    if (discountError) return sendError(res, discountError, undefined, 403);
   }
   const calculationInput: OrderCalculationInput = {
     items: normalizedItems,
@@ -539,10 +541,17 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     }
     const role = await prisma.role.findUnique({ where: { id: req.user!.roleId }, select: { maxDiscountPercent: true, maxDiscountAmount: true } });
     const requestedDiscount = discountAmount !== undefined ? Number(discountAmount || 0) : Number(existing.discountAmount || 0);
-    if (!promotion && requestedDiscount > 0) {
-      const isPct = req.body.discountType === 'PERCENTAGE';
-      if (isPct && requestedDiscount > (role?.maxDiscountPercent ?? 100)) return sendError(res, 'Discount exceeds your approval limit');
-      if (!isPct && requestedDiscount > (role?.maxDiscountAmount ?? 1000000)) return sendError(res, 'Discount exceeds your approval limit');
+    // Only a discount the editor sets now needs their approval. A discount
+    // already on the order (e.g. approved by a manager) is inherited, as long
+    // as this edit doesn't make it bigger in KES.
+    const discountChanged = discountAmount !== undefined || req.body.discountType !== undefined;
+    if (!promotion && discountChanged && requestedDiscount !== 0) {
+      const type = req.body.discountType === 'PERCENTAGE' ? 'PERCENTAGE' : 'FIXED';
+      const newKes = type === 'PERCENTAGE' ? (baseSubtotal * requestedDiscount) / 100 : requestedDiscount;
+      const increases = newKes > Number(existing.discountAmount || 0) + 0.005;
+      const invalid = !Number.isFinite(requestedDiscount) || requestedDiscount < 0 || (type === 'PERCENTAGE' && requestedDiscount > 100);
+      const discountError = manualDiscountError(req.user!.roleName, role, { type, value: requestedDiscount, subtotal: baseSubtotal });
+      if (discountError && (increases || invalid)) return sendError(res, discountError, undefined, invalid ? 400 : 403);
     }
     if (promotionId !== undefined) {
       updateData.promotion = promotionId
@@ -1074,29 +1083,48 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
         errors.push({ offlineId, error: 'Invalid discount amount' });
         continue;
       }
-      if (requestedDiscount > 0) {
-        const overLimit = discountType === 'PERCENTAGE'
-          ? requestedDiscount > (role?.maxDiscountPercent ?? 100)
-          : requestedDiscount > (role?.maxDiscountAmount ?? 1000000);
-        if (overLimit) {
-          errors.push({ offlineId, error: 'Discount exceeds your approval limit — a manager must re-enter this order' });
+      let customerId: string | undefined;
+      if (offlineOrder.customerId) {
+        const customer = await prisma.customer.findFirst({ where: { id: String(offlineOrder.customerId), restaurantId }, select: { id: true } });
+        customerId = customer?.id;
+      }
+
+      // A promotion is re-validated on the server; it replaces any manual discount.
+      let offlinePromotion: any = undefined;
+      if (offlineOrder.promotionId) {
+        const offlineSubtotal = normalizedItems.reduce(
+          (sum: number, item: any) => sum + (item.unitPrice + item.modifiers.reduce((m: number, mod: any) => m + (mod.priceAdjustment || 0), 0)) * item.quantity,
+          0,
+        );
+        try {
+          offlinePromotion = await validatePromotion(String(offlineOrder.promotionId), restaurantId, branchId, customerId, offlineSubtotal);
+        } catch (promoErr: any) {
+          errors.push({ offlineId, error: `Promotion no longer valid: ${promoErr?.message || 'invalid promotion'}` });
           continue;
         }
       }
 
       const totals = await calculateOrderTotals({
         items: normalizedItems,
-        discountAmount: requestedDiscount,
+        discountAmount: offlinePromotion ? 0 : requestedDiscount,
         discountType,
         restaurantId,
         branchId,
+        promotion: offlinePromotion ? { discountType: offlinePromotion.discountType, value: offlinePromotion.value, scope: offlinePromotion.scope, menuItemId: offlinePromotion.menuItemId, maxDiscountAmount: offlinePromotion.maxDiscountAmount } : undefined,
       });
 
-      let customerId: string | undefined;
-      if (offlineOrder.customerId) {
-        const customer = await prisma.customer.findFirst({ where: { id: String(offlineOrder.customerId), restaurantId }, select: { id: true } });
-        customerId = customer?.id;
+      if (!offlinePromotion && requestedDiscount > 0) {
+        const discountError = manualDiscountError(req.user!.roleName, role, {
+          type: discountType,
+          value: requestedDiscount,
+          subtotal: totals.subtotal,
+        });
+        if (discountError) {
+          errors.push({ offlineId, error: 'Discount exceeds your approval limit. A manager must re-enter this order.' });
+          continue;
+        }
       }
+
 
       const parsedCreatedAt = offlineOrder.createdAt ? new Date(offlineOrder.createdAt) : null;
       const createdAt = parsedCreatedAt && !Number.isNaN(parsedCreatedAt.getTime()) && parsedCreatedAt.getTime() <= Date.now()
@@ -1145,7 +1173,8 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
             status: finalStatus,
             subtotal: totals.subtotal,
             discountAmount: totals.discountAmount,
-            discountReason: totals.discountAmount > 0 ? (offlineOrder.discountReason ? String(offlineOrder.discountReason).trim() : 'Offline Discount') : null,
+            discountReason: totals.discountAmount > 0 ? (offlinePromotion ? `Promotion: ${offlinePromotion.name}` : (offlineOrder.discountReason ? String(offlineOrder.discountReason).trim() : 'Offline Discount')) : null,
+            ...(offlinePromotion ? { promotion: { connect: { id: offlinePromotion.id } } } : {}),
             discountAppliedBy: totals.discountAmount > 0 ? userId : null,
             taxAmount: totals.taxAmount,
             serviceChargeAmount: totals.serviceChargeAmount,

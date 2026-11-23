@@ -96,11 +96,19 @@ router.get('/public/track/:trackingToken', async (req: Request, res: Response) =
 
 // Public Live Reservation Status Stream
 router.get('/public/reservations/:reference', async (req: Request, res: Response) => {
-  const reference = String(req.params.reference || '').trim();
-  if (!reference) {
-    res.status(400).json({ success: false, message: 'Reference required' });
+  // Requires the full reservation ID (random UUID). The short RES-XXXXXX code
+  // is guessable and would let anyone follow strangers' bookings.
+  const reservationId = String(req.params.reference || '').trim();
+  if (!/^[0-9a-f-]{36}$/i.test(reservationId)) {
+    res.status(400).json({ success: false, message: 'Valid reservation ID required' });
     return;
   }
+  const reservation = await prisma.reservation.findUnique({ where: { id: reservationId }, select: { id: true } });
+  if (!reservation) {
+    res.status(404).json({ success: false, message: 'Reservation not found' });
+    return;
+  }
+  const reference = `RES-${reservation.id.slice(-6).toUpperCase()}`;
 
   const clientId = `guest-res-${reference}-${crypto.randomBytes(4).toString('hex')}`;
   const channels = [

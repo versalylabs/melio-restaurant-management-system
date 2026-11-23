@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { escapeHtml } from '../../lib/utils';
 import { Clock, Play, CheckCircle, AlertTriangle, Printer, Flag, WifiOff, RefreshCw } from 'lucide-react';
 import { kitchenApi, branchApi } from '../../services/api';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
@@ -266,7 +267,6 @@ export default function KitchenDisplay() {
   </div>;
 }
 
-function escapeHtml(value: string): string { return value.replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c] || c)); }
 
 function TicketCard({ ticket, selectedStation, onAction, onView, onPrint, updating }: { ticket: KitchenTicket; selectedStation: string; onAction: () => void; onView: () => void; onPrint: () => void; updating: boolean }) {
   const visibleItems = selectedStation ? ticket.items.filter(i => (i.stationIds || []).includes(selectedStation) || (ticket.stationIds || []).includes(selectedStation)) : ticket.items;

@@ -1,4 +1,5 @@
 import prisma from '../config/database';
+import { safeErrorMessage } from '../utils/safeError';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
@@ -163,6 +164,6 @@ export const getDashboardMetrics = async (req: AuthRequest, res: ExpressResponse
     });
   } catch (err: any) {
     console.error('getDashboardMetrics error:', err);
-    return sendError(res, err.message || 'Failed to load dashboard', undefined, 500);
+    return sendError(res, safeErrorMessage(err, 'Failed to load dashboard'), undefined, 500);
   }
 };

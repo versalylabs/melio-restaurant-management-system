@@ -41,7 +41,7 @@ npm run db:migrate
 npm run db:seed
 ```
 
-The seed creates/updates the demo restaurant as **Melio**, creates the third **Moi Avenue, Nairobi** branch, makes all seeded demo staff passwords `melio@2026`, and makes menu items available at the new branch.
+The seed creates/updates the demo restaurant as **Melio**, creates the third **Moi Avenue, Nairobi** branch, makes all seeded demo staff passwords the password you set in `SEED_USER_PASSWORD`, and makes menu items available at the new branch.
 
 Demo staff emails are:
 - `owner@example.com`

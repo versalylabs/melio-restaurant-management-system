@@ -269,10 +269,39 @@ export async function handleMpesaCallback(body: StkCallbackBody, token: unknown)
     return { handled: false, reason: 'amount/receipt mismatch' };
   }
 
-  if ((await queryStkResult(checkoutRequestId)) === 'FAILED') {
+  // The callback alone is never trusted: Safaricom must confirm the request
+  // succeeded. If Daraja can't be reached right now, the payment stays PENDING
+  // with the callback details recorded, and is re-verified the next time the
+  // order's payment status is checked (see getMpesaStatus).
+  const verification = await queryStkResult(checkoutRequestId);
+  if (verification === 'FAILED') {
     console.error(`[M-Pesa] Callback for ${checkoutRequestId} claims success but Daraja query disagrees. Ignoring.`);
     return { handled: false, reason: 'verification failed' };
   }
+  if (verification === 'UNKNOWN') {
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: { notes: `${(payment.notes || '').replace(AWAITING_VERIFICATION_RE, '').trim()} ${awaitingVerificationTag(receipt, paidAmount)}`.trim() },
+    });
+    console.warn(`[M-Pesa] Could not verify ${checkoutRequestId} with Daraja yet; left pending for re-verification.`);
+    return { handled: false, reason: 'awaiting verification' };
+  }
+
+  return settleVerifiedStkPayment(payment.id, online, checkoutRequestId, receipt, paidAmount);
+}
+
+const AWAITING_VERIFICATION_RE = /\[AWAITING_VERIFICATION receipt=([A-Z0-9]+) amount=([0-9.]+)\]/i;
+const awaitingVerificationTag = (receipt: string, amount: number) => `[AWAITING_VERIFICATION receipt=${receipt.replace(/[^A-Za-z0-9]/g, '').toUpperCase()} amount=${amount}]`;
+
+async function settleVerifiedStkPayment(
+  paymentId: string,
+  online: { id: string; trackingToken: string; paymentState: string },
+  checkoutRequestId: string,
+  receipt: string,
+  paidAmount: number,
+) {
+  const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+  if (!payment) return { handled: false, reason: 'payment not found' };
 
   if (online.paymentState === 'PAID') {
     // Customer paid twice (e.g. retried STK push). Keep a record so staff can refund it.
@@ -318,7 +347,25 @@ export async function confirmSimulatedMpesaPayment(checkoutRequestId: string) {
   return { success: true, paymentState: 'PAID', receiptNumber: receipt, amount: payment.amount };
 }
 
+/**
+ * Re-verifies a payment whose callback arrived while Daraja's status query was
+ * unavailable. Safe to call repeatedly; does nothing unless the payment is
+ * pending with recorded callback details. Called when the customer's tracking
+ * page polls the status, and when staff open the order's payment details.
+ */
+export async function reverifyAwaitingPayment(checkoutRequestId: string) {
+  const payment = await findPendingStkPayment(checkoutRequestId);
+  const online = payment?.sale.onlineOrder;
+  const match = payment?.notes?.match(AWAITING_VERIFICATION_RE);
+  if (!payment || !online || !match) return;
+  if ((await queryStkResult(checkoutRequestId)) !== 'SUCCESS') return;
+  await settleVerifiedStkPayment(payment.id, online, checkoutRequestId, match[1], Number(match[2]));
+}
+
 export async function getMpesaStatus(checkoutRequestId: string) {
+  if (!checkoutRequestId.startsWith('SIM_')) {
+    try { await reverifyAwaitingPayment(checkoutRequestId); } catch (err) { console.error('[M-Pesa] Re-verification failed:', err); }
+  }
   const payment = await prisma.payment.findFirst({
     where: {
       method: 'MOBILE_MONEY',

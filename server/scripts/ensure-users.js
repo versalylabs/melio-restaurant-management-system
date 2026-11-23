@@ -3,7 +3,25 @@ const bcrypt = require('bcryptjs');
 
 const prisma = new PrismaClient();
 
+// Creates/resets the demo staff accounts (owner@example.com etc.).
+// This must never run against a live restaurant: anyone who knows these
+// e-mail addresses could sign in. It refuses to run in production, and it
+// requires the password to be supplied explicitly (no built-in default).
+const DEMO_PASSWORD = process.env.DEMO_USER_PASSWORD || '';
+
+function assertSafeToRun() {
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production') {
+    console.error('Refusing to create demo staff accounts in production.');
+    process.exit(1);
+  }
+  if (DEMO_PASSWORD.length < 8) {
+    console.error('Set DEMO_USER_PASSWORD (at least 8 characters) to choose the demo staff password.');
+    process.exit(1);
+  }
+}
+
 async function ensureUsers() {
+  assertSafeToRun();
   const restaurant = await prisma.restaurant.findFirst();
   if (!restaurant) {
     console.error('No restaurant found!');
@@ -11,7 +29,7 @@ async function ensureUsers() {
   }
 
   const branch = await prisma.branch.findFirst({ where: { restaurantId: restaurant.id } });
-  const hash = await bcrypt.hash('melio@2026', 12);
+  const hash = await bcrypt.hash(DEMO_PASSWORD, 12);
 
   // Ensure default roles exist
   const roleNames = ['OWNER', 'MANAGER', 'CASHIER', 'WAITER', 'CHEF', 'DELIVERY'];
@@ -19,14 +37,8 @@ async function ensureUsers() {
   for (const name of roleNames) {
     let r = await prisma.role.findFirst({ where: { name } });
     if (!r) {
-      r = await prisma.role.create({
-        data: {
-          name,
-          description: `${name} role`,
-          isSystem: true,
-          permissions: JSON.stringify(['*']),
-        },
-      });
+      console.error(`Role ${name} does not exist. Run the seed (npm run db:seed) first.`);
+      process.exit(1);
     }
     roleMap[name] = r.id;
   }

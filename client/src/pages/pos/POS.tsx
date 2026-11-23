@@ -391,8 +391,11 @@ export default function POS() {
         modifiers: item.modifiers,
       })),
       subtotal: totals.subtotal,
-      discountAmount: totals.discount,
+      // Same shape as an online order: the raw manual discount (KES or %), or a
+      // promotion ID the server re-validates. Totals are re-priced on sync.
+      discountAmount: selectedPromotionId ? 0 : Number(manualDiscount || 0),
       discountType: selectedPromotionId ? 'FIXED' : manualDiscountType,
+      promotionId: selectedPromotionId || undefined,
       discountReason: selectedPromotionId ? 'Promotion' : undefined,
       taxAmount: totals.tax,
       serviceChargeAmount: totals.service,

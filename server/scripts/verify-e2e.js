@@ -96,7 +96,7 @@ async function run() {
   const tokens = {};
   for (const role of roles) {
     const email = `${role}@example.com`;
-    const res = await postJson('/api/auth/login', { email, password: 'melio@2026' });
+    const res = await postJson('/api/auth/login', { email, password: process.env.DEMO_USER_PASSWORD || process.env.SEED_USER_PASSWORD });
     if (res.status === 200 && res.data?.data?.token) {
       console.log(`[E2E Test] ✓ Login ${email} (${res.data.data.user.role}) OK`);
       tokens[role] = res.data.data.token;

@@ -15,13 +15,11 @@ export const login = async (email: string, password: string) => {
     },
   });
 
-  if (!user || user.status !== 'ACTIVE') {
-    throw new Error('Invalid credentials or inactive account');
-  }
-
-  const isValid = await comparePassword(password, user.passwordHash);
-  if (!isValid) {
-    throw new Error('Invalid credentials');
+  // Same message for unknown e-mail, wrong password and inactive account, so
+  // the login form can't be used to discover which staff e-mails exist.
+  const isValid = user ? await comparePassword(password, user.passwordHash) : false;
+  if (!user || !isValid || user.status !== 'ACTIVE') {
+    throw new Error('Invalid email or password');
   }
 
   await prisma.user.update({

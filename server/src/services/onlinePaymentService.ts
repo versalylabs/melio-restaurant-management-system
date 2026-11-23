@@ -1,6 +1,7 @@
 import prisma from '../config/database';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
+import { createKitchenTicketForOrder } from './kitchenService';
 
 /**
  * Simulated payments (fake M-Pesa receipts, fake card approvals, manual
@@ -94,6 +95,20 @@ export async function settleOnlinePayment(input: SettleOnlinePaymentInput) {
     include: { sale: true, restaurant: true },
   });
   if (online) {
+    // Prepaid online orders are held back from the kitchen until paid.
+    // createKitchenTicketForOrder is idempotent (returns the existing ticket).
+    if (online.paymentMethod !== 'CASH') {
+      try {
+        await createKitchenTicketForOrder(online.saleId, online.restaurantId, online.branchId);
+        realtimeService.broadcast(`kitchen:${online.branchId}`, 'ticket_created', {
+          orderId: online.saleId,
+          orderNumber: online.sale.orderNumber,
+          placedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error('[Payments] Kitchen ticket creation failed after payment; it is retried when staff record a payment:', err);
+      }
+    }
     realtimeService.broadcast(`order-tracking:${online.trackingToken}`, 'payment_confirmed', {
       trackingToken: online.trackingToken,
       status: 'PAID',

@@ -8,6 +8,7 @@ import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate, notifyCustomerReservation } from './customerNotificationService';
 import { isPaymentSimulationEnabled, settleOnlinePayment } from './onlinePaymentService';
 import { sendError, sendResponse } from '../utils/response';
+import { resolvePublicCustomer } from './customerAuthService';
 import { Request, Response } from 'express';
 
 const PAYMENT_METHODS = ['CASH', 'CARD', 'MOBILE_MONEY'];
@@ -78,6 +79,7 @@ export const createPublicOrder = async (req: Request, res: Response) => {
   if (!FULFILLMENT_TYPES.includes(fulfillmentType)) return sendError(res, 'Invalid fulfillment type');
   if (fulfillmentType === 'DELIVERY' && !deliveryAddress) return sendError(res, 'Delivery address is required');
   if (!PAYMENT_METHODS.includes(paymentMethod)) return sendError(res, 'Invalid payment method');
+  if (paymentMethod === 'CARD' && !isPaymentSimulationEnabled()) return sendError(res, 'Card payments are not available yet. Please choose M-Pesa or pay on pickup/delivery.');
   if (!items.length) return sendError(res, 'Your cart is empty');
 
   const branch = await prisma.branch.findFirst({ where: { id: branchId, restaurantId, status: 'ACTIVE' } });
@@ -94,12 +96,9 @@ export const createPublicOrder = async (req: Request, res: Response) => {
   if (menuItems.length !== menuItemIds.length) return sendError(res, 'One or more menu items are no longer available');
   const menuMap = new Map(menuItems.map((item) => [item.id, item]));
 
-  let customer = await prisma.customer.findFirst({ where: { restaurantId, OR: [ ...(contactPhone ? [{ phone: contactPhone }] : []), ...(contactEmail ? [{ email: contactEmail }] : []) ] } });
-  if (!customer) {
-    customer = await prisma.customer.create({ data: { restaurantId, name: customerName, phone: contactPhone || null, email: contactEmail || null, address: deliveryAddress || null, notes: 'Created from online ordering', status: 'ACTIVE' } });
-  } else {
-    customer = await prisma.customer.update({ where: { id: customer.id }, data: { name: customerName || customer.name, ...(contactPhone ? { phone: contactPhone } : {}), ...(contactEmail ? { email: contactEmail } : {}), ...(deliveryAddress ? { address: deliveryAddress } : {}) } });
-  }
+  // Order contact details (name, phone, address) are stored on the order itself;
+  // the customer record is only linked, never overwritten from a public form.
+  const customer = await resolvePublicCustomer(req, restaurantId, { name: customerName, phone: contactPhone, email: contactEmail, address: deliveryAddress, notes: 'Created from online ordering' });
 
   let promotion: any = undefined;
   let promotionId: string | undefined;
@@ -148,7 +147,18 @@ export const createPublicOrder = async (req: Request, res: Response) => {
     return order;
   });
 
-  await createKitchenTicketForOrder(result.id, restaurantId, branchId);
+  // Pay-on-pickup/delivery orders go to the kitchen now. Prepaid (M-Pesa/card)
+  // orders go to the kitchen once the payment is confirmed (settleOnlinePayment),
+  // so unpaid or fake orders never reach the cooks.
+  const sendToKitchenNow = paymentMethod === 'CASH';
+  if (sendToKitchenNow) {
+    try {
+      await createKitchenTicketForOrder(result.id, restaurantId, branchId);
+    } catch (err) {
+      // The order is saved; failing here would make the customer retry and duplicate it.
+      console.error('[Online order] Kitchen ticket creation failed; it is retried when staff record a payment:', err);
+    }
+  }
   // Notifications are best-effort and must never hold the customer's checkout response.
   void notifyRestaurantStaff(restaurantId, branchId, 'ONLINE_ORDER', 'New online order', `Order #${result.orderNumber} was placed online.`, 'SALE', result.id).catch((err) => console.error('Online order staff notification failed:', err));
 
@@ -162,11 +172,13 @@ export const createPublicOrder = async (req: Request, res: Response) => {
     placedAt: new Date().toISOString(),
   });
 
-  realtimeService.broadcast(`kitchen:${branchId}`, 'ticket_created', {
-    orderId: result.id,
-    orderNumber: result.orderNumber,
-    placedAt: new Date().toISOString(),
-  });
+  if (sendToKitchenNow) {
+    realtimeService.broadcast(`kitchen:${branchId}`, 'ticket_created', {
+      orderId: result.id,
+      orderNumber: result.orderNumber,
+      placedAt: new Date().toISOString(),
+    });
+  }
 
   // Dispatch customer SMS / Email notification & tracking event
   const restaurantRecord = await prisma.restaurant.findUnique({ where: { id: restaurantId }, select: { name: true } });
@@ -270,22 +282,8 @@ export const createPublicReservation = async (req: Request, res: Response) => {
   if (Number.isNaN(startAt.getTime())) return sendError(res, 'Invalid reservation date or time format');
   const endAt = new Date(startAt.getTime() + durationMinutes * 60000);
 
-  // Link or create customer
-  let customer = await prisma.customer.findFirst({
-    where: { restaurantId: effectiveRestaurantId, OR: [...(phone ? [{ phone }] : []), ...(email ? [{ email }] : [])] },
-  });
-  if (!customer) {
-    customer = await prisma.customer.create({
-      data: {
-        restaurantId: effectiveRestaurantId,
-        name: customerName,
-        phone: phone || null,
-        email: email || null,
-        notes: 'Created via Online Table Reservation',
-        status: 'ACTIVE',
-      },
-    });
-  }
+  // Link to the signed-in customer, or to a guest profile (never a registered account).
+  const customer = await resolvePublicCustomer(req, effectiveRestaurantId, { name: customerName, phone, email, notes: 'Created via Online Table Reservation' });
 
   // System user for creator
   let systemUser = await prisma.user.findFirst({
@@ -430,26 +428,35 @@ export const getPublicReservationTracking = async (req: Request, res: Response) 
   const codeOrId = String(req.params.codeOrId || '').trim();
   if (!codeOrId) return sendError(res, 'Reservation code or ID required');
 
+  const include = {
+    restaurant: { select: { name: true, phone: true } },
+    branch: { select: { name: true, address: true, phone: true, city: true } },
+    table: { select: { tableNumber: true } },
+  };
+
+  // Two ways to look a booking up:
+  //  - the full reservation ID (a random UUID, returned when it was created), or
+  //  - the short code (RES-XXXXXX) together with the phone/e-mail used to book.
+  // A short code alone is guessable, so it is never enough on its own.
   let reservation = null;
-  if (codeOrId.startsWith('RES-')) {
-    const partialId = codeOrId.replace('RES-', '').toLowerCase();
-    const matches = await prisma.reservation.findMany({
-      where: { id: { endsWith: partialId } },
-      include: {
-        restaurant: { select: { name: true, phone: true } },
-        branch: { select: { name: true, address: true, phone: true, city: true } },
-        table: { select: { tableNumber: true } },
-      },
+  if (/^RES-[0-9A-F]{6}$/i.test(codeOrId)) {
+    const contact = String(req.query.contact || '').trim().toLowerCase();
+    const contactDigits = contact.replace(/\D/g, '');
+    if (!contact) return sendError(res, 'Enter the phone number or e-mail used for the booking', undefined, 400);
+    const candidates = await prisma.reservation.findMany({
+      where: { id: { endsWith: codeOrId.slice(4).toLowerCase() } },
+      include,
+      take: 20,
     });
-    reservation = matches[0] || null;
-  } else {
+    const phoneMatches = (stored?: string | null) => {
+      const digits = (stored || '').replace(/\D/g, '');
+      return contactDigits.length >= 9 && digits.length >= 9 && digits.slice(-9) === contactDigits.slice(-9);
+    };
+    reservation = candidates.find((r) => (r.email && r.email.toLowerCase() === contact) || phoneMatches(r.phone)) || null;
+  } else if (/^[0-9a-f-]{36}$/i.test(codeOrId)) {
     reservation = await prisma.reservation.findUnique({
       where: { id: codeOrId },
-      include: {
-        restaurant: { select: { name: true, phone: true } },
-        branch: { select: { name: true, address: true, phone: true, city: true } },
-        table: { select: { tableNumber: true } },
-      },
+      include,
     });
   }
 
