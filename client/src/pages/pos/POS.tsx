@@ -4,6 +4,7 @@ import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Cl
 import { orderApi, customerApi, promotionApi, restaurantApi, branchApi } from '../../services/api';
 import type { PosCategory, PosMenuItem, PosTable, SaleItem, SaleItemModifier } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
+import { isApprovalCancelled, withApproval } from '../../lib/approval';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
@@ -90,6 +91,15 @@ export default function POS() {
   const [serviceChargeRate, setServiceChargeRate] = useState(0);
   const [selectedCustomerId, setSelectedCustomerId] = useState(() => draft?.selectedCustomerId ?? '');
   const [orderNotes, setOrderNotes] = useState(() => draft?.orderNotes ?? '');
+  // Who served the table. Waiters are recorded automatically; cashiers and
+  // managers ringing up for a waiter pick them here.
+  const [servedBy, setServedBy] = useState('');
+  const [staff, setStaff] = useState<{ id: string; name: string; role: string }[]>([]);
+  const picksServer = !!user && user.roleName !== 'WAITER';
+  useEffect(() => {
+    if (!picksServer) return;
+    orderApi.getPosStaff().then((r) => setStaff(r.data.data?.staff || [])).catch(() => setStaff([]));
+  }, [picksServer, user?.id]);
   const [showModifierModal, setShowModifierModal] = useState(false);
   const [modifierError, setModifierError] = useState('');
   const [showTableModal, setShowTableModal] = useState(false);
@@ -520,6 +530,7 @@ export default function POS() {
     setSubmitting(true);
     // Same ID for every retry of this cart, and for the offline queue fallback.
     const requestId = requestIdFor('SUBMITTED');
+    let approvedOnce = false;
     if (!navigator.onLine) {
       try {
         await queueOrderLocally('SUBMITTED', requestId);
@@ -532,8 +543,11 @@ export default function POS() {
     }
 
     try {
-      const response = await orderApi.createOrder({
+      // A discount above this person's limit opens the manager PIN dialog.
+      const response = await withApproval((approval) => { approvedOnce = !!approval; return orderApi.createOrder({
         clientRequestId: requestId,
+        approval,
+        servedBy: picksServer ? servedBy || undefined : undefined,
         orderType,
         tableId: selectedTable?.id,
         customerName: customerName || undefined,
@@ -555,13 +569,13 @@ export default function POS() {
             priceAdjustment: m.priceAdjustment,
           })),
         })),
-      });
+      }); });
 
       if (response.data.success) {
         const orderNum = response.data.data?.orderNumber || 'New';
         setSuccessMessage(`Order #${orderNum} submitted to kitchen!`);
         setTimeout(() => setSuccessMessage(''), 4000);
-        setCart([]);
+        setCart([]); setServedBy('');
         setCustomerName('');
         setSelectedCustomerId('');
         setOrderNotes('');
@@ -571,7 +585,14 @@ export default function POS() {
         fetchData();
       }
     } catch (err: any) {
-      if (!navigator.onLine || !err.response || err.code === 'ERR_NETWORK') {
+      if (isApprovalCancelled(err)) {
+        setError('Not sent. Lower the discount, or ask a manager to approve it.');
+      } else if (approvedOnce && (!navigator.onLine || !err.response || err.code === 'ERR_NETWORK')) {
+        // The offline queue can't carry a manager's approval, so it would be
+        // refused on sync after the kitchen flow had moved on. Send it again
+        // online instead (same request id: never a duplicate).
+        setError('The connection dropped while sending this approved order. Check the connection and press Send again.');
+      } else if (!navigator.onLine || !err.response || err.code === 'ERR_NETWORK') {
         try {
           // The request may have reached the server before the connection
           // dropped; the shared requestId makes the later sync a no-op if so.
@@ -612,6 +633,7 @@ export default function POS() {
         customerName: customerName || undefined,
         customerId: selectedCustomerId || undefined,
         notes: orderNotes || undefined,
+        servedBy: picksServer ? servedBy || undefined : undefined,
         status: 'HELD',
         items: cart.map((item) => ({
           menuItemId: item.menuItemId,
@@ -631,7 +653,7 @@ export default function POS() {
         const orderNum = response.data.data?.orderNumber || 'Held';
         setSuccessMessage(`Order #${orderNum} held successfully`);
         setTimeout(() => setSuccessMessage(''), 4000);
-        setCart([]);
+        setCart([]); setServedBy('');
         setCustomerName('');
         setSelectedCustomerId('');
         setOrderNotes('');
@@ -984,6 +1006,25 @@ export default function POS() {
                 <option value="">Walk-in customer</option>
                 {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` — ${c.phone}` : ''}</option>)}
               </select>
+              {picksServer && staff.length > 0 && (
+                <>
+                  <label htmlFor="pos-served-by" className="block pt-1 text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">Served by</label>
+                  <select
+                    id="pos-served-by"
+                    value={servedBy}
+                    onChange={(e) => setServedBy(e.target.value)}
+                    className="w-full rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-2 text-xs sm:text-sm bg-white/80 dark:bg-[#121218]/80 text-gray-900 dark:text-gray-100 outline-none focus:ring-2 focus:ring-orange-500"
+                  >
+                    <option value="">Not recorded</option>
+                    {staff.filter((m) => m.role === 'WAITER').map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    {staff.some((m) => m.role !== 'WAITER') && (
+                      <optgroup label="Other staff">
+                        {staff.filter((m) => m.role !== 'WAITER').map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </optgroup>
+                    )}
+                  </select>
+                </>
+              )}
             </div>
 
             <div className="shrink-0 max-h-[42%] overflow-y-auto border-t border-orange-500/10 bg-white/80 dark:border-white/10 dark:bg-[#121218]/90 p-4 space-y-3 backdrop-blur-xl">

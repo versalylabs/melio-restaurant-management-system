@@ -1,8 +1,9 @@
 import prisma from '../config/database';
 import { notifyRestaurantStaff } from './notificationService';
 import { manualDiscountError } from '../utils/discountPolicy';
-import { cancelOrderSafely, OrderCancelError } from './orderCancellationService';
-import { lockSale } from './saleLedgerService';
+import { cancelOrderSafely, NOT_FIRED_STATUSES, OrderCancelError } from './orderCancellationService';
+import { Approver, sendApprovalError, verifyApproval } from './approvalService';
+import { blockingPaymentsForCancel, lockSale } from './saleLedgerService';
 import { isUniqueViolationOn, normalizeClientRequestId } from '../utils/idempotency';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
@@ -15,6 +16,71 @@ import { validatePromotion } from './promotionService';
 import { deductInventoryForOrderSafely } from './inventoryService';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
+
+/** Validates who served the order: an active staff member of this restaurant. */
+async function resolveServedBy(restaurantId: string, value: unknown): Promise<string | null | 'INVALID'> {
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string') return 'INVALID';
+  const user = await prisma.user.findFirst({ where: { id: value, restaurantId, status: 'ACTIVE' }, select: { id: true } });
+  return user ? user.id : 'INVALID';
+}
+
+/**
+ * A discount above the person's own limit needs a manager whose limit covers
+ * it. Returns the approver, null when no approval was needed, or false when a
+ * response (approval needed / wrong PIN) has already been sent.
+ */
+async function approveDiscountIfNeeded(
+  req: AuthRequest,
+  res: ExpressResponse,
+  discountError: string | null,
+  discount: { type: 'FIXED' | 'PERCENTAGE'; value: number; subtotal: number },
+  branchId: string
+): Promise<Approver | null | false> {
+  if (!discountError) return null;
+  try {
+    return await verifyApproval(req, 'give this discount', {
+      branchId,
+      allow: (approver) =>
+        manualDiscountError(approver.roleName, approver.role, discount)
+          ? `${approver.name}'s own limit doesn't cover this discount. Ask the owner.`
+          : null,
+    });
+  } catch (err) {
+    if (sendApprovalError(res, err)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Once the kitchen has an order, cancelling it needs a reason and a manager's
+ * PIN. Orders that will be refused anyway (paid, M-Pesa in progress) skip the
+ * PIN so nobody types it for nothing; the cancel itself re-checks everything.
+ */
+async function approveCancelIfNeeded(req: AuthRequest, res: ExpressResponse, orderId: string, reason: unknown): Promise<Approver | null | false> {
+  const sale = await prisma.sale.findFirst({
+    where: { id: orderId, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) },
+    select: { status: true, branchId: true },
+  });
+  if (!sale || NOT_FIRED_STATUSES.includes(sale.status) || ['COMPLETED', 'CANCELLED'].includes(sale.status)) return null;
+  const { paidAmount, mpesaInFlight } = await blockingPaymentsForCancel(prisma as any, orderId);
+  if (paidAmount > 0.005 || mpesaInFlight) return null;
+  if (typeof reason !== 'string' || !reason.trim()) {
+    sendError(res, 'Give a reason for cancelling an order the kitchen already has.');
+    return false;
+  }
+  try {
+    return await verifyApproval(req, 'cancel an order the kitchen already has', { branchId: sale.branchId });
+  } catch (err) {
+    if (sendApprovalError(res, err)) return false;
+    throw err;
+  }
+}
+
+const sendCancelError = (res: ExpressResponse, error: OrderCancelError) =>
+  error.code === 'APPROVAL_REQUIRED'
+    ? sendError(res, error.message, { approval: ['APPROVAL_REQUIRED'] }, 428)
+    : sendError(res, error.message, undefined, error.statusCode);
 
 export interface CreateOrderItem {
   menuItemId: string;
@@ -88,6 +154,12 @@ export const getOrders = async (req: AuthRequest, res: ExpressResponse) => {
     prisma.sale.count({ where }),
   ]);
 
+  const servedIds = [...new Set(orders.map((o) => o.servedBy).filter((v): v is string => !!v))];
+  const servers = servedIds.length
+    ? await prisma.user.findMany({ where: { id: { in: servedIds }, restaurantId }, select: { id: true, firstName: true, lastName: true } })
+    : [];
+  const serverName = new Map(servers.map((u) => [u.id, `${u.firstName} ${u.lastName}`.trim()]));
+
   return sendResponse(res, true, 'Orders retrieved', {
     orders: orders.map((o) => {
       const calculatedAmountPaid = o.payments.reduce((sum, payment) => sum + payment.amount, 0);
@@ -114,6 +186,8 @@ export const getOrders = async (req: AuthRequest, res: ExpressResponse) => {
         totalAmount: o.totalAmount,
         notes: o.notes,
         createdBy: o.createdBy,
+        servedBy: o.servedBy,
+        servedByName: o.servedBy ? serverName.get(o.servedBy) || null : null,
         completedAt: o.completedAt,
         cancelledAt: o.cancelledAt,
         cancelReason: o.cancelReason,
@@ -168,8 +242,13 @@ export const getOrder = async (req: AuthRequest, res: ExpressResponse) => {
       ? 'PARTIAL'
       : 'PAID';
 
+  const server = order.servedBy
+    ? await prisma.user.findFirst({ where: { id: order.servedBy, restaurantId }, select: { firstName: true, lastName: true } })
+    : null;
+
   return sendResponse(res, true, 'Order retrieved', {
     ...order,
+    servedByName: server ? `${server.firstName} ${server.lastName}`.trim() : null,
     amountPaid: calculatedAmountPaid,
     paymentStatus: calculatedPaymentStatus,
     items: order.items.map((item) => ({
@@ -326,14 +405,23 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     }
   }
   const role = await prisma.role.findUnique({ where: { id: req.user!.roleId }, select: { maxDiscountPercent: true, maxDiscountAmount: true } });
+  let discountApprover: Approver | null = null;
   if (!promotion && Number(discountAmount || 0) !== 0) {
-    const discountError = manualDiscountError(req.user!.roleName, role, {
-      type: req.body.discountType === 'PERCENTAGE' ? 'PERCENTAGE' : 'FIXED',
+    const discount = {
+      type: (req.body.discountType === 'PERCENTAGE' ? 'PERCENTAGE' : 'FIXED') as 'FIXED' | 'PERCENTAGE',
       value: Number(discountAmount),
       subtotal: baseSubtotal,
-    });
-    if (discountError) return sendError(res, discountError, undefined, 403);
+    };
+    const discountError = manualDiscountError(req.user!.roleName, role, discount);
+    const invalid = !Number.isFinite(discount.value) || discount.value < 0 || (discount.type === 'PERCENTAGE' && discount.value > 100);
+    if (discountError && invalid) return sendError(res, discountError);
+    const approved = await approveDiscountIfNeeded(req, res, discountError, discount, branchId);
+    if (approved === false) return;
+    discountApprover = approved;
   }
+  // Waiters serve their own orders; a cashier ringing up for a waiter picks them.
+  const servedByInput = req.body.servedBy !== undefined ? await resolveServedBy(restaurantId, req.body.servedBy) : req.user!.roleName === 'WAITER' ? userId : null;
+  if (servedByInput === 'INVALID') return sendError(res, 'Choose a staff member from this restaurant as the server');
   const calculationInput: OrderCalculationInput = {
     items: normalizedItems,
     discountAmount: Math.max(0, Number(discountAmount) || 0),
@@ -368,6 +456,8 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
         discountAmount: totals.discountAmount,
         discountReason: discountReason ? String(discountReason).trim() : null,
         discountAppliedBy: (totals.discountAmount > 0 ? userId : null) as any,
+        discountApprovedBy: totals.discountAmount > 0 && discountApprover ? discountApprover.id : null,
+        servedBy: servedByInput,
         ...(promotionId
           ? { promotion: { connect: { id: promotionId } } }
           : {}),
@@ -511,6 +601,11 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     updateData.tableId = tableId || null;
   }
   if (orderType !== undefined) updateData.orderType = orderType;
+  if (req.body.servedBy !== undefined) {
+    const servedBy = await resolveServedBy(restaurantId, req.body.servedBy);
+    if (servedBy === 'INVALID') return sendError(res, 'Choose a staff member from this restaurant as the server');
+    updateData.servedBy = servedBy;
+  }
 
   if (customerId !== undefined) {
     if (customerId) {
@@ -601,13 +696,20 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     // already on the order (e.g. approved by a manager) is inherited, as long
     // as this edit doesn't make it bigger in KES.
     const discountChanged = discountAmount !== undefined || req.body.discountType !== undefined;
-    if (!promotion && discountChanged && requestedDiscount !== 0) {
-      const type = req.body.discountType === 'PERCENTAGE' ? 'PERCENTAGE' : 'FIXED';
-      const newKes = type === 'PERCENTAGE' ? (baseSubtotal * requestedDiscount) / 100 : requestedDiscount;
-      const increases = newKes > Number(existing.discountAmount || 0) + 0.005;
+    let updateApprover: Approver | null = null;
+    // Any pricing change re-checks the discount against the NEW bill: keeping a
+    // KES 1,000 discount while swapping the items down to KES 1,000 is a 100%
+    // discount and needs approval like any other.
+    if (!promotion && requestedDiscount !== 0) {
+      const type: 'FIXED' | 'PERCENTAGE' = discountChanged && req.body.discountType === 'PERCENTAGE' ? 'PERCENTAGE' : 'FIXED';
       const invalid = !Number.isFinite(requestedDiscount) || requestedDiscount < 0 || (type === 'PERCENTAGE' && requestedDiscount > 100);
       const discountError = manualDiscountError(req.user!.roleName, role, { type, value: requestedDiscount, subtotal: baseSubtotal });
-      if (discountError && (increases || invalid)) return sendError(res, discountError, undefined, invalid ? 400 : 403);
+      if (discountError && invalid) return sendError(res, discountError);
+      if (discountError) {
+        const approved = await approveDiscountIfNeeded(req, res, discountError, { type, value: requestedDiscount, subtotal: baseSubtotal }, existing.branchId);
+        if (approved === false) return;
+        updateApprover = approved;
+      }
     }
     if (promotionId !== undefined) {
       updateData.promotion = promotionId
@@ -628,6 +730,9 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     updateData.discountAmount = totals.discountAmount;
     updateData.discountReason = discountReason !== undefined ? (discountReason ? String(discountReason).trim() : null) : existing.discountReason;
     updateData.discountAppliedBy = totals.discountAmount > 0 ? userId : null;
+    // Keep an earlier manager approval only while the discount stays within it.
+    // Recorded only when this edit needed (and got) a manager's approval.
+    updateData.discountApprovedBy = totals.discountAmount > 0 && updateApprover ? updateApprover.id : null;
     updateData.taxAmount = totals.taxAmount;
     updateData.serviceChargeAmount = totals.serviceChargeAmount;
     updateData.totalAmount = totals.totalAmount;
@@ -733,12 +838,14 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
   }
 
   if (status === 'CANCELLED') {
+    const approver = await approveCancelIfNeeded(req, res, id, req.body.cancelReason || notes);
+    if (approver === false) return;
     try {
-      const order = await cancelOrderSafely({ orderId: id, restaurantId, branchId: req.user!.branchId, userId, reason: req.body.cancelReason || notes });
-      await createAuditLog(restaurantId, userId, 'CANCEL', 'Order', id, `Cancelled order ${order.orderNumber}. Reason: ${req.body.cancelReason || notes || 'No reason provided'}`);
+      const order = await cancelOrderSafely({ orderId: id, restaurantId, branchId: req.user!.branchId, userId, reason: req.body.cancelReason || notes, approvedBy: approver?.id });
+      await createAuditLog(restaurantId, userId, 'CANCEL', 'Order', id, `Cancelled order ${order.orderNumber}${approver ? `, approved by ${approver.name}` : ''}. Reason: ${req.body.cancelReason || notes || 'No reason provided'}`);
       return sendResponse(res, true, 'Order status updated', order);
     } catch (error: any) {
-      if (error instanceof OrderCancelError) return sendError(res, error.message, undefined, error.statusCode);
+      if (error instanceof OrderCancelError) return sendCancelError(res, error);
       throw error;
     }
   }
@@ -867,12 +974,14 @@ export const cancelOrder = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
   const userId = req.user!.id;
   const { cancelReason } = req.body || {};
+  const approver = await approveCancelIfNeeded(req, res, id, cancelReason);
+  if (approver === false) return;
   try {
-    const order = await cancelOrderSafely({ orderId: id, restaurantId, branchId: req.user!.branchId, userId, reason: cancelReason });
-    await createAuditLog(restaurantId, userId, 'CANCEL', 'Order', id, `Cancelled order ${order.orderNumber}. Reason: ${cancelReason || 'No reason provided'}`);
+    const order = await cancelOrderSafely({ orderId: id, restaurantId, branchId: req.user!.branchId, userId, reason: cancelReason, approvedBy: approver?.id });
+    await createAuditLog(restaurantId, userId, 'CANCEL', 'Order', id, `Cancelled order ${order.orderNumber}${approver ? `, approved by ${approver.name}` : ''}. Reason: ${cancelReason || 'No reason provided'}`);
     return sendResponse(res, true, 'Order cancelled successfully', order);
   } catch (error: any) {
-    if (error instanceof OrderCancelError) return sendError(res, error.message, undefined, error.statusCode);
+    if (error instanceof OrderCancelError) return sendCancelError(res, error);
     throw error;
   }
 };

@@ -9,26 +9,50 @@ const scope = (req: AuthRequest) => req.user!.branchId
   ? { restaurantId: req.user!.restaurantId, branchId: req.user!.branchId }
   : { restaurantId: req.user!.restaurantId };
 
+const MANAGER_ROLES = ['OWNER', 'ADMIN', 'MANAGER'];
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** What the till should hold, by payment method, for the payments this cashier took during the shift. */
 const cashSummary = async (shift: any, endAt = new Date()) => {
-  const payments = await prisma.payment.findMany({
+  const payments = await prisma.payment.groupBy({
+    by: ['method'],
     where: {
       restaurantId: shift.restaurantId,
       branchId: shift.branchId,
       createdBy: shift.userId,
-      method: 'CASH',
       status: 'COMPLETED',
       createdAt: { gte: shift.openedAt, lte: endAt },
     },
-    select: { amount: true },
+    _sum: { amount: true },
   });
+  const byMethod = (m: string) => round2(payments.find((p) => p.method === m)?._sum.amount || 0);
   const expenses = await prisma.expense.findMany({
     where: { shiftId: shift.id, status: 'APPROVED', paymentMethod: 'CASH' },
     select: { amount: true },
   });
-  const cashPayments = payments.reduce((sum, p) => sum + p.amount, 0);
-  const cashExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
-  return { cashPayments, cashExpenses, expectedCash: shift.openingCash + cashPayments - cashExpenses };
+  const cashPayments = byMethod('CASH');
+  const cashExpenses = round2(expenses.reduce((sum, e) => sum + e.amount, 0));
+  return {
+    cashPayments,
+    cashExpenses,
+    expectedCash: round2(shift.openingCash + cashPayments - cashExpenses),
+    expectedMobileMoney: byMethod('MOBILE_MONEY'),
+    expectedCard: byMethod('CARD'),
+  };
 };
+
+/**
+ * Blind close: while a shift is open, the cashier doesn't see what the till
+ * "should" hold, so they count what is really there instead of matching a
+ * number. Managers still see everything.
+ */
+const EXPECTED_FIELDS = ['cashPayments', 'cashExpenses', 'expectedCash', 'expectedMobileMoney', 'expectedCard', 'cashVariance', 'mobileMoneyVariance', 'cardVariance'];
+const hideExpected = (shift: any) => {
+  const copy = { ...shift, blind: true };
+  for (const f of EXPECTED_FIELDS) delete copy[f];
+  return copy;
+};
+const canSeeExpected = (req: AuthRequest, shift: { status: string }) => shift.status !== 'OPEN' || MANAGER_ROLES.includes(req.user!.roleName);
 
 export const getShifts = async (req: AuthRequest, res: Response) => {
   const { status, userId, from, to } = req.query as any;
@@ -56,14 +80,17 @@ export const getShifts = async (req: AuthRequest, res: Response) => {
 
   const data = await Promise.all(shifts.map(async (shift) => {
     const summary = await cashSummary(shift, shift.closedAt || new Date());
-    return {
+    const row = {
       ...shift,
       userName: `${shift.user.firstName} ${shift.user.lastName}`,
       branchName: shift.branch.name,
       ...summary,
       expectedCash: shift.expectedCash ?? summary.expectedCash,
       cashVariance: shift.cashVariance ?? (shift.closingCash != null ? shift.closingCash - summary.expectedCash : null),
+      expectedMobileMoney: shift.expectedMobileMoney ?? summary.expectedMobileMoney,
+      expectedCard: shift.expectedCard ?? summary.expectedCard,
     };
+    return canSeeExpected(req, shift) ? row : hideExpected(row);
   }));
 
   return sendResponse(res, true, 'Shifts retrieved', { shifts: data });
@@ -78,7 +105,8 @@ export const getCurrentShift = async (req: AuthRequest, res: Response) => {
   });
   if (!shift) return sendResponse(res, true, 'Current shift retrieved', { shift: null });
   const summary = await cashSummary(shift);
-  return sendResponse(res, true, 'Current shift retrieved', { shift: { ...shift, ...summary } });
+  const row = { ...shift, ...summary };
+  return sendResponse(res, true, 'Current shift retrieved', { shift: canSeeExpected(req, shift) ? row : hideExpected(row) });
 };
 
 export const openShift = async (req: AuthRequest, res: Response) => {
@@ -127,22 +155,49 @@ export const closeShift = async (req: AuthRequest, res: Response) => {
     return sendError(res, 'You can only close your own shift', undefined, 403);
   }
 
-  const closingCash = Number(req.body.closingCash);
-  if (!Number.isFinite(closingCash) || closingCash < 0) return sendError(res, 'Closing cash must be zero or greater');
+  const amount = (value: unknown) => (value === undefined || value === null || value === '' ? NaN : Number(value));
+  const closingCash = amount(req.body.closingCash);
+  // All three are required: a missing figure would record the whole expected amount as short.
+  const declaredMobileMoney = amount(req.body.declaredMobileMoney);
+  const declaredCard = amount(req.body.declaredCard);
+  if (!Number.isFinite(closingCash) || closingCash < 0) return sendError(res, 'Enter the cash you counted (zero or more)');
+  if (!Number.isFinite(declaredMobileMoney) || declaredMobileMoney < 0) return sendError(res, 'Enter the M-Pesa total (zero or more)');
+  if (!Number.isFinite(declaredCard) || declaredCard < 0) return sendError(res, 'Enter the card total (zero or more)');
   const closedAt = new Date();
   const summary = await cashSummary(shift, closedAt);
-  const updated = await prisma.shift.update({
-    where: { id: shift.id },
+  const cashVariance = round2(closingCash - summary.expectedCash);
+  const mobileMoneyVariance = round2(declaredMobileMoney - summary.expectedMobileMoney);
+  const cardVariance = round2(declaredCard - summary.expectedCard);
+  // Conditional update: two closes of the same shift can't both succeed.
+  const closed = await prisma.shift.updateMany({
+    where: { id: shift.id, status: 'OPEN' },
     data: {
       status: 'CLOSED',
       closedAt,
       closingCash,
       expectedCash: summary.expectedCash,
-      cashVariance: closingCash - summary.expectedCash,
+      cashVariance,
+      declaredMobileMoney,
+      expectedMobileMoney: summary.expectedMobileMoney,
+      mobileMoneyVariance,
+      declaredCard,
+      expectedCard: summary.expectedCard,
+      cardVariance,
       closedBy: req.user!.id,
       notes: req.body.notes ?? shift.notes,
     },
   });
-  await createAuditLog(req.user!.restaurantId, req.user!.id, 'CLOSE', 'Shift', shift.id, `Closed shift with variance KES ${(closingCash - summary.expectedCash).toLocaleString()}`);
-  return sendResponse(res, true, 'Shift closed', { shift: updated });
+  if (closed.count === 0) return sendError(res, 'Shift is already closed');
+  const updated = await prisma.shift.findUnique({ where: { id: shift.id } });
+  const fmt = (n: number) => `KES ${n.toLocaleString()}`;
+  await createAuditLog(
+    req.user!.restaurantId,
+    req.user!.id,
+    'CLOSE',
+    'Shift',
+    shift.id,
+    `Closed shift. Differences: cash ${fmt(cashVariance)}, M-Pesa ${fmt(mobileMoneyVariance)}, card ${fmt(cardVariance)}`
+  );
+  // Now that the count is in, the cashier sees how it compared.
+  return sendResponse(res, true, 'Shift closed', { shift: { ...updated, ...summary } });
 };

@@ -3,10 +3,13 @@ import { blockingPaymentsForCancel, lockSale } from './saleLedgerService';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
 
+/** Statuses in which the kitchen has not been sent the order yet. */
+export const NOT_FIRED_STATUSES = ['DRAFT', 'HELD'];
+
 const ACTIVE_TABLE_ORDER_STATUSES = ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'];
 
 export class OrderCancelError extends Error {
-  constructor(public code: 'ORDER_NOT_FOUND' | 'ORDER_CLOSED' | 'ORDER_HAS_PAYMENTS' | 'MPESA_IN_FLIGHT', message: string, public statusCode = 400) {
+  constructor(public code: 'ORDER_NOT_FOUND' | 'ORDER_CLOSED' | 'ORDER_HAS_PAYMENTS' | 'MPESA_IN_FLIGHT' | 'APPROVAL_REQUIRED' | 'REASON_REQUIRED', message: string, public statusCode = 400) {
     super(message);
     this.name = 'AppError';
   }
@@ -27,6 +30,11 @@ export async function cancelOrderSafely(params: {
   branchId?: string | null;
   userId: string;
   reason?: string | null;
+  /**
+   * Manager who approved by PIN. Once the kitchen has the order a cancel is a
+   * void: it needs an approver and a reason, and is written to the void log.
+   */
+  approvedBy?: string | null;
 }) {
   const { orderId, restaurantId, branchId, userId } = params;
   const reason = params.reason ? String(params.reason).trim().slice(0, 500) : null;
@@ -45,6 +53,14 @@ export async function cancelOrderSafely(params: {
     }
     if (mpesaInFlight) {
       throw new OrderCancelError('MPESA_IN_FLIGHT', 'An M-Pesa payment for this order is still in progress. Wait a few minutes and try again.', 409);
+    }
+
+    const fired = !NOT_FIRED_STATUSES.includes(existing.status);
+    if (fired && !reason) {
+      throw new OrderCancelError('REASON_REQUIRED', 'Give a reason for cancelling an order the kitchen already has.');
+    }
+    if (fired && !params.approvedBy) {
+      throw new OrderCancelError('APPROVAL_REQUIRED', "The kitchen already has this order. A manager's approval is needed to cancel it.", 428);
     }
 
     const now = new Date();
@@ -80,6 +96,24 @@ export async function cancelOrderSafely(params: {
     if (tickets.length) {
       await tx.kitchenTicket.updateMany({ where: { id: { in: tickets.map((t) => t.id) } }, data: { status: 'CANCELLED' } });
       await tx.kitchenTicketItem.updateMany({ where: { ticketId: { in: tickets.map((t) => t.id) }, status: { notIn: ['SERVED', 'COMPLETED'] } }, data: { status: 'CANCELLED' } });
+    }
+
+    if (fired) {
+      await tx.voidRecord.create({
+        data: {
+          restaurantId: existing.restaurantId,
+          branchId: existing.branchId,
+          saleId: orderId,
+          kind: 'ORDER',
+          itemName: `Order ${existing.orderNumber}`,
+          quantity: 1,
+          value: existing.totalAmount,
+          reason: reason!,
+          firedToKitchen: true,
+          requestedBy: userId,
+          approvedBy: params.approvedBy || null,
+        },
+      });
     }
 
     await tx.saleStatusHistory.create({

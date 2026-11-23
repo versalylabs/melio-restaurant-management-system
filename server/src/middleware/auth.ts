@@ -51,6 +51,8 @@ export const permissionForPath = (rawPath: string, rawMethod: string): string | 
   if (is('/branches')) return viewOrManage(method, 'dashboard.view', 'settings.manage');
   if (is('/settings') || is('/restaurant') || is('/website') || is('/automated-messaging')) return 'settings.manage';
   if (is('/dashboard')) return 'dashboard.view';
+  // Setting or clearing approval PINs; only owner/admin/manager PINs can approve anything.
+  if (is('/approvals')) return 'users.manage';
   if (is('/public/payments/notifications')) return 'payments.view';
   return null;
 };

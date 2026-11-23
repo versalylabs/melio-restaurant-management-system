@@ -55,7 +55,11 @@ export function useDialogA11y<T extends HTMLElement>(onClose?: () => void, { ope
     // Focus the first field (or the dialog itself) unless something inside
     // already asked for focus via autoFocus.
     if (!node.contains(document.activeElement)) {
-      const first = node.querySelector<HTMLElement>('[data-autofocus], input, select, textarea') || node.querySelector<HTMLElement>(FOCUSABLE);
+      // A field marked data-autofocus wins even when another field comes first.
+      const first =
+        node.querySelector<HTMLElement>('[data-autofocus]') ||
+        node.querySelector<HTMLElement>('input, select, textarea') ||
+        node.querySelector<HTMLElement>(FOCUSABLE);
       (first || node).focus({ preventScroll: true });
     }
 
