@@ -3,6 +3,8 @@ import type { ApiResponse, User } from '../types';
 import {
   getCacheKey,
   getCachedResponse,
+  getCacheGeneration,
+  isLiveEndpoint,
   setCachedResponse,
   handleMutationInvalidation,
   invalidateCache,
@@ -109,8 +111,14 @@ export const cachedGet = async <T = any>(
     config = { ...config, headers };
   }
 
+  // Live operational data always comes from the network.
+  if (isLiveEndpoint(url)) {
+    return api.get<T>(url, config);
+  }
+
   const branchId = localStorage.getItem('rms-active-branch');
   const cacheKey = getCacheKey(url, config?.params, branchId);
+  const generation = getCacheGeneration();
 
   if (!isRefresh) {
     const cached = getCachedResponse(cacheKey);
@@ -118,7 +126,7 @@ export const cachedGet = async <T = any>(
       if (cached.isStale) {
         // Trigger background revalidation asynchronously
         api.get<T>(url, config)
-          .then((res) => setCachedResponse(cacheKey, res))
+          .then((res) => setCachedResponse(cacheKey, res, generation))
           .catch((err) => console.warn('Background cache revalidation failed:', err));
       }
       return {
@@ -132,7 +140,7 @@ export const cachedGet = async <T = any>(
   }
 
   const res = await api.get<T>(url, config);
-  setCachedResponse(cacheKey, res);
+  setCachedResponse(cacheKey, res, generation);
   return res;
 };
 
@@ -387,6 +395,7 @@ export const reservationApi = {
 export const publicOrderingApi = {
   getRestaurants: () => cachedGet('/public/restaurants'),
   getMenu: (params: { restaurantId: string; branchId: string }) => cachedGet('/public/menu', { params }),
+  quoteOrder: (data: any) => api.post('/public/orders/quote', data),
   placeOrder: (data: any) => api.post('/public/orders', data),
   getOrder: (trackingToken: string, config?: any) => cachedGet(`/public/orders/${trackingToken}`, config),
   confirmPayment: (trackingToken: string, data?: { reference?: string }) => api.post(`/public/orders/${trackingToken}/pay/confirm`, data || {}),

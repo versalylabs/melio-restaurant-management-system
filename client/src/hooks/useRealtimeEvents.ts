@@ -11,6 +11,15 @@ interface UseRealtimeOptions {
   onDisconnected?: () => void;
 }
 
+/**
+ * Subscribes to the server's SSE stream.
+ *
+ * The connection depends only on the url, the channel *names* and `enabled`,
+ * so callers may pass a fresh `channels` array or inline callbacks on every
+ * render without causing a reconnect loop. Subscribers live in a ref and are
+ * dispatched through one handler per event name on the current EventSource,
+ * so a reconnect keeps every subscription and no event is delivered twice.
+ */
 export function useRealtimeEvents({
   url = '/api/realtime/stream',
   channels = [],
@@ -22,49 +31,91 @@ export function useRealtimeEvents({
   const [lastEventTime, setLastEventTime] = useState<Date | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const listenersRef = useRef<Map<string, Set<RealtimeEventCallback>>>(new Map());
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const registeredRef = useRef<Set<string>>(new Set());
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectAttemptRef = useRef(0);
+  const failuresRef = useRef(0);
 
-  // Subscribe callback for a specific event name
-  const subscribe = useCallback((eventName: string, callback: RealtimeEventCallback) => {
-    if (!listenersRef.current.has(eventName)) {
-      listenersRef.current.set(eventName, new Set());
+  const onConnectedRef = useRef(onConnected);
+  const onDisconnectedRef = useRef(onDisconnected);
+  onConnectedRef.current = onConnected;
+  onDisconnectedRef.current = onDisconnected;
+
+  const channelKey = [...new Set(channels.filter(Boolean))].sort().join(',');
+
+  const handlePayload = useCallback((event: MessageEvent) => {
+    try {
+      const parsed = JSON.parse(event.data);
+      setLastEventTime(new Date());
+      // realtimeService wraps application data as { event, channel, data }.
+      const payload = parsed?.data ?? parsed;
+      const eventName = event.type && event.type !== 'message' ? event.type : parsed?.event || 'message';
+      listenersRef.current.get(eventName)?.forEach((callback) => {
+        try {
+          callback(payload);
+        } catch (err) {
+          console.error(`Realtime handler for "${eventName}" failed:`, err);
+        }
+      });
+    } catch {
+      // Ignore malformed SSE payloads without breaking the stream.
     }
-    listenersRef.current.get(eventName)!.add(callback);
-
-    const es = eventSourceRef.current;
-    const dynamicHandler = (event: Event) => {
-      try {
-        const parsed = JSON.parse((event as MessageEvent).data);
-        setLastEventTime(new Date());
-        callback(parsed?.data ?? parsed);
-      } catch {}
-    };
-    if (es) es.addEventListener(eventName, dynamicHandler as EventListener);
-
-    return () => {
-      if (es) es.removeEventListener(eventName, dynamicHandler as EventListener);
-      const set = listenersRef.current.get(eventName);
-      if (set) {
-        set.delete(callback);
-        if (set.size === 0) listenersRef.current.delete(eventName);
-      }
-    };
   }, []);
 
-  const connectAttemptRef = useRef(0);
+  const registerEvent = useCallback(
+    (eventName: string) => {
+      const es = eventSourceRef.current;
+      if (!es || eventName === 'message' || registeredRef.current.has(eventName)) return;
+      es.addEventListener(eventName, handlePayload as EventListener);
+      registeredRef.current.add(eventName);
+    },
+    [handlePayload]
+  );
 
-  const connect = useCallback(async () => {
-    if (!enabled || typeof window === 'undefined') return;
-    const attempt = ++connectAttemptRef.current;
+  const subscribe = useCallback(
+    (eventName: string, callback: RealtimeEventCallback) => {
+      if (!listenersRef.current.has(eventName)) listenersRef.current.set(eventName, new Set());
+      listenersRef.current.get(eventName)!.add(callback);
+      registerEvent(eventName);
 
+      return () => {
+        const set = listenersRef.current.get(eventName);
+        if (set) {
+          set.delete(callback);
+          if (set.size === 0) listenersRef.current.delete(eventName);
+        }
+      };
+    },
+    [registerEvent]
+  );
+
+  const closeCurrent = () => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
+    registeredRef.current = new Set();
+  };
+
+  const connect = useCallback(async () => {
+    if (!enabled || typeof window === 'undefined') return;
+    const attempt = ++connectAttemptRef.current;
+    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+    closeCurrent();
+
+    const scheduleRetry = () => {
+      if (attempt !== connectAttemptRef.current) return;
+      // Back off 5s, 10s, 20s ... up to 60s so a dead server isn't hammered.
+      const delay = Math.min(60_000, 5_000 * 2 ** Math.min(failuresRef.current, 4));
+      failuresRef.current += 1;
+      reconnectTimeoutRef.current = setTimeout(() => {
+        if (attempt === connectAttemptRef.current) connect();
+      }, delay);
+    };
 
     const isPublicStream = url.includes('/public/');
     const queryParams = new URLSearchParams();
-    if (channels.length > 0) queryParams.set('channels', channels.join(','));
+    if (channelKey) queryParams.set('channels', channelKey);
 
     // EventSource cannot set Authorization headers. Staff streams exchange the
     // login token (sent in a header) for a 60-second stream-only ticket, so the
@@ -78,11 +129,9 @@ export function useRealtimeEvents({
         if (!ticket) throw new Error('No stream ticket');
         queryParams.set('ticket', ticket);
       } catch {
+        if (attempt !== connectAttemptRef.current) return;
         setIsConnected(false);
-        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (enabled) connect();
-        }, 10000);
+        scheduleRetry();
         return;
       }
     }
@@ -96,69 +145,54 @@ export function useRealtimeEvents({
       const es = new EventSource(fullUrl);
       eventSourceRef.current = es;
 
-      const handlePayload = (event: MessageEvent) => {
-        try {
-          const parsed = JSON.parse(event.data);
-          setLastEventTime(new Date());
-          // realtimeService wraps application data as { event, channel, data }.
-          // Subscribers should receive the useful data object directly.
-          const payload = parsed?.data ?? parsed;
-          const eventName = parsed?.event || event.type || 'message';
-          const callbacks = listenersRef.current.get(eventName);
-          callbacks?.forEach((callback) => callback(payload));
-        } catch {
-          // Ignore malformed SSE payloads without breaking the stream.
-        }
-      };
-
       es.onopen = () => {
+        if (attempt !== connectAttemptRef.current) return;
+        failuresRef.current = 0;
         setIsConnected(true);
-        onConnected?.();
+        onConnectedRef.current?.();
       };
 
       es.onerror = () => {
+        if (attempt !== connectAttemptRef.current) return;
         setIsConnected(false);
-        onDisconnected?.();
-        es.close();
-
-        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (enabled) connect();
-        }, 5000);
+        onDisconnectedRef.current?.();
+        closeCurrent();
+        scheduleRetry();
       };
 
       // Generic/default SSE messages.
       es.onmessage = handlePayload;
 
-      // Named SSE events are what the server emits for order, kitchen,
-      // reservation and notification updates. EventSource.onmessage does not
-      // receive named events, so explicitly register every current subscriber.
-      listenersRef.current.forEach((_callbacks, eventName) => {
-        es.addEventListener(eventName, handlePayload as EventListener);
-      });
+      // Named SSE events (orders, kitchen, reservations, notifications) are
+      // not delivered to onmessage, so register every current event name.
+      listenersRef.current.forEach((_callbacks, eventName) => registerEvent(eventName));
     } catch {
       setIsConnected(false);
+      scheduleRetry();
     }
-  }, [enabled, url, channels, onConnected, onDisconnected]);
+  }, [enabled, url, channelKey, handlePayload, registerEvent]);
 
   useEffect(() => {
+    failuresRef.current = 0;
     connect();
 
     return () => {
       connectAttemptRef.current++;
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
+      closeCurrent();
       setIsConnected(false);
     };
+  }, [connect]);
+
+  const reconnect = useCallback(() => {
+    failuresRef.current = 0;
+    return connect();
   }, [connect]);
 
   return {
     isConnected,
     lastEventTime,
     subscribe,
-    reconnect: connect,
+    reconnect,
   };
 }

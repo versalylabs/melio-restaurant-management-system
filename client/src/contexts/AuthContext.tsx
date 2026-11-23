@@ -1,6 +1,17 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { User } from '../types';
-import { authApi } from '../services/api';
+import { authApi, invalidateCache } from '../services/api';
+
+const LAST_USER_KEY = 'rms-last-user-id';
+const ACTIVE_BRANCH_KEY = 'rms-active-branch';
+
+/** Data that must not be visible to whoever uses this terminal next. */
+function clearSessionData({ keepBranch }: { keepBranch: boolean }) {
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  if (!keepBranch) localStorage.removeItem(ACTIVE_BRANCH_KEY);
+  invalidateCache();
+}
 
 interface AuthContextType {
   user: User | null;
@@ -27,10 +38,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleAuthExpired = () => {
+      // Session expired mid-shift: drop cached data, but keep the branch (and
+      // the POS cart, which lives under its own key) so the same person can
+      // sign back in and carry on.
+      clearSessionData({ keepBranch: true });
       setToken(null);
       setUser(null);
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
     };
     window.addEventListener('staff-auth-expired', handleAuthExpired);
 
@@ -43,18 +56,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const me = response.data.data;
             setUser(me);
             localStorage.setItem('user', JSON.stringify(me));
+            localStorage.setItem(LAST_USER_KEY, me.id);
             // Preserve the active branch for roles that are allowed to switch branches.
             const canSwitchBranch = ['OWNER', 'ADMIN', 'MANAGER'].includes(me.roleName || '');
             if (!canSwitchBranch && me.branchId) {
-              localStorage.setItem('rms-active-branch', me.branchId);
-            } else if (!localStorage.getItem('rms-active-branch') && me.branchId) {
-              localStorage.setItem('rms-active-branch', me.branchId);
+              localStorage.setItem(ACTIVE_BRANCH_KEY, me.branchId);
+            } else if (!localStorage.getItem(ACTIVE_BRANCH_KEY) && me.branchId) {
+              localStorage.setItem(ACTIVE_BRANCH_KEY, me.branchId);
             }
           }
         } catch (err: any) {
           if (err.response?.status === 401) {
-            localStorage.removeItem('token');
-            localStorage.removeItem('user');
+            clearSessionData({ keepBranch: true });
             setToken(null);
             setUser(null);
           }
@@ -68,11 +81,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = (newToken: string, newUser: User) => {
+    // A different person on this terminal must not inherit the previous
+    // user's cached screens or branch selection.
+    invalidateCache();
+    if (localStorage.getItem(LAST_USER_KEY) !== newUser.id) {
+      localStorage.removeItem(ACTIVE_BRANCH_KEY);
+      localStorage.removeItem('rms-pos-cart');
+    }
+    localStorage.setItem(LAST_USER_KEY, newUser.id);
     localStorage.setItem('token', newToken);
     localStorage.setItem('user', JSON.stringify(newUser));
     const canSwitchBranch = ['OWNER', 'ADMIN', 'MANAGER'].includes(newUser.roleName || '');
-    if (newUser.branchId && (!canSwitchBranch || !localStorage.getItem('rms-active-branch'))) {
-      localStorage.setItem('rms-active-branch', newUser.branchId);
+    if (newUser.branchId && (!canSwitchBranch || !localStorage.getItem(ACTIVE_BRANCH_KEY))) {
+      localStorage.setItem(ACTIVE_BRANCH_KEY, newUser.branchId);
     }
     setToken(newToken);
     setUser(newUser);
@@ -80,8 +101,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     try { if (localStorage.getItem('token')) await authApi.logout(); } catch {}
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    clearSessionData({ keepBranch: false });
+    localStorage.removeItem('rms-pos-cart');
     setToken(null);
     setUser(null);
   };

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { authApi } from '../../services/api';
-import { getDefaultRouteForRole } from '../../App';
+import { getDefaultRoute } from '../../lib/access';
 import {
   Lock,
   Mail,
@@ -34,7 +34,7 @@ export default function Login() {
       if (response.data.success && response.data.data) {
         const loggedUser = response.data.data.user;
         login(response.data.data.token, loggedUser);
-        navigate(getDefaultRouteForRole(loggedUser?.roleName));
+        navigate(getDefaultRoute(loggedUser));
       } else {
         setError(response.data.message || 'Invalid email or password.');
       }

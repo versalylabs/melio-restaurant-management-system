@@ -150,6 +150,26 @@ async function run() {
     const payment = await prisma.payment.findFirst({ where: { saleId: online.saleId, status: 'PENDING' } });
     return { online, payment };
   };
+  await test('checkout quote equals the amount the order is charged', async () => {
+    const items = [{ menuItemId: menuItem.id, quantity: 3 }];
+    const quote = await call('POST', '/public/orders/quote', null, { restaurantId, branchId, items });
+    assert.strictEqual(quote.status, 200, JSON.stringify(quote.body));
+    const placed = await call('POST', '/public/orders', null, {
+      restaurantId, branchId, customerName: 'IT Quote', contactPhone: '0712345678', fulfillmentType: 'PICKUP', paymentMethod: 'CASH', items, clientRequestId: uid(),
+    });
+    assert.strictEqual(placed.status, 201, JSON.stringify(placed.body));
+    assert.ok(Math.abs(quote.body.data.totalAmount - placed.body.data.totalAmount) < 0.005, `quote ${quote.body.data.totalAmount} vs order ${placed.body.data.totalAmount}`);
+  });
+  await test('an invalid cart is rejected before any customer record is created', async () => {
+    const phone = '0799' + String(Date.now()).slice(-6);
+    const res = await call('POST', '/public/orders', null, {
+      restaurantId, branchId, customerName: 'IT Ghost', contactPhone: phone, fulfillmentType: 'PICKUP', paymentMethod: 'CASH',
+      items: [{ menuItemId: 'does-not-exist', quantity: 1 }], clientRequestId: uid(),
+    });
+    assert.strictEqual(res.status, 400);
+    const ghost = await prisma.customer.findFirst({ where: { restaurantId, phone } });
+    assert.strictEqual(ghost, null);
+  });
   await test('cancel is refused while an M-Pesa payment awaits verification', async () => {
     const { online, payment } = await placeOnlineMpesaOrder();
     await prisma.payment.update({ where: { id: payment.id }, data: { reference: `ws_CO_${uid()}`, notes: '[AWAITING_VERIFICATION receipt=ABC123 amount=100]', createdAt: new Date(Date.now() - 3_600_000) } });
@@ -243,7 +263,8 @@ async function run() {
     assert.strictEqual(results.filter((r) => r.status === 201).length, 1, `statuses ${results.map((r) => r.status)}`);
   });
   await test('website bookings are stored in the restaurant time zone (19:00 Nairobi = 16:00 UTC)', async () => {
-    const d = new Date(Date.now() + 400 * 86_400_000);
+    // A different far-future day each run, so repeated runs never fill the slot.
+    const d = new Date(Date.now() + (400 + Math.floor(Math.random() * 3000)) * 86_400_000);
     const date = d.toISOString().slice(0, 10);
     const res = await call('POST', '/public/reservations', null, { restaurantId, branchId, customerName: 'TZ Guest', phone: '0712345678', partySize: 2, date, time: '19:00' });
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));

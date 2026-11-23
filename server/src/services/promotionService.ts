@@ -106,10 +106,10 @@ export const deletePromotion = async (req: AuthRequest, res: ExpressResponse) =>
 };
 
 /** `at` is when the order was taken (offline orders sync later); defaults to now. */
-export const validatePromotion = async (promotionId:string, restaurantId:string, branchId:string, customerId:string|undefined, subtotal:number, at: Date = new Date()) => {
+export const validatePromotion = async (promotionId:string, restaurantId:string, branchId:string, customerId:string|undefined, subtotal:number, at: Date = new Date(), opts: { skipCustomerCheck?: boolean } = {}) => {
   const p=await prisma.promotion.findFirst({where:{id:promotionId,restaurantId,active:true}}); if(!p) throw new Error('Promotion is not active or does not exist');
   if(p.branchId && p.branchId!==branchId) throw new Error('Promotion is not available at this branch');
-  if(p.customerId && p.customerId!==customerId) throw new Error('Promotion is only available to the selected customer');
+  if(!opts.skipCustomerCheck && p.customerId && p.customerId!==customerId) throw new Error('Promotion is only available to the selected customer');
   const now=at; if(p.startsAt && p.startsAt>now) throw new Error('Promotion has not started'); if(p.endsAt && p.endsAt<now) throw new Error('Promotion has expired'); if(!isWithinTime(p.startTime,p.endTime,await getRestaurantTimeZone(p.restaurantId),now)) throw new Error('Promotion is outside its active hours'); if(subtotal<p.minSubtotal) throw new Error(`Minimum subtotal of ${p.minSubtotal.toFixed(2)} is required for this promotion`);
   return p;
 };

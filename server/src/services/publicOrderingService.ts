@@ -63,6 +63,83 @@ export const getPublicMenu = async (req: Request, res: Response) => {
   });
 };
 
+/**
+ * Prices an online cart exactly as the order will be charged: current menu
+ * prices, the branch's availability, tax, service charge and any promo code.
+ * Used by both the checkout quote and order creation so the amount the
+ * customer sees before paying is the amount on the M-Pesa prompt.
+ */
+type PricedCart =
+  | { ok: false; message: string; status?: number }
+  | {
+      ok: true;
+      normalized: Array<{ menuItemId: string; quantity: number }>;
+      menuMap: Map<string, { id: string; name: string; sellingPrice: number }>;
+      promotion: any;
+      promotionId?: string;
+      promoCode: string;
+      totals: Awaited<ReturnType<typeof calculateOrderTotals>>;
+    };
+
+async function pricePublicCart(params: { restaurantId: string; branchId: string; items: any[]; promoCode?: string; customerId?: string }): Promise<PricedCart> {
+  const { restaurantId, branchId, items, customerId } = params;
+  if (!items.length) return { ok: false, message: 'Your cart is empty' };
+  if (items.length > 100) return { ok: false, message: 'Too many items in one order' };
+  const normalized: Array<{ menuItemId: string; quantity: number }> = items.map((item: any) => ({ menuItemId: String(item?.menuItemId || ''), quantity: Math.max(1, Math.min(50, Math.floor(Number(item?.quantity || 1)))) }));
+  if (normalized.some((item) => !item.menuItemId)) return { ok: false, message: 'Invalid menu item' };
+
+  const menuItemIds: string[] = [...new Set(normalized.map((item) => item.menuItemId))];
+  const menuItems = await prisma.menuItem.findMany({
+    where: { id: { in: menuItemIds }, restaurantId, status: 'ACTIVE', available: true, branchAvailabilities: { none: { branchId, available: false } } },
+    select: { id: true, name: true, sellingPrice: true },
+  });
+  if (menuItems.length !== menuItemIds.length) return { ok: false, message: 'One or more menu items are no longer available' };
+  const menuMap = new Map(menuItems.map((item) => [item.id, item]));
+
+  let promotion: any = undefined;
+  let promotionId: string | undefined;
+  const promoCode = String(params.promoCode || '').trim();
+  const baseSubtotal = normalized.reduce((sum, item) => sum + menuMap.get(item.menuItemId)!.sellingPrice * item.quantity, 0);
+  if (promoCode) {
+    const found = await prisma.promotion.findFirst({ where: { restaurantId, active: true, code: { equals: promoCode } } });
+    if (!found) return { ok: false, message: 'Promotion code is invalid' };
+    try {
+      // Before the customer is known, customer-only codes are checked later by
+      // the caller (createPublicOrder) once the customer is resolved.
+      promotion = await validatePromotion(found.id, restaurantId, branchId, customerId, baseSubtotal, new Date(), { skipCustomerCheck: !customerId });
+      promotionId = found.id;
+    } catch (promoErr: any) {
+      return { ok: false, message: promoErr.message || 'Invalid promotion code' };
+    }
+  }
+
+  const calcItems = normalized.map((item) => ({ menuItemId: item.menuItemId, unitPrice: menuMap.get(item.menuItemId)!.sellingPrice, quantity: item.quantity, modifiers: [] }));
+  const totals = await calculateOrderTotals({ items: calcItems, discountAmount: 0, discountType: 'FIXED', restaurantId, branchId, promotion: promotion ? { discountType: promotion.discountType, value: promotion.value, scope: promotion.scope, menuItemId: promotion.menuItemId, maxDiscountAmount: promotion.maxDiscountAmount } : undefined } as OrderCalculationInput);
+  return { ok: true, normalized, menuMap, promotion, promotionId, promoCode, totals };
+}
+
+/** Checkout preview: the exact amount the order will cost. Creates nothing. */
+export const quotePublicOrder = async (req: Request, res: Response) => {
+  const body = req.body || {};
+  const restaurantId = String(body.restaurantId || '').trim();
+  const branchId = String(body.branchId || '').trim();
+  if (!restaurantId || !branchId) return sendError(res, 'Restaurant and branch are required');
+  const branch = await prisma.branch.findFirst({ where: { id: branchId, restaurantId, status: 'ACTIVE' }, select: { id: true } });
+  if (!branch) return sendError(res, 'Selected branch is unavailable', undefined, 404);
+
+  const priced = await pricePublicCart({ restaurantId, branchId, items: Array.isArray(body.items) ? body.items : [], promoCode: body.promoCode });
+  if (!priced.ok) return sendError(res, priced.message, undefined, priced.status || 400);
+  const t = priced.totals;
+  return sendResponse(res, true, 'Order quote', {
+    subtotal: t.subtotal,
+    discountAmount: t.discountAmount,
+    taxAmount: t.taxAmount,
+    serviceChargeAmount: t.serviceChargeAmount,
+    totalAmount: t.totalAmount,
+    promoApplied: !!priced.promotionId,
+  });
+};
+
 export const createPublicOrder = async (req: Request, res: Response) => {
   const body = req.body || {};
   const restaurantId = String(body.restaurantId || '').trim();
@@ -104,38 +181,25 @@ export const createPublicOrder = async (req: Request, res: Response) => {
   const earlier = await replyWithExisting();
   if (earlier) return earlier;
 
-  const normalized: Array<{ menuItemId: string; quantity: number }> = items.map((item: any) => ({ menuItemId: String(item.menuItemId || ''), quantity: Math.max(1, Math.min(50, Math.floor(Number(item.quantity || 1))) ) }));
-  if (normalized.some((item: { menuItemId: string; quantity: number }) => !item.menuItemId)) return sendError(res, 'Invalid menu item');
-
-  const menuItemIds: string[] = [...new Set(normalized.map((item: { menuItemId: string; quantity: number }) => item.menuItemId))];
-  const menuItems = await prisma.menuItem.findMany({
-    where: { id: { in: menuItemIds }, restaurantId, status: 'ACTIVE', available: true, branchAvailabilities: { none: { branchId, available: false } } },
-    select: { id: true, name: true, sellingPrice: true },
-  });
-  if (menuItems.length !== menuItemIds.length) return sendError(res, 'One or more menu items are no longer available');
-  const menuMap = new Map(menuItems.map((item) => [item.id, item]));
+  // Price and validate the cart before touching customer records, so a bad
+  // cart never creates a guest profile.
+  const priced = await pricePublicCart({ restaurantId, branchId, items, promoCode: body.promoCode });
+  if (!priced.ok) return sendError(res, priced.message, undefined, priced.status || 400);
+  const { normalized, menuMap, promotion, promotionId, promoCode, totals } = priced;
 
   // Order contact details (name, phone, address) are stored on the order itself;
   // the customer record is only linked, never overwritten from a public form.
   const customer = await resolvePublicCustomer(req, restaurantId, { name: customerName, phone: contactPhone, email: contactEmail, address: deliveryAddress, notes: 'Created from online ordering' });
 
-  let promotion: any = undefined;
-  let promotionId: string | undefined;
-  const promoCode = String(body.promoCode || '').trim();
-  const baseSubtotal = normalized.reduce((sum: number, item: { menuItemId: string; quantity: number }) => sum + (menuMap.get(item.menuItemId)!.sellingPrice * item.quantity), 0);
-  if (promoCode) {
-    const found = await prisma.promotion.findFirst({ where: { restaurantId, active: true, code: { equals: promoCode } } });
-    if (!found) return sendError(res, 'Promotion code is invalid', undefined, 400);
+  // Customer-specific promotion rules (one per customer, members only) need
+  // the resolved customer.
+  if (promotionId) {
     try {
-      promotion = await validatePromotion(found.id, restaurantId, branchId, customer.id, baseSubtotal);
-      promotionId = found.id;
+      await validatePromotion(promotionId, restaurantId, branchId, customer.id, totals.subtotal);
     } catch (promoErr: any) {
       return sendError(res, promoErr.message || 'Invalid promotion code', undefined, 400);
     }
   }
-
-  const calcItems = normalized.map((item: { menuItemId: string; quantity: number }) => ({ menuItemId: item.menuItemId, unitPrice: menuMap.get(item.menuItemId)!.sellingPrice, quantity: item.quantity, modifiers: [] }));
-  const totals = await calculateOrderTotals({ items: calcItems, discountAmount: 0, discountType: 'FIXED', restaurantId, branchId, promotion: promotion ? { discountType: promotion.discountType, value: promotion.value, scope: promotion.scope, menuItemId: promotion.menuItemId, maxDiscountAmount: promotion.maxDiscountAmount } : undefined } as OrderCalculationInput);
 
   const systemUser = await prisma.user.findFirst({ where: { restaurantId, status: 'ACTIVE' }, orderBy: { createdAt: 'asc' }, select: { id: true } });
   if (!systemUser) return sendError(res, 'Online ordering is not configured for this restaurant', undefined, 409);
