@@ -1,14 +1,14 @@
 import prisma from '../config/database';
+import { getRestaurantTimeZone, startOfLocalDay, zonedParts } from '../utils/timezone';
 import { safeErrorMessage } from '../utils/safeError';
 import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
 
-const dayKey = (date: Date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+/** Restaurant-local calendar day ("YYYY-MM-DD") of an instant. */
+const dayKey = (date: Date, timeZone: string) => {
+  const p = zonedParts(date, timeZone);
+  return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 };
 
 export const getDashboardMetrics = async (req: AuthRequest, res: ExpressResponse) => {
@@ -21,11 +21,11 @@ export const getDashboardMetrics = async (req: AuthRequest, res: ExpressResponse
 
     const scoped = (extra: any = {}) => ({ restaurantId, ...(branchId ? { branchId } : {}), ...extra });
 
-    const now = new Date();
-    const today = new Date(now);
-    today.setHours(0, 0, 0, 0);
-    const trendStart = new Date(today);
-    trendStart.setDate(trendStart.getDate() - 6);
+    // "Today" and the 7-day trend use the restaurant's local days, not the
+    // server's UTC clock (which is 3 hours behind Nairobi).
+    const timeZone = await getRestaurantTimeZone(restaurantId);
+    const today = startOfLocalDay(timeZone);
+    const trendStart = new Date(today.getTime() - 6 * 86_400_000);
 
     // Run independent metric queries with safe fallbacks
     const [
@@ -103,11 +103,11 @@ export const getDashboardMetrics = async (req: AuthRequest, res: ExpressResponse
 
     const trendMap = new Map<string, { sales: number; orders: number }>();
     for (let i = 0; i < 7; i++) {
-      const d = new Date(trendStart); d.setDate(trendStart.getDate() + i);
-      trendMap.set(dayKey(d), { sales: 0, orders: 0 });
+      const d = new Date(trendStart.getTime() + i * 86_400_000 + 12 * 3_600_000);
+      trendMap.set(dayKey(d, timeZone), { sales: 0, orders: 0 });
     }
     trendCompletedSales.forEach((sale: any) => {
-      const row = trendMap.get(dayKey(new Date(sale.createdAt)));
+      const row = trendMap.get(dayKey(new Date(sale.createdAt), timeZone));
       if (row) {
         row.sales += Number(sale.totalAmount || 0);
         row.orders += 1;

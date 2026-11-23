@@ -560,6 +560,10 @@ model Sale {
   totalAmount         Float
   notes               String?
   createdBy           String
+  /// Idempotency key sent by the client (POS, offline sync, online checkout) so retries never duplicate an order.
+  clientRequestId     String?
+  /// Set once stock has been deducted for this order (claimed atomically; prevents double deduction).
+  inventoryDeductedAt DateTime?
   completedAt         DateTime?
   cancelledAt         DateTime?
   cancelReason        String?
@@ -583,6 +587,9 @@ model Sale {
   @@index([restaurantId, branchId, status])
   @@index([restaurantId, createdAt])
   @@index([promotionId])
+  @@unique([restaurantId, clientRequestId])
+  @@index([tableId, status])
+  @@index([customerId])
   @@map("orders")
 }
 
@@ -1198,6 +1205,7 @@ model Payment {
   @@index([restaurantId, createdAt])
   @@index([branchId, createdAt])
   @@index([saleId, status])
+  @@index([reference])
   @@map("payments")
 }
 

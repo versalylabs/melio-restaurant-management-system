@@ -1,13 +1,16 @@
 import prisma from '../config/database';
+import { getRestaurantTimeZone, localDayRange } from '../utils/timezone';
 
-function rangeDates(startDate?: string, endDate?: string) {
-  const end = endDate ? new Date(`${endDate}T23:59:59.999`) : new Date();
-  const start = startDate ? new Date(`${startDate}T00:00:00.000`) : new Date(end.getTime() - 29 * 24 * 60 * 60 * 1000);
+/** Report date range; "YYYY-MM-DD" bounds are restaurant-local calendar days. */
+export function rangeDates(startDate?: string, endDate?: string, timeZone?: string) {
+  const end = (endDate && localDayRange(endDate, timeZone)?.end) || new Date();
+  const start = (startDate && localDayRange(startDate, timeZone)?.start) || new Date(end.getTime() - 29 * 24 * 60 * 60 * 1000);
   return { start, end };
 }
 
 export async function buildSalesReport(restaurantId: string, options: { startDate?: string; endDate?: string; branchId?: string } = {}) {
-  const { start, end } = rangeDates(options.startDate, options.endDate);
+  const timeZone = await getRestaurantTimeZone(restaurantId);
+  const { start, end } = rangeDates(options.startDate, options.endDate, timeZone);
   const where: any = { restaurantId, createdAt: { gte: start, lte: end }, status: 'COMPLETED' };
   if (options.branchId) where.branchId = options.branchId;
 
@@ -94,9 +97,40 @@ export async function buildSalesReport(restaurantId: string, options: { startDat
   const orderCount = sales.length;
   const averageOrderValue = orderCount ? grossSales / orderCount : 0;
   const grossProfitEstimate = grossSales - totalCost;
+
+  // Gross sales are what was billed. Money actually kept is billed minus
+  // refunds, and completed orders that were never (fully) paid are reported
+  // separately instead of silently counting as revenue.
+  const saleIds = sales.map((s: any) => s.id);
+  const refundAgg = saleIds.length
+    ? await prisma.payment.aggregate({ where: { saleId: { in: saleIds }, status: 'REFUNDED' }, _sum: { amount: true }, _count: { _all: true } })
+    : { _sum: { amount: 0 }, _count: { _all: 0 } };
+  const totalRefunds = Math.round(Number(refundAgg._sum.amount || 0) * 100) / 100;
+  // Refunds per order, so a refunded bill is not also counted as "unpaid".
+  const refundRows = saleIds.length
+    ? await prisma.payment.groupBy({ by: ['saleId'], where: { saleId: { in: saleIds }, status: 'REFUNDED' }, _sum: { amount: true } })
+    : [];
+  const refundedBySale = new Map(refundRows.map((r: any) => [r.saleId, Number(r._sum.amount || 0)]));
+  let unpaidOrderCount = 0;
+  let unpaidAmount = 0;
+  let collected = 0;
+  for (const s of sales as any[]) {
+    const paid = (s.payments || []).reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0); // COMPLETED only
+    collected += paid;
+    const owed = s.totalAmount - paid - (refundedBySale.get(s.id) || 0);
+    if (owed > 0.005) { unpaidOrderCount++; unpaidAmount += owed; }
+  }
+  unpaidAmount = Math.round(unpaidAmount * 100) / 100;
+  // Billed minus refunds.
+  const netSales = Math.round((grossSales - totalRefunds) * 100) / 100;
+  // Money actually held for these orders (completed, not refunded, payments).
+  const collectedSales = Math.round(collected * 100) / 100;
   return {
     period: { startDate: start.toISOString(), endDate: end.toISOString() },
-    summary: { orderCount, grossSales, totalDiscounts, totalTax, totalServiceCharge, totalCost, grossProfitEstimate, averageOrderValue },
+    summary: {
+      orderCount, grossSales, totalDiscounts, totalTax, totalServiceCharge, totalCost, grossProfitEstimate, averageOrderValue,
+      totalRefunds, refundCount: refundAgg._count._all, netSales, unpaidOrderCount, unpaidAmount, collectedSales,
+    },
     byProduct: [...byProduct.values()].sort((a,b) => b.sales-a.sales),
     byCategory: [...byCategory.values()].sort((a,b) => b.sales-a.sales),
     byCashier: [...byCashier.values()].sort((a,b) => b.sales-a.sales),

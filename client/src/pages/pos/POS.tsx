@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { newRequestId } from '../../lib/utils';
 import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Clock, CheckCircle, AlertCircle, UtensilsCrossed, WifiOff, UploadCloud, RefreshCw, Trash2 } from 'lucide-react';
 import { orderApi, customerApi, promotionApi, restaurantApi, branchApi } from '../../services/api';
 import type { PosCategory, PosMenuItem, PosTable, SaleItem, SaleItemModifier } from '../../types';
@@ -368,7 +369,17 @@ export default function POS() {
     setCart((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const queueOrderLocally = async (status: 'SUBMITTED' | 'HELD') => {
+  // One idempotency key per cart: kept across retries (e.g. after a gateway
+  // timeout where the server did save the order), reset when the cart changes
+  // or the order goes through, so a retry can never create a second order.
+  const pendingRequestId = useRef<{ key: string; status: string } | null>(null);
+  useEffect(() => { pendingRequestId.current = null; }, [cart, selectedTable, orderType, selectedPromotionId, manualDiscount, manualDiscountType]);
+  const requestIdFor = (status: 'SUBMITTED' | 'HELD') => {
+    if (!pendingRequestId.current || pendingRequestId.current.status !== status) pendingRequestId.current = { key: newRequestId(), status };
+    return pendingRequestId.current.key;
+  };
+
+  const queueOrderLocally = async (status: 'SUBMITTED' | 'HELD', requestId?: string) => {
     const activeBranchId = getActiveBranchId(user);
     const totals = getPreviewTotals();
     const offOrder = await offlineSyncService.queueOfflineOrder({
@@ -400,7 +411,7 @@ export default function POS() {
       taxAmount: totals.tax,
       serviceChargeAmount: totals.service,
       totalAmount: totals.total,
-    });
+    }, requestId);
 
     setSuccessMessage(`Order #${offOrder.offlineOrderNumber} saved to Offline Queue! Will auto-sync when online.`);
     setTimeout(() => setSuccessMessage(''), 5000);
@@ -423,9 +434,11 @@ export default function POS() {
     }
 
     setSubmitting(true);
+    // Same ID for every retry of this cart, and for the offline queue fallback.
+    const requestId = requestIdFor('SUBMITTED');
     if (!navigator.onLine) {
       try {
-        await queueOrderLocally('SUBMITTED');
+        await queueOrderLocally('SUBMITTED', requestId);
       } catch (err: any) {
         setError('Failed to queue offline order: ' + err.message);
       } finally {
@@ -436,6 +449,7 @@ export default function POS() {
 
     try {
       const response = await orderApi.createOrder({
+        clientRequestId: requestId,
         orderType,
         tableId: selectedTable?.id,
         customerName: customerName || undefined,
@@ -475,7 +489,9 @@ export default function POS() {
     } catch (err: any) {
       if (!navigator.onLine || !err.response || err.code === 'ERR_NETWORK') {
         try {
-          await queueOrderLocally('SUBMITTED');
+          // The request may have reached the server before the connection
+          // dropped; the shared requestId makes the later sync a no-op if so.
+          await queueOrderLocally('SUBMITTED', requestId);
         } catch (offErr: any) {
           setError('Network unavailable and offline queueing failed: ' + offErr.message);
         }
@@ -491,10 +507,11 @@ export default function POS() {
     if (cart.length === 0) return;
     setError('');
     setSubmitting(true);
+    const requestId = requestIdFor('HELD');
 
     if (!navigator.onLine) {
       try {
-        await queueOrderLocally('HELD');
+        await queueOrderLocally('HELD', requestId);
       } catch (err: any) {
         setError('Failed to queue offline held order: ' + err.message);
       } finally {
@@ -505,6 +522,7 @@ export default function POS() {
 
     try {
       const response = await orderApi.createOrder({
+        clientRequestId: requestId,
         orderType,
         tableId: selectedTable?.id,
         customerName: customerName || undefined,
@@ -538,7 +556,7 @@ export default function POS() {
     } catch (err: any) {
       if (!navigator.onLine || !err.response || err.code === 'ERR_NETWORK') {
         try {
-          await queueOrderLocally('HELD');
+          await queueOrderLocally('HELD', requestId);
         } catch (offErr: any) {
           setError('Network unavailable and offline queueing failed: ' + offErr.message);
         }

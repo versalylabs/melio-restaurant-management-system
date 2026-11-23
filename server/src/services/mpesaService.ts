@@ -159,7 +159,7 @@ export async function initiateMpesaStkPush({ trackingToken, phoneNumber }: { tra
   if (placeholder) {
     await prisma.payment.update({
       where: { id: placeholder.id },
-      data: { method: 'MOBILE_MONEY', amount: payableAmount, reference: checkoutRequestId, notes },
+      data: { method: 'MOBILE_MONEY', amount: payableAmount, reference: checkoutRequestId, notes, createdAt: new Date() },
     });
   } else {
     await prisma.payment.create({
@@ -303,17 +303,8 @@ async function settleVerifiedStkPayment(
   const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
   if (!payment) return { handled: false, reason: 'payment not found' };
 
-  if (online.paymentState === 'PAID') {
-    // Customer paid twice (e.g. retried STK push). Keep a record so staff can refund it.
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: { status: 'DUPLICATE', reference: receipt, notes: `${payment.notes || ''} [Duplicate payment ${paidAmount} — refund required]`.trim() },
-    });
-    console.warn(`[M-Pesa] Duplicate payment ${receipt} received for already-paid order ${online.trackingToken}.`);
-    return { handled: true, status: 'DUPLICATE' };
-  }
-
-  await settleOnlinePayment({
+  // Duplicate and cancelled-order cases are decided under the order lock inside settleOnlinePayment.
+  const outcome = await settleOnlinePayment({
     onlineOrderId: online.id,
     paymentId: payment.id,
     method: 'MOBILE_MONEY',
@@ -322,6 +313,11 @@ async function settleVerifiedStkPayment(
     notes: `M-Pesa receipt ${receipt} ${CHECKOUT_TAG(checkoutRequestId)}`,
     displayMethod: 'M-Pesa',
   });
+  if (outcome.alreadyPaid) {
+    console.warn(`[M-Pesa] Duplicate payment ${receipt} received for already-paid order ${online.trackingToken}; flagged for refund.`);
+    return { handled: true, status: 'DUPLICATE' };
+  }
+  if ((outcome as any).refundRequired) return { handled: true, status: 'REFUND_REQUIRED' };
   return { handled: true, status: 'PAID' };
 }
 

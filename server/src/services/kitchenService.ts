@@ -4,7 +4,8 @@ import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
 import { createAuditLog } from './auditLogService';
-import { completeOrder } from './orderCompletionService';
+import { markSaleServedFromKitchen } from './orderCompletionService';
+import { lockSale } from './saleLedgerService';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
 
@@ -227,6 +228,9 @@ export const getKitchenTickets = async (req: AuthRequest, res: ExpressResponse) 
   const where: any = { restaurantId };
   if (branchId) where.branchId = branchId;
   if (status) where.status = status as string;
+  // Tickets for cancelled orders are not work for the kitchen.
+  else where.status = { not: 'CANCELLED' };
+  if (status !== 'CANCELLED') where.order = { status: { not: 'CANCELLED' } };
   if (stationId) where.stationId = stationId as string;
   if (startDate || endDate) {
     where.receivedAt = {};
@@ -380,10 +384,15 @@ async function syncSaleStatusFromKitchen(orderId: string, restaurantId: string, 
   if (!transitionAllowed) return null;
 
   const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.sale.update({ where: { id: sale.id }, data: { status: nextStatus, updatedAt: new Date(), ...(nextStatus === 'READY' ? { completedAt: null } : {}) } });
+    // Re-check under the order lock: a cashier may have just cancelled or completed it.
+    await lockSale(tx, sale.id);
+    const moved = await tx.sale.updateMany({ where: { id: sale.id, status: sale.status }, data: { status: nextStatus, updatedAt: new Date(), ...(nextStatus === 'READY' ? { completedAt: null } : {}) } });
+    if (moved.count === 0) return null;
+    const result = await tx.sale.findUniqueOrThrow({ where: { id: sale.id } });
     await tx.saleStatusHistory.create({ data: { saleId: sale.id, status: nextStatus, changedBy: userId, notes: `Kitchen workflow moved order to ${nextStatus}` } });
     return result;
   });
+  if (!updated) return null;
 
   realtimeService.broadcast(`orders:${sale.branchId}`, 'order_status_updated', { orderId: sale.id, orderNumber: sale.orderNumber, status: nextStatus });
 
@@ -432,51 +441,47 @@ export const updateKitchenTicketStatus = async (req: AuthRequest, res: ExpressRe
     }
     if (priority) updateData.priority = priority;
 
-    // Completing a kitchen ticket must also complete the underlying sale if possible
+    // Serving from the kitchen moves the order to SERVED (READY for delivery);
+    // it never closes the sale. The sale completes once it is fully paid.
     if (status === 'SERVED' || status === 'COMPLETED') {
+      let sale: any;
       try {
-        const order = await completeOrder(ticket.orderId, restaurantId, userId);
-
-        const updated = await prisma.kitchenTicket.update({
-          where: { id },
-          data: { ...updateData, status: status === 'SERVED' ? 'SERVED' : 'COMPLETED', completedAt: new Date() },
-        });
-
-        // Realtime event
-        try {
-          realtimeService.broadcast(`kitchen:${ticket.branchId}`, 'ticket_status_changed', {
-            ticketId: id,
-            orderId: ticket.orderId,
-            status: updated.status,
-          });
-        } catch {}
-
-        // If online order exists, notify customer
-        try {
-          const online = await prisma.onlineOrder.findFirst({ where: { saleId: ticket.orderId }, include: { restaurant: true } });
-          if (online) {
-            await notifyCustomerOrderUpdate({
-              trackingToken: online.trackingToken,
-              orderNumber: order.orderNumber,
-              status: status === 'SERVED' ? 'SERVED' : 'COMPLETED',
-              customerPhone: online.contactPhone,
-              customerEmail: online.contactEmail,
-              restaurantName: online.restaurant?.name || 'Melio',
-            });
-          }
-        } catch {}
-
-        await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicket', id, `Ticket ${ticket.id} ${status === 'SERVED' ? 'served' : 'completed'} with order ${order.orderNumber}`);
-        return sendResponse(res, true, status === 'SERVED' ? 'Kitchen ticket served and order completed successfully' : 'Kitchen ticket and order completed successfully', updated);
-      } catch (completeErr: any) {
-        // Fallback: if completeOrder had a non-fatal conflict (e.g. already completed), still update ticket status cleanly
-        const updated = await prisma.kitchenTicket.update({
-          where: { id },
-          data: { ...updateData, status: status === 'SERVED' ? 'SERVED' : 'COMPLETED', completedAt: new Date() },
-        });
-        await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicket', id, `Ticket ${ticket.id} status changed to ${status}`);
-        return sendResponse(res, true, 'Kitchen ticket updated successfully', updated);
+        sale = await markSaleServedFromKitchen(ticket.orderId, restaurantId, userId);
+      } catch (err: any) {
+        if (err?.message === 'ORDER_CANCELLED') return sendError(res, 'This order was cancelled. Remove the ticket instead of serving it.', undefined, 409);
+        if (err?.message === 'ORDER_NOT_FOUND') return sendError(res, 'Order for this ticket was not found', undefined, 404);
+        throw err;
       }
+
+      const updated = await prisma.kitchenTicket.update({
+        where: { id },
+        data: { ...updateData, status, completedAt: ticket.completedAt || new Date() },
+      });
+      await prisma.kitchenTicketItem.updateMany({
+        where: { ticketId: id, status: { in: ['PENDING', 'PREPARING', 'READY'] } },
+        data: { status: 'SERVED' },
+      }).catch(() => undefined);
+
+      realtimeService.broadcast(`kitchen:${ticket.branchId}`, 'ticket_status_changed', { ticketId: id, orderId: ticket.orderId, status: updated.status });
+
+      try {
+        const online = await prisma.onlineOrder.findFirst({ where: { saleId: ticket.orderId }, include: { restaurant: true } });
+        if (online) {
+          await notifyCustomerOrderUpdate({
+            trackingToken: online.trackingToken,
+            orderNumber: sale.orderNumber,
+            status: sale.status,
+            customerPhone: online.contactPhone,
+            customerEmail: online.contactEmail,
+            restaurantName: online.restaurant?.name || 'Melio',
+          });
+        }
+      } catch (err) {
+        console.error('Customer notification after serving failed:', err);
+      }
+
+      await createAuditLog(restaurantId, userId, 'UPDATE', 'KitchenTicket', id, `Ticket for order ${sale.orderNumber} marked ${status}; order is now ${sale.status}`);
+      return sendResponse(res, true, sale.status === 'COMPLETED' ? 'Order served and closed (already paid)' : `Order served; it is now ${sale.status}`, updated);
     }
 
     const updated = await prisma.kitchenTicket.update({
@@ -598,7 +603,21 @@ export const updateKitchenTicketItemStatus = async (req: AuthRequest, res: Expre
   }
 };
 
-export const createKitchenTicketForOrder = async (orderId: string, restaurantId: string, branchId: string) => {
+export const createKitchenTicketForOrder = async (orderId: string, restaurantId: string, branchId: string): Promise<any> => {
+  try {
+    return await createKitchenTicketForOrderOnce(orderId, restaurantId, branchId);
+  } catch (err: any) {
+    // Two callers (e.g. an M-Pesa callback and a cashier) raced to create the
+    // same ticket; the unique (orderId, branchId) index kept one. Return it.
+    if (err?.code === 'P2002') {
+      const existing = await prisma.kitchenTicket.findFirst({ where: { orderId, branchId } });
+      if (existing) return existing;
+    }
+    throw err;
+  }
+};
+
+const createKitchenTicketForOrderOnce = async (orderId: string, restaurantId: string, branchId: string) => {
   const existing = await prisma.kitchenTicket.findFirst({ where: { orderId, branchId } });
   if (existing) {
     return existing;

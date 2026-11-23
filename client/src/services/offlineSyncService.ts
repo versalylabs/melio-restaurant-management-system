@@ -144,13 +144,19 @@ class OfflineSyncService {
   }
 
   // --- Offline Order Queue ---
-  async queueOfflineOrder(orderData: Omit<OfflineOrder, 'id' | 'offlineOrderNumber' | 'createdAt' | 'syncStatus'>): Promise<OfflineOrder> {
+  /**
+   * `requestId` should be the clientRequestId already used for an online
+   * attempt of this same order (e.g. one that timed out). The server treats it
+   * as the order's idempotency key, so if that attempt did reach the server,
+   * syncing returns the existing order instead of creating a duplicate.
+   */
+  async queueOfflineOrder(orderData: Omit<OfflineOrder, 'id' | 'offlineOrderNumber' | 'createdAt' | 'syncStatus'>, requestId?: string): Promise<OfflineOrder> {
     const db = await this.getDB();
 
     // Generate next offline sequence number
     const seq = await this.getNextOfflineSeq();
     const offlineOrderNumber = `OFF-${String(seq).padStart(4, '0')}`;
-    const id = `melio_off_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const id = requestId || `melio_off_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     const fullOrder: OfflineOrder = {
       ...orderData,
@@ -197,7 +203,9 @@ class OfflineSyncService {
         const req = store.getAll();
         req.onsuccess = () => {
           const list: OfflineOrder[] = req.result || [];
-          resolve(list.filter((o) => o.syncStatus === 'PENDING' || o.syncStatus === 'FAILED'));
+          // SYNCING is included: a tab closed mid-sync would otherwise strand the
+          // order forever. Re-sending is safe because sync is idempotent per order id.
+          resolve(list.filter((o) => o.syncStatus === 'PENDING' || o.syncStatus === 'FAILED' || o.syncStatus === 'SYNCING'));
         };
         req.onerror = () => resolve([]);
       });

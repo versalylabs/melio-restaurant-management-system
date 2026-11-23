@@ -79,6 +79,18 @@ docker compose exec server npx prisma db seed
 - For schema changes: edit `schema.prisma`, run `npm run db:migrate` locally to create a new
   migration, commit it, then run `npm run db:deploy` against production. CI fails if the schema
   and migrations drift apart.
+- **Order matters: apply migrations _before_ deploying the code that uses them.** The Vercel
+  build only runs `prisma generate`, not migrations. If new code reaches production before its
+  columns exist, every order query fails. All migrations so far are additive, so running
+  `db:deploy` first is safe for the code that is still live.
+- Integration tests run the real API against a **local** Postgres database (they refuse any
+  other host):
+  ```bash
+  cd server
+  DATABASE_URL=postgresql://user@127.0.0.1:5432/melio_test npx prisma migrate deploy
+  DATABASE_URL=postgresql://user@127.0.0.1:5432/melio_test SEED_USER_PASSWORD=local-only-pw npx prisma db seed
+  TEST_DATABASE_URL=postgresql://user@127.0.0.1:5432/melio_test npm run test:integration
+  ```
 
 ### 5. Configure Nginx Reverse Proxy & Free SSL (Let's Encrypt)
 Install Nginx and Certbot on host:

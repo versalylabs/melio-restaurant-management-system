@@ -3,6 +3,8 @@ import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
 import { createAuditLog } from './auditLogService';
+import { convertQuantity } from '../utils/units';
+import { notifyRestaurantStaff } from './notificationService';
 
 const COST_ROLES = ['OWNER', 'ADMIN', 'MANAGER', 'INVENTORY_MANAGER'];
 
@@ -599,6 +601,9 @@ export const adjustStock = async (req: AuthRequest, res: ExpressResponse) => {
   type TxResult = { __error?: string; [k: string]: any };
 
   const result = await prisma.$transaction(async (tx) => {
+    // Lock the row so two adjustments (or an adjustment and a sale) can't both
+    // compute from the same old quantity and overwrite each other.
+    await tx.$queryRaw`SELECT id FROM "inventory_stocks" WHERE id = ${id} FOR UPDATE`;
     const stock = await tx.inventoryStock.findFirst({ where: { id, restaurantId } });
     if (!stock) {
       const r: TxResult = { __error: 'NOT_FOUND' };
@@ -777,6 +782,7 @@ export const getWastageRecords = async (req: AuthRequest, res: ExpressResponse) 
 
 async function consumeInventoryQuantity(tx: any, params: { restaurantId: string; branchId: string; ingredientId: string; quantity: number; unit: string; type: string; reason?: string; referenceId?: string; referenceType?: string; userId: string; notes?: string; }) {
   const { restaurantId, branchId, ingredientId, quantity, unit, type, reason, referenceId, referenceType, userId, notes } = params;
+  await tx.$queryRaw`SELECT id FROM "inventory_stocks" WHERE "branchId" = ${branchId} AND "ingredientId" = ${ingredientId} FOR UPDATE`;
   const stock = await tx.inventoryStock.findUnique({ where: { branchId_ingredientId: { branchId, ingredientId } } });
   if (!stock || stock.quantity + 0.000001 < quantity) return false;
 
@@ -2446,42 +2452,129 @@ export const createPurchaseCorrection = async (req: AuthRequest, res: ExpressRes
   return sendResponse(res, true, 'Purchase correction created successfully', result.correction, 201);
 };
 
+/** Order statuses at which the food has left the kitchen, so its stock is used. */
+const DEDUCTIBLE_STATUSES = ['SERVED', 'OUT_FOR_DELIVERY', 'COMPLETED'];
+
+/**
+ * Deducts recipe ingredients for an order, exactly once.
+ *
+ * - Runs when the food leaves the kitchen (SERVED / OUT_FOR_DELIVERY) or the
+ *   order is completed, whichever comes first.
+ * - The food has been sold, so stock is always deducted in full, even if that
+ *   takes it below zero; staff are notified about ingredients that went
+ *   negative (the count is wrong or a delivery wasn't recorded).
+ * - Recipe quantities are converted into the stock's unit (g -> kg, ml -> l).
+ * - Idempotent: the order's inventoryDeductedAt is claimed atomically first.
+ */
 export const deductInventoryForOrder = async (orderId: string, restaurantId: string, branchId: string) => {
   const order = await prisma.sale.findFirst({
     where: { id: orderId, restaurantId, branchId },
     include: { items: true },
   });
-  if (!order || order.status !== 'COMPLETED') return;
+  if (!order || !DEDUCTIBLE_STATUSES.includes(order.status) || order.inventoryDeductedAt) return;
 
-  const existingDeduction = await prisma.stockMovement.findFirst({
-    where: { restaurantId, branchId, referenceId: orderId, referenceType: 'ORDER_DEDUCTION' },
-  });
-  if (existingDeduction) return;
-
-  const menuItemIds = order.items.map((i) => i.menuItemId);
+  const menuItemIds = [...new Set(order.items.map((i) => i.menuItemId))];
   const menuItems = await prisma.menuItem.findMany({
     where: { id: { in: menuItemIds }, restaurantId },
     include: { recipe: { include: { ingredients: { include: { ingredient: true } } } } },
   });
   const menuItemMap = new Map(menuItems.map((m) => [m.id, m]));
 
-  await prisma.$transaction(async (tx) => {
-    for (const item of order.items) {
-      const recipe = menuItemMap.get(item.menuItemId)?.recipe;
-      if (!recipe || recipe.status === 'INACTIVE') continue;
-      for (const ri of recipe.ingredients) {
-        if (ri.ingredient.status === 'INACTIVE' || !ri.ingredient.available) continue;
-        const totalQty = ri.quantity * item.quantity;
-        const ok = await consumeInventoryQuantity(tx, {
-          restaurantId, branchId, ingredientId: ri.ingredientId, quantity: totalQty, unit: ri.unit,
-          type: 'CONSUMPTION', reason: 'Order consumption', referenceId: orderId,
-          referenceType: 'ORDER_DEDUCTION', userId: order.createdBy, notes: `Deducted for order ${order.orderNumber}`,
-        });
-        if (!ok) throw new Error(`INSUFFICIENT_STOCK:${ri.ingredient.name}`);
-      }
+  // Total needed per ingredient, still in recipe units (converted per stock row below).
+  const needs = new Map<string, { name: string; parts: Array<{ quantity: number; unit: string }> }>();
+  for (const item of order.items) {
+    const recipe = menuItemMap.get(item.menuItemId)?.recipe;
+    if (!recipe || recipe.status === 'INACTIVE') continue;
+    for (const ri of recipe.ingredients) {
+      if (ri.ingredient.status === 'INACTIVE') continue;
+      const entry = needs.get(ri.ingredientId) || { name: ri.ingredient.name, parts: [] };
+      entry.parts.push({ quantity: ri.quantity * item.quantity, unit: ri.unit || ri.ingredient.unit });
+      needs.set(ri.ingredientId, entry);
     }
-  });
+  }
+
+  const wentNegative: string[] = [];
+  const unitMismatch: string[] = [];
+
+  await prisma.$transaction(async (tx) => {
+    // Claim the deduction first: a concurrent or repeated call finds it taken and stops.
+    const claimed = await tx.sale.updateMany({ where: { id: orderId, inventoryDeductedAt: null }, data: { inventoryDeductedAt: new Date() } });
+    if (claimed.count === 0) return;
+
+    // Fixed ingredient order prevents deadlocks between two orders sharing ingredients.
+    for (const ingredientId of [...needs.keys()].sort()) {
+      const need = needs.get(ingredientId)!;
+      const rows = await tx.$queryRaw<Array<{ id: string; quantity: number; unit: string }>>`
+        SELECT id, quantity, unit FROM "inventory_stocks" WHERE "branchId" = ${branchId} AND "ingredientId" = ${ingredientId} FOR UPDATE`;
+      const stock = rows[0];
+      if (!stock) continue; // Ingredient isn't stocked at this branch.
+
+      let total = 0;
+      let convertible = true;
+      for (const part of need.parts) {
+        const converted = convertQuantity(part.quantity, part.unit, stock.unit);
+        if (converted === null) { convertible = false; break; }
+        total += converted;
+      }
+      if (!convertible) { unitMismatch.push(need.name); continue; }
+      if (total <= 0) continue;
+
+      // Use up batches oldest-expiry first; anything left comes from unbatched stock.
+      let remaining = total;
+      const batches = await tx.inventoryBatch.findMany({
+        where: { restaurantId, branchId, ingredientId, status: 'ACTIVE', quantity: { gt: 0 } },
+        orderBy: [{ expiryDate: 'asc' }, { receivedAt: 'asc' }, { createdAt: 'asc' }],
+      });
+      for (const batch of batches) {
+        if (remaining <= 0.000001) break;
+        const take = Math.min(batch.quantity, remaining);
+        if (take <= 0) continue;
+        const left = batch.quantity - take;
+        await tx.inventoryBatch.update({ where: { id: batch.id }, data: { quantity: left, status: left <= 0.000001 ? 'DEPLETED' : 'ACTIVE' } });
+        await tx.stockMovement.create({ data: {
+          restaurantId, branchId, ingredientId, quantity: -take, unit: stock.unit, type: 'CONSUMPTION', reason: 'Order consumption',
+          referenceId: orderId, referenceType: 'ORDER_DEDUCTION', batchId: batch.id, userId: order.createdBy, notes: `Deducted for order ${order.orderNumber}`,
+        } });
+        remaining -= take;
+      }
+      if (remaining > 0.000001) {
+        await tx.stockMovement.create({ data: {
+          restaurantId, branchId, ingredientId, quantity: -remaining, unit: stock.unit, type: 'CONSUMPTION', reason: 'Order consumption',
+          referenceId: orderId, referenceType: 'ORDER_DEDUCTION', userId: order.createdBy, notes: `Deducted for order ${order.orderNumber} (unbatched stock)`,
+        } });
+      }
+
+      const updated = await tx.inventoryStock.update({ where: { id: stock.id }, data: { quantity: { decrement: total } } });
+      if (updated.quantity < -0.000001) wentNegative.push(`${need.name} (${Math.round(updated.quantity * 1000) / 1000} ${stock.unit})`);
+    }
+  }, { timeout: 20_000, maxWait: 10_000 });
+
+  if (wentNegative.length || unitMismatch.length) {
+    const lines = [
+      wentNegative.length ? `Stock went below zero after order ${order.orderNumber}: ${wentNegative.join(', ')}. Check the count or record the delivery.` : '',
+      unitMismatch.length ? `Not deducted for order ${order.orderNumber} because the recipe unit doesn't match the stock unit: ${unitMismatch.join(', ')}. Fix the recipe units.` : '',
+    ].filter(Boolean).join(' ');
+    void notifyRestaurantStaff(restaurantId, branchId, 'INVENTORY_ALERT', 'Inventory needs attention', lines, 'SALE', orderId)
+      .catch((err) => console.error('Inventory alert notification failed:', err));
+  }
 };
+
+/**
+ * Deducts stock, and if that fails (timeout, lost connection) tells staff
+ * instead of failing silently: the order is already sold, so nothing else
+ * will retry it. The claim is rolled back on failure, so a later call works.
+ */
+export async function deductInventoryForOrderSafely(orderId: string, restaurantId: string, branchId: string) {
+  try {
+    await deductInventoryForOrder(orderId, restaurantId, branchId);
+  } catch (error) {
+    console.error('Inventory deduction failed:', error);
+    const order = await prisma.sale.findUnique({ where: { id: orderId }, select: { orderNumber: true } }).catch(() => null);
+    void notifyRestaurantStaff(restaurantId, branchId, 'INVENTORY_ALERT', 'Stock not deducted',
+      `Stock could not be deducted for order ${order?.orderNumber || orderId}. Check the stock levels for its items.`, 'SALE', orderId)
+      .catch(() => undefined);
+  }
+}
 
 export const getSupplierIngredients = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;

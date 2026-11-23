@@ -2,6 +2,9 @@ import prisma from '../config/database';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
 import { createKitchenTicketForOrder } from './kitchenService';
+import { lockSaleForOnlineOrder, syncPaymentState } from './saleLedgerService';
+import { notifyRestaurantStaff } from './notificationService';
+import { completeOrder } from './orderCompletionService';
 
 /**
  * Simulated payments (fake M-Pesa receipts, fake card approvals, manual
@@ -41,18 +44,33 @@ export interface SettleOnlinePaymentInput {
  */
 export async function settleOnlinePayment(input: SettleOnlinePaymentInput) {
   const result = await prisma.$transaction(async (tx) => {
+    // Lock the order first; every read below happens under the lock.
+    const saleId = await lockSaleForOnlineOrder(tx, input.onlineOrderId);
+    if (!saleId) throw new PaymentError('ORDER_NOT_FOUND', 'Order not found', 404);
     const online = await tx.onlineOrder.findUnique({
       where: { id: input.onlineOrderId },
       include: { sale: true },
     });
     if (!online) throw new PaymentError('ORDER_NOT_FOUND', 'Order not found', 404);
-    if (online.paymentState === 'PAID') return { alreadyPaid: true as const, online };
-    if (online.sale.status === 'CANCELLED') throw new PaymentError('ORDER_CANCELLED', 'This order was cancelled');
+    if (online.paymentState === 'PAID') {
+      // Customer paid twice (e.g. retried an STK push). Keep the record so staff can refund it.
+      if (input.paymentId) {
+        await tx.payment.updateMany({
+          where: { id: input.paymentId, saleId: online.saleId, status: 'PENDING' },
+          data: { status: 'DUPLICATE', reference: input.reference, amount: input.amount, notes: `${input.notes} [Duplicate payment - refund required]` },
+        });
+      }
+      return { alreadyPaid: true as const, cancelled: false, online };
+    }
 
+    // The provider has already taken the money. Never drop it: if the order
+    // was cancelled meanwhile, record the payment and flag it for a refund.
+    const cancelled = online.sale.status === 'CANCELLED';
     const outstanding = Math.max(0, online.sale.totalAmount - online.sale.amountPaid);
-    if (input.amount + 0.01 < outstanding) {
+    if (!cancelled && input.amount + 0.01 < outstanding) {
       throw new PaymentError('AMOUNT_MISMATCH', `Payment of ${input.amount} is less than the outstanding ${outstanding}`);
     }
+    const notes = cancelled ? `${input.notes} [ORDER CANCELLED - REFUND REQUIRED]` : input.notes;
 
     const target = input.paymentId
       ? await tx.payment.findFirst({ where: { id: input.paymentId, saleId: online.saleId } })
@@ -61,7 +79,7 @@ export async function settleOnlinePayment(input: SettleOnlinePaymentInput) {
     if (target) {
       await tx.payment.update({
         where: { id: target.id },
-        data: { status: 'COMPLETED', method: input.method, amount: input.amount, reference: input.reference, notes: input.notes },
+        data: { status: 'COMPLETED', method: input.method, amount: input.amount, reference: input.reference, notes },
       });
     } else {
       await tx.payment.create({
@@ -73,22 +91,34 @@ export async function settleOnlinePayment(input: SettleOnlinePaymentInput) {
           amount: input.amount,
           status: 'COMPLETED',
           reference: input.reference,
-          notes: input.notes,
+          notes,
           createdBy: online.sale.createdBy,
         },
       });
     }
 
-    await tx.sale.update({
-      where: { id: online.saleId },
-      data: { amountPaid: online.sale.totalAmount, paymentStatus: 'PAID' },
-    });
-    await tx.onlineOrder.update({ where: { id: online.id }, data: { paymentState: 'PAID' } });
-
-    return { alreadyPaid: false as const, online };
+    // Recompute from all completed payments (keeps earlier partial payments).
+    const state = await syncPaymentState(tx, online.saleId);
+    return { alreadyPaid: false as const, cancelled, online, state };
   });
 
+  if (result.cancelled) {
+    void notifyRestaurantStaff(result.online.restaurantId, result.online.branchId, 'REFUND_REQUIRED', 'Refund required',
+      `Order ${result.online.sale.orderNumber} was cancelled but a ${input.displayMethod} payment of ${input.amount} (${input.reference}) arrived. Refund the customer.`,
+      'SALE', result.online.saleId).catch((err) => console.error('Refund-required notification failed:', err));
+    return { alreadyPaid: false, refundRequired: true, amount: input.amount, reference: input.reference };
+  }
+
   if (result.alreadyPaid) return { alreadyPaid: true, amount: input.amount, reference: input.reference };
+
+  // Paid after the food was already served: nothing left to do, close the order.
+  if (result.state?.paymentStatus === 'PAID' && result.state.saleStatus === 'SERVED') {
+    try {
+      await completeOrder(result.online.saleId, result.online.restaurantId, result.online.sale.createdBy);
+    } catch (err) {
+      console.error('[Payments] Auto-complete after online payment failed:', err);
+    }
+  }
 
   const online = await prisma.onlineOrder.findUnique({
     where: { id: input.onlineOrderId },

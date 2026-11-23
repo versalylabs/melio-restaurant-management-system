@@ -4,6 +4,8 @@ import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { createAuditLog } from '../services/auditLogService';
 import { createKitchenTicketForOrder } from '../services/kitchenService';
+import { ensureReceipt, lockSale, syncPaymentState } from '../services/saleLedgerService';
+import { completeOrder } from '../services/orderCompletionService';
 import { reverifyAwaitingPayment } from '../services/mpesaService';
 import { realtimeService } from '../services/realtimeService';
 
@@ -15,32 +17,6 @@ const REFUND_ROLES = ['OWNER', 'ADMIN', 'MANAGER'];
 // Waiters can see an order's payment status and receipt, but not the full payments ledger.
 const ORDER_PAYMENT_VIEW_ROLES = [...PAYMENT_ROLES, 'WAITER'];
 const METHODS = ['CASH', 'CARD', 'MOBILE_MONEY'];
-
-async function syncPaymentState(tx: any, saleId: string) {
-  const sale = await tx.sale.findUnique({ where: { id: saleId }, include: { onlineOrder: true } });
-  if (!sale) throw new Error('ORDER_NOT_FOUND');
-  const payments = await tx.payment.findMany({ where: { saleId, status: 'COMPLETED' } });
-  const paid = payments.reduce((sum: number, p: any) => sum + p.amount, 0);
-  const paymentStatus = paid <= 0 ? 'UNPAID' : paid + 0.005 < sale.totalAmount ? 'PARTIAL' : 'PAID';
-  await tx.sale.update({ where: { id: saleId }, data: { amountPaid: paid, paymentStatus } });
-  if (sale.onlineOrder) {
-    const newOnlineState = paymentStatus === 'PAID' ? 'PAID' : paymentStatus === 'PARTIAL' ? 'PARTIAL' : (sale.onlineOrder.paymentMethod === 'CASH' ? 'PAY_AT_PICKUP' : 'PENDING');
-    await tx.onlineOrder.update({ where: { id: sale.onlineOrder.id }, data: { paymentState: newOnlineState } });
-  }
-  return { paid, paymentStatus, balance: Math.max(0, sale.totalAmount - paid) };
-}
-
-async function ensureReceipt(tx: any, sale: any) {
-  const existing = await tx.receipt.findUnique({ where: { saleId: sale.id } });
-  if (existing) return existing;
-  const counter = await tx.receiptCounter.upsert({
-    where: { restaurantId_branchId: { restaurantId: sale.restaurantId, branchId: sale.branchId } },
-    create: { restaurantId: sale.restaurantId, branchId: sale.branchId, lastNumber: 1 },
-    update: { lastNumber: { increment: 1 } },
-  });
-  const next = counter.lastNumber;
-  return tx.receipt.create({ data: { restaurantId: sale.restaurantId, branchId: sale.branchId, saleId: sale.id, receiptNumber: `R-${String(next).padStart(6, '0')}` } });
-}
 
 router.get('/', authorize(...PAYMENT_ROLES), async (req: AuthRequest, res) => {
   try {
@@ -87,6 +63,9 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
     const change = method === 'CASH' ? tendered - requested : 0;
 
     const result = await prisma.$transaction(async (tx) => {
+      // Lock the order before reading its balance, so two cashiers (or a
+      // cashier and an M-Pesa callback) can't both pay the same balance.
+      if (!(await lockSale(tx, req.params.orderId))) throw new Error('ORDER_NOT_FOUND');
       const sale = await tx.sale.findFirst({
         where: { id: req.params.orderId, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) },
         include: { payments: { where: { status: 'COMPLETED' } } },
@@ -120,11 +99,9 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
       return { payment, ...state, receipt, orderNumber: sale.orderNumber, saleId: sale.id, branchId: sale.branchId };
     });
 
-    // Prepaid website orders are held back from the kitchen until paid. If staff
-    // take the payment instead (e.g. the customer pays at the counter), release
-    // the order to the kitchen now. Idempotent if a ticket already exists.
-    const online = await prisma.onlineOrder.findUnique({ where: { saleId: result.saleId }, select: { id: true } });
-    if (online) {
+    // Make sure the kitchen has the order: prepaid website orders are held back
+    // until paid, and a ticket may have failed to create earlier. Idempotent.
+    if (['SUBMITTED', 'PREPARING', 'READY'].includes(result.saleStatus)) {
       try {
         const existingTicket = await prisma.kitchenTicket.findFirst({ where: { orderId: result.saleId }, select: { id: true } });
         await createKitchenTicketForOrder(result.saleId, req.user!.restaurantId, result.branchId);
@@ -133,6 +110,16 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
         }
       } catch (err) {
         console.error('Kitchen ticket creation after staff payment failed:', err);
+      }
+    }
+
+    // An order already served and now fully paid is finished: close it
+    // (frees the table, deducts stock if not done yet, awards loyalty).
+    if (result.paymentStatus === 'PAID' && result.saleStatus === 'SERVED') {
+      try {
+        await completeOrder(result.saleId, req.user!.restaurantId, req.user!.id);
+      } catch (err) {
+        console.error('Auto-complete after full payment failed:', err);
       }
     }
 
@@ -155,7 +142,12 @@ router.post('/:id/refund', authorize(...REFUND_ROLES), async (req: AuthRequest, 
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     if (!reason) return sendError(res, 'Refund reason is required');
     const result = await prisma.$transaction(async (tx) => {
-      const payment = await tx.payment.findFirst({ where: { id: req.params.id, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) } });
+      const scope = { id: req.params.id, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) };
+      const found = await tx.payment.findFirst({ where: scope, select: { saleId: true } });
+      if (!found) throw new Error('PAYMENT_NOT_FOUND');
+      // Same lock as payments, so two refunds of one payment can't both succeed.
+      await lockSale(tx, found.saleId);
+      const payment = await tx.payment.findFirst({ where: scope });
       if (!payment) throw new Error('PAYMENT_NOT_FOUND');
       if (payment.status !== 'COMPLETED') throw new Error('PAYMENT_ALREADY_REFUNDED');
       await tx.payment.update({ where: { id: payment.id }, data: { status: 'REFUNDED', refundedAt: new Date(), refundReason: reason } });
