@@ -43,6 +43,13 @@ function config() {
   };
 }
 
+/** sandbox or production, and the public address Safaricom calls back (from MPESA_CALLBACK_URL). */
+export const mpesaEnvironment = () => config().baseUrl.includes('sandbox') ? 'sandbox' : 'production';
+export const mpesaCallbackBase = () => {
+  try { return new URL(config().callbackUrl).origin; } catch { return ''; }
+};
+export const mpesaCallbackSecret = () => config().callbackSecret;
+
 export function isMpesaConfigured(): boolean {
   const c = config();
   return Boolean(c.consumerKey && c.consumerSecret && c.passkey && c.shortcode && c.callbackUrl && c.callbackSecret.length >= 16);
@@ -79,7 +86,7 @@ async function getAccessToken(): Promise<string> {
   return body.access_token;
 }
 
-async function darajaPost<T>(path: string, payload: Record<string, unknown>): Promise<T> {
+export async function darajaPost<T>(path: string, payload: Record<string, unknown>): Promise<T> {
   const token = await getAccessToken();
   const res = await fetch(`${config().baseUrl}${path}`, {
     method: 'POST',
@@ -258,6 +265,7 @@ export async function settleStaffStkPayment(paymentId: string, checkoutRequestId
     if (payment.status !== 'PENDING') {
       if (receipt && payment.status === 'COMPLETED' && payment.reference === `STK_${checkoutRequestId}`) {
         await tx.payment.update({ where: { id: payment.id }, data: { reference: receipt, notes: `${payment.notes || ''} [Receipt ${receipt}]`.trim() } });
+        await tx.mpesaTransaction.updateMany({ where: { restaurantId: payment.restaurantId, transId: receipt, paymentId: null }, data: { paymentId: payment.id } });
       }
       return null;
     }
@@ -313,6 +321,8 @@ export async function settleStaffStkPayment(paymentId: string, checkoutRequestId
         },
       });
     }
+    // A till notification for this receipt may have arrived first: it is this payment.
+    if (receipt) await tx.mpesaTransaction.updateMany({ where: { restaurantId: payment.restaurantId, transId: receipt, paymentId: null }, data: { paymentId: payment.id } });
     const state = await syncPaymentState(tx, sale.id);
     if (state.paymentStatus === 'PAID' && !refundReason) await ensureReceipt(tx, sale);
     return { duplicateOfManual: false as const, sale, state, refundReason, excess, reference };
@@ -425,7 +435,7 @@ async function findPendingStkPayment(checkoutRequestId: string) {
   });
 }
 
-function verifyCallbackToken(token: unknown): boolean {
+export function verifyCallbackToken(token: unknown): boolean {
   const secret = config().callbackSecret;
   if (!secret || typeof token !== 'string') return false;
   const a = Buffer.from(token);

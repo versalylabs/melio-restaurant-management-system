@@ -6,6 +6,7 @@ import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Card from '../../components/ui/Card';
 import { CHANNEL_LABELS, COMMISSION_CHANNELS } from '../../lib/channels';
+import TillSettings from './TillSettings';
 
 export default function Settings() {
   const [, setRestaurant] = useState<Restaurant | null>(null);
@@ -283,6 +284,8 @@ export default function Settings() {
           </div>
         </form>
       </Card>
+
+      <TillSettings />
 
       <Card title="My Password" description="Change your own sign-in password. Changing it signs out existing sessions for this account.">
         <form onSubmit={changePassword} className="space-y-4">

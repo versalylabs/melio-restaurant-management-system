@@ -84,6 +84,7 @@ model Restaurant {
   @@map("restaurants")
   smsMessages SmsMessage[]
   licences Licence[]
+  mpesaTransactions MpesaTransaction[]
 }
 
 model Branch {
@@ -100,6 +101,12 @@ model Branch {
   updatedAt     DateTime @updatedAt
   callPhone     String?
   diningHours   String?
+  /// The branch's M-Pesa till or paybill number, and whether Safaricom sends its payments to Melio.
+  mpesaShortcode     String?   @unique
+  mpesaShortcodeType String?
+  mpesaRegisteredAt  DateTime?
+  /// Secret part of this till's callback address; a new one on every connect.
+  mpesaCallbackToken String?   @unique
 
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   users        User[]
@@ -1610,4 +1617,29 @@ model Licence {
 
   @@index([restaurantId, expiresAt])
   @@map("licences")
+}
+
+/// A payment Safaricom confirmed into a branch's till (C2B), whether or not it is on a bill yet.
+model MpesaTransaction {
+  id           String    @id @default(uuid())
+  restaurantId String
+  branchId     String
+  shortcode    String
+  /// The M-Pesa code (TransID).
+  transId      String    @unique
+  amount       Float
+  transTime    DateTime
+  /// As Safaricom sends it (masked or hashed).
+  msisdn       String?
+  firstName    String?
+  billRef      String?
+  /// The bill payment it was attached to.
+  paymentId    String?
+  createdAt    DateTime  @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([branchId, transTime])
+  @@index([restaurantId, paymentId])
+  @@map("mpesa_transactions")
 }

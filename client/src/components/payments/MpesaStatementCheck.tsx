@@ -29,6 +29,21 @@ export default function MpesaStatementCheck({ onChanged }: { onChanged?: () => v
   const [result, setResult] = useState<Result | null>(null);
   // Receipts and payments confirmed here, so a payment is never offered twice.
   const [done, setDone] = useState<Set<string>>(new Set());
+  const [day, setDay] = useState(() => new Date().toLocaleDateString('en-CA'));
+  const checkDay = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await paymentApi.mpesaDayCheck(day);
+      setResult(res.data.data);
+      setDone(new Set());
+      if (res.data.data.summary.confirmedNow) onChanged?.();
+    } catch (e: any) {
+      setError(e.response?.data?.message || 'Could not check that day');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const check = async () => {
     if (!file) return;
@@ -82,6 +97,13 @@ export default function MpesaStatementCheck({ onChanged }: { onChanged?: () => v
               <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] || null)} className="block w-full text-sm" aria-label="M-Pesa statement (CSV)" />
               {error && <p role="alert" className="text-red-600">{error}</p>}
               <Button onClick={check} loading={busy} disabled={!file}>Check statement</Button>
+              <div className="border-t border-gray-200 pt-4 dark:border-gray-800">
+                <p className="text-gray-600 dark:text-gray-300">Or, if this branch's till is connected to Melio, check a day without a file:</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input type="date" value={day} max={new Date().toLocaleDateString('en-CA')} onChange={(e) => setDay(e.target.value)} className="h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm dark:border-gray-600 dark:bg-[#111116]" aria-label="Day to check" />
+                  <Button variant="secondary" onClick={checkDay} loading={busy} disabled={!day}>Check this day</Button>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="text-sm">

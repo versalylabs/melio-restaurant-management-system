@@ -181,6 +181,7 @@ export const branchApi = {
   createTransfer: (data: any) => api.post('/branches/transfers', data),
   completeTransfer: (id: string) => api.post(`/branches/transfers/${id}/complete`),
   cancelTransfer: (id: string) => api.post(`/branches/transfers/${id}/cancel`),
+  updateBranch: (id: string, data: any) => api.put(`/branches/${id}`, data),
 };
 
 export const dashboardApi = {
@@ -392,6 +393,11 @@ export const paymentApi = {
   /** M-Pesa taken while Safaricom was down, and prompts still waiting for an answer. */
   getMpesaChecks: (branchId?: string, recheck = false) => api.get('/payments/mpesa-checks', { params: { ...(branchId ? { branchId } : {}), ...(recheck ? { recheck: '1' } : {}) } }),
   checkPayment: (id: string, data: { result: 'CONFIRMED' | 'NOT_RECEIVED'; reference?: string }) => api.post(`/payments/${id}/check`, data),
+  /** Payments customers sent straight to the branch's till, not on a bill yet. */
+  getIncoming: () => api.get('/payments/incoming'),
+  registerTill: (branchId: string) => api.post('/payments/till/register', { branchId }),
+  simulateTill: (branchId: string, amount: number) => api.post('/payments/till/simulate', { branchId, amount }),
+  mpesaDayCheck: (date: string) => api.post('/payments/mpesa-day-check', { date }),
   checkMpesaStatement: (data: FormData) => api.post('/payments/mpesa-statement', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
   refundPayment: (id: string, data: any) => api.post(`/payments/${id}/refund`, data),
   getReceipt: (orderId: string) => cachedGet(`/payments/orders/${orderId}/receipt`),
