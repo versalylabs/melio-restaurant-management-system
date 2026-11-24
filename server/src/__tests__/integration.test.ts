@@ -963,6 +963,116 @@ async function run() {
     }
   }
 
+  console.log('\n--- Tables: live floor, cleaning, moving guests ---');
+  {
+    const waiter = await prisma.user.findFirst({ where: { email: 'waiter@example.com' } });
+    const waiterToken = generateToken(waiter.id, restaurantId, waiter.tokenVersion);
+    const mk = (n: string) => prisma.table.create({ data: { restaurantId, branchId, tableNumber: `IT${n}-${uid().slice(-6)}`, capacity: 4 } });
+    const [t1, t2, t3] = [await mk('A'), await mk('B'), await mk('C')];
+    const live = async (token = cashierToken) => (await call('GET', `/tables/live?branchId=${branchId}`, token)).body.data;
+    const row = async (id: string, token = cashierToken) => (await live(token)).tables.find((t: any) => t.id === id);
+    const tableStatus = async (id: string) => (await prisma.table.findUnique({ where: { id } })).status;
+    const completeOrder = (id: string) => require('../services/orderCompletionService').completeOrder(id, restaurantId, owner.id);
+    try {
+      await test('An order on a table shows it occupied with the bill, waiter and time', async () => {
+        const order = (await newOrder({ orderType: 'DINE_IN', tableId: t1.id })).body.data;
+        assert.strictEqual(await tableStatus(t1.id), 'OCCUPIED');
+        const r = await row(t1.id);
+        assert.strictEqual(r.state, 'ORDERED');
+        assert.ok(Math.abs(r.balance - order.totalAmount) < 0.01 && r.minutes === 0 && r.orders.length === 1, JSON.stringify(r));
+        const pay = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+        assert.strictEqual(pay.status, 201, JSON.stringify(pay.body));
+        assert.strictEqual((await row(t1.id)).state, 'PAID');
+        await completeOrder(order.id);
+        assert.strictEqual(await tableStatus(t1.id), 'CLEANING');
+        assert.strictEqual((await row(t1.id)).state, 'CLEANING');
+      });
+      await test('A waiter can mark a table clean; tapping twice is harmless', async () => {
+        const first = await call('POST', `/tables/${t1.id}/service`, waiterToken, { action: 'MARK_CLEAN' });
+        assert.strictEqual(first.status, 200, JSON.stringify(first.body));
+        assert.strictEqual(await tableStatus(t1.id), 'AVAILABLE');
+        assert.strictEqual((await call('POST', `/tables/${t1.id}/service`, waiterToken, { action: 'MARK_CLEAN' })).status, 200);
+        assert.strictEqual((await call('POST', `/tables/${t1.id}/service`, waiterToken, { action: 'FLY' })).status, 400);
+      });
+      await test('Seating guests before they order, then they leave', async () => {
+        assert.strictEqual((await call('POST', `/tables/${t3.id}/service`, waiterToken, { action: 'SEAT' })).status, 200);
+        assert.strictEqual((await row(t3.id)).state, 'SEATED');
+        assert.strictEqual((await call('POST', `/tables/${t3.id}/service`, waiterToken, { action: 'CLEAR' })).status, 200);
+        assert.strictEqual(await tableStatus(t3.id), 'CLEANING');
+        await call('POST', `/tables/${t3.id}/service`, waiterToken, { action: 'MARK_CLEAN' });
+      });
+      await test('Moving guests takes their orders along and frees the old table for cleaning', async () => {
+        const a = (await newOrder({ orderType: 'DINE_IN', tableId: t1.id })).body.data;
+        const b = (await newOrder({ orderType: 'DINE_IN', tableId: t1.id })).body.data;
+        const res = await call('POST', `/orders/${a.id}/move-table`, cashierToken, { toTableId: t2.id });
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.strictEqual(res.body.data.moved.length, 2);
+        assert.strictEqual((await prisma.sale.findUnique({ where: { id: b.id } })).tableId, t2.id);
+        assert.strictEqual(await tableStatus(t1.id), 'CLEANING');
+        assert.strictEqual(await tableStatus(t2.id), 'OCCUPIED');
+        assert.strictEqual((await call('POST', `/orders/${a.id}/move-table`, cashierToken, { toTableId: t2.id })).status, 400, 'same table');
+        assert.strictEqual((await call('POST', `/orders/${a.id}/move-table`, waiterToken, { toTableId: t3.id })).status, 403, 'not the waiter\'s orders');
+        assert.strictEqual((await call('PUT', `/tables/${t2.id}/status`, ownerToken, { status: 'AVAILABLE' })).status, 409);
+        assert.strictEqual((await call('PUT', `/tables/${t2.id}/status`, ownerToken, { status: 'OCCUPIED' })).status, 400);
+        assert.strictEqual((await call('POST', `/tables/${t2.id}/service`, waiterToken, { action: 'CLEAR' })).status, 409);
+        for (const o of [a, b]) {
+          await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'CASH', amount: o.totalAmount });
+          await completeOrder(o.id);
+        }
+        assert.strictEqual(await tableStatus(t2.id), 'CLEANING', 'cleaning once the last order closes');
+      });
+      await test('An out-of-service table is not switched back on by an order closing', async () => {
+        await call('POST', `/tables/${t2.id}/service`, waiterToken, { action: 'MARK_CLEAN' });
+        const o = (await newOrder({ orderType: 'DINE_IN', tableId: t2.id })).body.data;
+        assert.strictEqual((await call('PUT', `/tables/${t2.id}/status`, ownerToken, { status: 'OUT_OF_SERVICE' })).status, 200);
+        await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'CASH', amount: o.totalAmount });
+        await completeOrder(o.id);
+        assert.strictEqual(await tableStatus(t2.id), 'OUT_OF_SERVICE');
+        const other = (await newOrder()).body.data;
+        assert.strictEqual((await call('POST', `/orders/${other.id}/move-table`, cashierToken, { toTableId: t2.id })).status, 400);
+      });
+      await test('Back in service with an open order makes the table occupied again', async () => {
+        await call('PUT', `/tables/${t2.id}/status`, ownerToken, { status: 'AVAILABLE' });
+        const o = (await newOrder({ orderType: 'DINE_IN', tableId: t2.id })).body.data;
+        assert.strictEqual((await call('PUT', `/tables/${t2.id}/status`, ownerToken, { status: 'OUT_OF_SERVICE' })).status, 200);
+        assert.strictEqual((await call('PUT', `/tables/${t2.id}/status`, ownerToken, { status: 'AVAILABLE' })).status, 200);
+        assert.strictEqual(await tableStatus(t2.id), 'OCCUPIED');
+        await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'CASH', amount: o.totalAmount });
+        await completeOrder(o.id);
+        await call('POST', `/tables/${t2.id}/service`, waiterToken, { action: 'MARK_CLEAN' });
+      });
+      await test('A waiter cannot move another waiter\'s order by editing it either', async () => {
+        const o = (await call('POST', '/orders', cashierToken, { orderType: 'DINE_IN', status: 'HELD', tableId: t1.id, items: [{ menuItemId: menuItem.id, quantity: 1, modifiers: [] }] })).body.data;
+        assert.strictEqual((await call('PATCH', `/orders/${o.id}`, waiterToken, { tableId: t3.id })).status, 403);
+        await call('POST', `/orders/${o.id}/cancel`, cashierToken, { cancelReason: 'test' });
+      });
+      await test('Dropping a held order does not free a table where guests are seated', async () => {
+        await call('POST', `/tables/${t3.id}/service`, waiterToken, { action: 'SEAT' });
+        const held = (await call('POST', '/orders', cashierToken, { orderType: 'DINE_IN', status: 'HELD', tableId: t3.id, items: [{ menuItemId: menuItem.id, quantity: 1, modifiers: [] }] })).body.data;
+        const res = await call('POST', `/orders/${held.id}/cancel`, cashierToken, { cancelReason: 'test' });
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.strictEqual(await tableStatus(t3.id), 'OCCUPIED');
+        await call('POST', `/tables/${t3.id}/service`, waiterToken, { action: 'CLEAR' });
+        await call('POST', `/tables/${t3.id}/service`, waiterToken, { action: 'MARK_CLEAN' });
+      });
+      await test('Staff see only their branch; managers also get the day so far', async () => {
+        const other = await prisma.branch.findFirst({ where: { restaurantId, id: { not: branchId } } });
+        if (other) {
+          const res = await call('GET', `/tables/live?branchId=${other.id}`, cashierToken);
+          assert.strictEqual(res.body.data.branchId, branchId);
+          const layout = await call('GET', `/tables/floor?branchId=${other.id}`, cashierToken);
+          assert.ok(layout.body.data.tables.every((t: any) => t.branchId === branchId));
+        }
+        assert.strictEqual((await live()).summary.today, undefined);
+        const managerView = await live(ownerToken);
+        assert.ok(managerView.summary.today && managerView.summary.today.tablesServed >= 3, JSON.stringify(managerView.summary));
+      });
+    } finally {
+      await prisma.sale.updateMany({ where: { tableId: { in: [t1.id, t2.id, t3.id] }, status: { notIn: ['COMPLETED', 'CANCELLED'] } }, data: { tableId: null } });
+      await prisma.table.updateMany({ where: { id: { in: [t1.id, t2.id, t3.id] } }, data: { status: 'INACTIVE' } });
+    }
+  }
+
   server.close();
   await prisma.$disconnect();
   console.log(`\n========================================\nIntegration Results: ${passed} Passed, ${failed} Failed\n========================================`);

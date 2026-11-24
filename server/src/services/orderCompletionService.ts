@@ -1,3 +1,4 @@
+import { syncTableStatus } from './tableFloorService';
 import prisma from '../config/database';
 import { deductInventoryForOrderSafely } from './inventoryService';
 import { lockSale } from './saleLedgerService';
@@ -35,21 +36,6 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
 
     const completedAt = new Date();
 
-    if (current.tableId) {
-      const remainingActive = await tx.sale.count({
-        where: {
-          tableId: current.tableId,
-          id: { not: orderId },
-          status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] },
-        },
-      });
-      if (remainingActive === 0) {
-        await tx.table.update({
-          where: { id: current.tableId },
-          data: { status: 'CLEANING' },
-        });
-      }
-    }
 
     const updated = await tx.sale.update({
       where: { id: orderId },
@@ -64,6 +50,9 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
         items: { include: { modifiers: true } },
       },
     });
+
+    // Last bill at the table closed: it needs clearing (out of service stays so).
+    await syncTableStatus(tx, current.tableId, 'CLEANING');
 
     await tx.saleStatusHistory.create({
       data: {
@@ -115,6 +104,7 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
     }
   }
 
+  realtimeService.broadcast(`orders:${existing.branchId}`, 'order_status_updated', { orderId, status: 'COMPLETED' });
   return order;
 };
 

@@ -1,3 +1,5 @@
+import { lockTables, syncTableStatus } from './tableFloorService';
+import { realtimeService } from './realtimeService';
 import prisma from '../config/database';
 import { Prisma } from '@prisma/client';
 import { AuthRequest } from '../middleware/auth';
@@ -130,6 +132,7 @@ export const createReservation = async (req: AuthRequest, res: ExpressResponse) 
     throw e;
   }
   await createAuditLog(restaurantId, createdBy, 'CREATE', 'Reservation', reservation.id, `Created reservation for ${customerName}`);
+  realtimeService.broadcast(`reservations:${reservation.branchId}`, 'reservation_status_updated', { reservationId: reservation.id });
   return sendResponse(res, true, 'Reservation created successfully', reservation, 201);
 };
 
@@ -169,6 +172,7 @@ export const updateReservation = async (req: AuthRequest, res: ExpressResponse) 
     throw e;
   }
   await createAuditLog(restaurantId, req.user!.id, 'UPDATE', 'Reservation', updated.id, `Updated reservation for ${updated.customerName}`);
+  realtimeService.broadcast(`reservations:${updated.branchId}`, 'reservation_status_updated', { reservationId: updated.id });
   return sendResponse(res, true, 'Reservation updated successfully', updated);
 };
 
@@ -186,15 +190,18 @@ export const updateReservationStatus = async (req: AuthRequest, res: ExpressResp
         await ensureTableAvailable(tx, restaurantId, existing.branchId, existing.tableId, existing.startAt, existing.endAt, existing.id);
       }
       if (status === 'SEATED' && existing.tableId) {
-        await tx.table.update({ where: { id: existing.tableId }, data: { status: 'OCCUPIED' } });
+        await lockTables(tx, [existing.tableId]);
+        await tx.table.updateMany({ where: { id: existing.tableId, status: { in: ['AVAILABLE', 'RESERVED', 'CLEANING'] } }, data: { status: 'OCCUPIED' } });
       }
       if (['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(status) && existing.tableId) {
-        // Only free the table if nobody is still eating there.
-        const activeSale = await tx.sale.findFirst({
-          where: { restaurantId, tableId: existing.tableId, status: { in: ['DRAFT', 'HELD', 'SUBMITTED', 'PREPARING', 'READY', 'SERVED'] } },
-          select: { id: true },
-        });
-        if (!activeSale) await tx.table.updateMany({ where: { id: existing.tableId, status: { in: ['OCCUPIED', 'RESERVED'] } }, data: { status: 'AVAILABLE' } });
+        await lockTables(tx, [existing.tableId]);
+        if (existing.status === 'SEATED') {
+          // The party that sat there left: clear the table (unless others are eating there).
+          await syncTableStatus(tx, existing.tableId, status === 'COMPLETED' ? 'CLEANING' : 'AVAILABLE');
+        } else {
+          // A booking that never sat down only releases its hold on the table.
+          await tx.table.updateMany({ where: { id: existing.tableId, status: 'RESERVED' }, data: { status: 'AVAILABLE' } });
+        }
       }
       return tx.reservation.update({ where: { id: existing.id }, data: { status } });
     });
@@ -203,6 +210,7 @@ export const updateReservationStatus = async (req: AuthRequest, res: ExpressResp
     throw e;
   }
   await createAuditLog(restaurantId, req.user!.id, 'UPDATE', 'Reservation', updated.id, `Reservation ${updated.id} changed to ${status}`);
+  realtimeService.broadcast(`reservations:${updated.branchId}`, 'reservation_status_updated', { reservationId: updated.id });
   return sendResponse(res, true, 'Reservation status updated successfully', updated);
 };
 

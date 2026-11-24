@@ -19,6 +19,7 @@ import { completeOrder } from './orderCompletionService';
 import { validatePromotion } from './promotionService';
 import { deductInventoryForOrderSafely } from './inventoryService';
 import { realtimeService } from './realtimeService';
+import { lockTables, SEATED_ORDER_STATUSES, syncTableStatus } from './tableFloorService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
 
 /** Validates who served the order: an active staff member of this restaurant. */
@@ -523,6 +524,9 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
         },
       });
     }
+    // Same transaction as the order: a failure here can't leave an order without its kitchen ticket.
+    // Held orders don't seat anyone; only an order sent to the kitchen occupies the table.
+    if (SEATED_ORDER_STATUSES.includes(finalStatus)) await syncTableStatus(tx, newOrder.tableId);
 
     return newOrder;
   });
@@ -535,11 +539,8 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     throw err;
   }
 
-  if (['SUBMITTED', 'PREPARING', 'READY', 'SERVED', 'COMPLETED'].includes(finalStatus) && order.tableId) {
-    await prisma.table.update({
-      where: { id: order.tableId },
-      data: { status: 'OCCUPIED' },
-    });
+  if (order.tableId) {
+    realtimeService.broadcast(`orders:${branchId}`, 'table_updated', { tableId: order.tableId, orderId: order.id });
   }
 
   if (finalStatus === 'SUBMITTED') {
@@ -604,6 +605,9 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
   let updateData: any = {};
   if (notes !== undefined) updateData.notes = notes ? String(notes).trim() : null;
   if (tableId !== undefined) {
+    if (req.user!.roleName === 'WAITER' && (tableId || null) !== existing.tableId && (existing.servedBy || existing.createdBy) !== userId) {
+      return sendError(res, "Only the waiter serving this order, a cashier or a manager can move it", undefined, 403);
+    }
     if (tableId) {
       const table = await prisma.table.findFirst({
         where: { id: tableId, branchId: existing.branchId, restaurantId, status: { not: 'INACTIVE' } },
@@ -801,6 +805,7 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
       throw err;
     }
 
+    await syncMovedTables(existing.tableId, order.tableId, existing.branchId, SEATED_ORDER_STATUSES.includes(order.status));
     await createAuditLog(restaurantId, userId, 'UPDATE', 'Order', id, `Updated order ${order.orderNumber}`);
     return sendResponse(res, true, 'Order updated successfully', order);
   }
@@ -815,9 +820,22 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     },
   });
 
+  await syncMovedTables(existing.tableId, order.tableId, existing.branchId, SEATED_ORDER_STATUSES.includes(order.status));
   await createAuditLog(restaurantId, userId, 'UPDATE', 'Order', id, `Updated order ${order.orderNumber}`);
   return sendResponse(res, true, 'Order updated successfully', order);
 };
+
+/** An edit moved the order to another table: put both tables right. */
+async function syncMovedTables(fromTableId: string | null, toTableId: string | null, branchId: string, seated: boolean) {
+  // A held order moving says nothing about where guests sit.
+  if (fromTableId === toTableId || !seated) return;
+  await prisma.$transaction(async (tx) => {
+    await lockTables(tx, [fromTableId, toTableId]);
+    await syncTableStatus(tx, toTableId);
+    await syncTableStatus(tx, fromTableId, 'CLEANING');
+  });
+  if (branchId) realtimeService.broadcast(`orders:${branchId}`, 'table_updated', { tableId: toTableId });
+}
 
 export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) => {
   const { id } = req.params;
@@ -888,18 +906,12 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
     // Re-check under the order lock: the status may have changed since it was read
     // (e.g. cancelled or paid-and-completed by someone else a moment ago).
     await lockSale(tx, id);
-    const current = await tx.sale.findUnique({ where: { id }, select: { status: true } });
+    const current = await tx.sale.findUnique({ where: { id }, select: { status: true, tableId: true } });
     if (!current) throw new Error('ORDER_NOT_FOUND');
     if (current.status !== existing.status) throw new Error(`STATUS_CHANGED:${current.status}`);
 
     const updateData: any = { status, updatedAt: new Date() };
 
-    if (status === 'SUBMITTED' && existing.tableId) {
-      await tx.table.update({
-        where: { id: existing.tableId },
-        data: { status: 'OCCUPIED' },
-      });
-    }
 
     const updated = await tx.sale.update({
       where: { id },
@@ -919,6 +931,7 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
         changedBy: userId,
       },
     });
+    if (SEATED_ORDER_STATUSES.includes(status) || SEATED_ORDER_STATUSES.includes(current.status)) await syncTableStatus(tx, current.tableId);
 
     return updated;
     });
@@ -1076,7 +1089,7 @@ export const getPosMenu = async (req: AuthRequest, res: ExpressResponse) => {
 
 export const getPosTables = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
-  const branchId = req.user!.branchId;
+  const branchId = req.user!.branchId || (typeof req.query.branchId === 'string' ? req.query.branchId : '');
 
   if (!branchId) {
     return sendError(res, 'User must be assigned to a branch');
@@ -1382,12 +1395,8 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
           },
         });
 
-        if (finalStatus === 'SUBMITTED' && offlineOrder.tableId) {
-          await tx.table.updateMany({
-            where: { id: offlineOrder.tableId, branchId },
-            data: { status: 'OCCUPIED' },
-          });
-        }
+        if (newSale.tableId && finalStatus === 'SUBMITTED') await syncTableStatus(tx, newSale.tableId);
+        if (newSale.tableId) realtimeService.broadcast(`orders:${branchId}`, 'table_updated', { tableId: newSale.tableId });
 
         return newSale;
       });

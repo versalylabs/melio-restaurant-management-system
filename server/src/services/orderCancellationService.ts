@@ -1,5 +1,6 @@
 import prisma from '../config/database';
 import { blockingPaymentsForCancel, lockSale } from './saleLedgerService';
+import { syncTableStatus } from './tableFloorService';
 import { realtimeService } from './realtimeService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
 
@@ -80,14 +81,9 @@ export async function cancelOrderSafely(params: {
     // flagged for a refund instead of being lost.
     await tx.payment.updateMany({ where: { saleId: orderId, status: 'PENDING', reference: null }, data: { status: 'CANCELLED' } });
 
-    if (existing.tableId) {
-      const remainingActive = await tx.sale.count({
-        where: { tableId: existing.tableId, id: { not: orderId }, status: { in: ACTIVE_TABLE_ORDER_STATUSES } },
-      });
-      if (remainingActive === 0) {
-        await tx.table.updateMany({ where: { id: existing.tableId, status: 'OCCUPIED' }, data: { status: 'AVAILABLE' } });
-      }
-    }
+    // Only an order the kitchen had kept the table occupied; a held order
+    // being dropped says nothing about guests who are seated there.
+    if (existing.tableId && fired) await syncTableStatus(tx, existing.tableId, 'AVAILABLE');
 
     const tickets = await tx.kitchenTicket.findMany({
       where: { orderId, status: { notIn: ['SERVED', 'COMPLETED', 'CANCELLED'] } },
