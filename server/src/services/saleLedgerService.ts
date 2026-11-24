@@ -9,6 +9,7 @@
  * both acting on stale balances.
  */
 import { Prisma } from '@prisma/client';
+import { queueEtimsSale } from './etimsService';
 
 type Tx = Prisma.TransactionClient;
 
@@ -52,7 +53,10 @@ export async function ensureReceipt(tx: Tx, sale: { id: string; restaurantId: st
     create: { restaurantId: sale.restaurantId, branchId: sale.branchId, lastNumber: 1 },
     update: { lastNumber: { increment: 1 } },
   });
-  return tx.receipt.create({ data: { restaurantId: sale.restaurantId, branchId: sale.branchId, saleId: sale.id, receiptNumber: `R-${String(counter.lastNumber).padStart(6, '0')}` } });
+  const receipt = await tx.receipt.create({ data: { restaurantId: sale.restaurantId, branchId: sale.branchId, saleId: sale.id, receiptNumber: `R-${String(counter.lastNumber).padStart(6, '0')}` } });
+  // Branches with a KRA eTIMS device send each receipt to KRA (signed after the payment is saved).
+  await queueEtimsSale(tx, sale);
+  return receipt;
 }
 
 /** Payments that block cancelling an order: taken money, or an M-Pesa prompt still in flight. */

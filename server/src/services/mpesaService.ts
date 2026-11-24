@@ -6,6 +6,8 @@ import { ensureReceipt, lockSale, syncPaymentState } from './saleLedgerService';
 import { notifyRestaurantStaff } from './notificationService';
 import { createKitchenTicketForOrder } from './kitchenService';
 import { completeOrder } from './orderCompletionService';
+import { signPendingEtims } from './etimsService';
+import { afterResponse } from './smsService';
 
 /*
  * M-Pesa (Safaricom Daraja) STK Push.
@@ -331,6 +333,8 @@ export async function settleStaffStkPayment(paymentId: string, checkoutRequestId
   if (result.duplicateOfManual) return { handled: true, status: 'ALREADY_RECORDED' };
 
   const { sale, state, refundReason, excess, reference } = result;
+  // A bill paid by prompt may have a receipt waiting for KRA (no staff screen triggers it).
+  if (state.paymentStatus === 'PAID') afterResponse(signPendingEtims(sale.restaurantId, sale.branchId, 3));
   if (refundReason || excess) {
     const what = refundReason === 'ORDER CANCELLED' ? 'which was cancelled' : refundReason ? 'which was already paid' : `which only had KES ${round2(paidAmount - excess)} left to pay`;
     void notifyRestaurantStaff(sale.restaurantId, sale.branchId, 'REFUND_REQUIRED', 'Refund required',

@@ -6,8 +6,9 @@ const kes = (n: number | null | undefined) => `KES ${Number(n || 0).toLocaleStri
  * The printable customer receipt, shared by the Orders and Payments pages.
  *
  * It shows the KRA PIN and VAT when the business is VAT-registered, and any
- * credit notes (refunds) against the bill. It never calls itself a "tax
- * invoice" or an eTIMS receipt: Melio is not a KRA-certified system.
+ * credit notes (refunds) against the bill. KRA's eTIMS details (invoice
+ * number, signature, QR code) appear only once KRA has signed it; on KRA's
+ * test system the receipt says it is not valid for tax.
  */
 export function receiptHtml(data: any): string {
   const sale = data.sale;
@@ -38,6 +39,20 @@ export function receiptHtml(data: any): string {
     : '';
   const business = escapeHtml(tax.businessName || sale.branch?.name || '');
   const pinLine = tax.vatRegistered && tax.kraPin ? `<br>KRA PIN ${escapeHtml(tax.kraPin)}` : '';
+  const e = data.etims;
+  const etims = !e ? '' : e.status === 'SIGNED' && e.rcptSign
+    ? `<hr><p class="h" style="text-align:center">${e.testOnly ? 'TEST INVOICE, NOT VALID FOR TAX<br><span style="font-weight:400;font-size:12px">KRA eTIMS test system</span>' : 'KRA eTIMS'}</p>
+<table>${[
+        e.cuInvoiceNo ? line('CU invoice no.', escapeHtml(e.cuInvoiceNo)) : '',
+        e.sdcId ? line('CU ID', escapeHtml(e.sdcId)) : '',
+        e.intrlData ? line('Internal data', escapeHtml(e.intrlData)) : '',
+        line('Receipt signature', escapeHtml(e.rcptSign)),
+        e.signedAt ? line('Signed', escapeHtml(new Date(e.signedAt).toLocaleString())) : '',
+      ].join('')}</table>
+${e.qrSvg ? `<div style="width:140px;margin:10px auto">${e.qrSvg}</div>` : ''}`
+    : e.status === 'SIGNED'
+      ? '<hr><p class="muted" style="text-align:center;font-size:12px">Sent to KRA eTIMS</p>'
+      : `<hr><p style="text-align:center;font-size:12px;color:#555">${e.status === 'REJECTED' ? 'Not signed by KRA' : 'KRA signature pending'}</p>`;
 
   return `<html><head><title>${escapeHtml(receipt.receiptNumber)}</title><style>
 body{font-family:Arial,sans-serif;padding:24px;max-width:380px;margin:auto;color:#111}
@@ -51,6 +66,7 @@ table{width:100%;border-collapse:collapse}td{padding:4px 0;vertical-align:top}.r
 <table>${rows}</table><hr><table>${totals}</table>
 ${payments ? `<p class="h">Paid</p><table>${payments}</table>` : ''}
 ${refunds}
+${etims}
 <p style="text-align:center;margin-top:18px">Thank you for dining with us.</p>
 <script>window.print();</script></body></html>`;
 }

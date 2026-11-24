@@ -1565,6 +1565,142 @@ async function run() {
     }
   }
 
+  console.log('\n--- K9: KRA eTIMS (simulated KRA) ---');
+  {
+    const before = await prisma.restaurant.findUnique({ where: { id: restaurantId } });
+    process.env.ETIMS_SIMULATION = 'true';
+    const paidBill = async () => {
+      const o = (await newOrder()).body.data;
+      const pay = await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'CASH', amount: o.totalAmount });
+      assert.strictEqual(pay.status, 201, JSON.stringify(pay.body));
+      return { order: o, paymentId: pay.body.data.payment.id };
+    };
+    const receipt = async (orderId: string) => {
+      const r = await call('GET', `/payments/orders/${orderId}/receipt`, cashierToken);
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      return r.body.data;
+    };
+    try {
+      // VAT added on top and a service charge: the lines must still add up (the simulated KRA checks).
+      await prisma.restaurant.update({ where: { id: restaurantId }, data: { kraPin: null, vatRegistered: true, taxRate: 0.16, pricesIncludeTax: false, serviceChargeRate: 0.1 } });
+      await test('A branch sets up its KRA device (needs the KRA PIN); the device key stays on the server', async () => {
+        const body = { branchId, bhfId: '00', serialNumber: 'MELIO-TEST-01', itemClassCode: '9010150000' };
+        assert.strictEqual((await call('POST', '/etims/devices', ownerToken, body)).status, 400, 'no KRA PIN yet');
+        await prisma.restaurant.update({ where: { id: restaurantId }, data: { kraPin: 'P051234567X' } });
+        assert.strictEqual((await call('POST', '/etims/devices', ownerToken, { ...body, bhfId: '0' })).status, 400);
+        const ok = await call('POST', '/etims/devices', ownerToken, body);
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+        const status = await call('GET', '/etims', ownerToken);
+        assert.strictEqual(status.status, 200, JSON.stringify(status.body));
+        assert.ok(status.body.data.branches.some((b: any) => b.id === branchId && b.device?.bhfId === '00'));
+        const key = (await prisma.etimsDevice.findUnique({ where: { branchId } }))!.cmcKey;
+        assert.ok(!JSON.stringify(status.body).includes(key) && !JSON.stringify(status.body).includes('cmcKey'), 'device key never sent');
+        assert.strictEqual((await call('GET', '/etims', cashierToken)).status, 403);
+        assert.strictEqual((await call('POST', '/etims/devices', cashierToken, body)).status, 403);
+      });
+      let first = { order: null as any, paymentId: '' };
+      await test('A paid bill is signed by KRA; the receipt carries its numbers and QR code', async () => {
+        first = await paidBill();
+        const data = await receipt(first.order.id);
+        assert.strictEqual(data.etims?.status, 'SIGNED', JSON.stringify(data.etims));
+        assert.ok(data.etims.invoiceNo >= 1 && data.etims.cuInvoiceNo && data.etims.rcptSign && data.etims.testOnly === true);
+        assert.ok(String(data.etims.qrSvg).startsWith('<svg') && data.etims.qrUrl.includes(encodeURIComponent(`P051234567X00${data.etims.rcptSign}`)));
+        assert.strictEqual(await prisma.etimsItem.count({ where: { branchId } }) >= 2, true, 'the dish and the service charge were registered');
+      });
+      await test('KRA down: the receipt waits, shows on the list, and keeps its number when sent again', async () => {
+        process.env.ETIMS_SIMULATE_DOWN = 'true';
+        const { order } = await paidBill();
+        const data = await receipt(order.id);
+        assert.strictEqual(data.etims?.status, 'PENDING');
+        const list = (await call('GET', '/etims', ownerToken)).body.data.unsigned;
+        const row = list.find((u: any) => u.sale.orderNumber === order.orderNumber);
+        assert.ok(row && /could not be reached/.test(row.lastError) && row.attempts >= 1, JSON.stringify(row));
+        delete process.env.ETIMS_SIMULATE_DOWN;
+        const retry = await call('POST', '/etims/retry', ownerToken, {});
+        assert.strictEqual(retry.status, 200, JSON.stringify(retry.body));
+        const inv = await prisma.etimsInvoice.findUnique({ where: { key: `S:${order.id}` } });
+        assert.strictEqual(inv?.status, 'SIGNED');
+        assert.strictEqual(inv?.invoiceNo, row.invoiceNo ?? inv?.invoiceNo, 'the same KRA number is reused');
+        const numbers = (await prisma.etimsInvoice.findMany({ where: { branchId, invoiceNo: { not: null } }, orderBy: { invoiceNo: 'asc' } })).map((i: any) => i.invoiceNo as number);
+        assert.deepStrictEqual(numbers, numbers.map((_: number, i: number) => i + 1), 'KRA numbers run 1, 2, 3 with no gaps');
+      });
+      await test('A refund of a signed bill sends a KRA credit note', async () => {
+        await require('../services/orderCompletionService').completeOrder(first.order.id, restaurantId, owner.id);
+        const refund = await call('POST', `/payments/${first.paymentId}/refund`, ownerToken, { reason: 'test', approval });
+        assert.strictEqual(refund.status, 200, JSON.stringify(refund.body));
+        assert.ok(refund.body.data.creditNote);
+        await call('POST', '/etims/retry', ownerToken, {});
+        // The refund may already be sending it in the background: give that a moment.
+        for (let i = 0; i < 30 && (await prisma.etimsInvoice.count({ where: { saleId: first.order.id, kind: 'CREDIT_NOTE', status: 'PENDING' } })); i++) await new Promise((r) => setTimeout(r, 300));
+        const notes = await prisma.etimsInvoice.findMany({ where: { saleId: first.order.id, kind: 'CREDIT_NOTE' } });
+        assert.strictEqual(notes.length, 1);
+        assert.strictEqual(notes[0].status, 'SIGNED', `${notes[0].lastError} attempts=${notes[0].attempts} locked=${notes[0].lockedUntil}`);
+      });
+      await test('A refund before the bill is closed still sends KRA a credit note', async () => {
+        const { order, paymentId } = await paidBill();
+        assert.strictEqual((await receipt(order.id)).etims?.status, 'SIGNED');
+        const refund = await call('POST', `/payments/${paymentId}/refund`, ownerToken, { reason: 'test', approval });
+        assert.strictEqual(refund.status, 200, JSON.stringify(refund.body));
+        assert.strictEqual(refund.body.data.creditNote, null, 'no Melio credit note before the bill is closed');
+        await call('POST', '/etims/retry', ownerToken, {});
+        for (let i = 0; i < 30 && (await prisma.etimsInvoice.count({ where: { key: `P:${paymentId}`, status: 'PENDING' } })); i++) await new Promise((r) => setTimeout(r, 300));
+        const credit = await prisma.etimsInvoice.findUnique({ where: { key: `P:${paymentId}` } });
+        assert.strictEqual(credit?.status, 'SIGNED', credit?.lastError || 'missing');
+      });
+      await test('KRA lines match the bill: promotions per VAT category, partial refunds, VAT added on top', async () => {
+        const { etimsLines } = require('../services/etimsService');
+        const sum = (ls: any[], k: string) => Math.round(ls.reduce((t, l) => t + l[k], 0) * 100) / 100;
+        const items = [{ menuItemId: 'std', itemNameSnapshot: 'Steak', unitPrice: 1000, quantity: 1, modifiers: [] }, { menuItemId: 'zero', itemNameSnapshot: 'Milk', unitPrice: 500, quantity: 1, modifiers: [] }];
+        const cats = (id: string) => (id === 'zero' ? 'ZERO_RATED' : 'STANDARD');
+        // 250 off the zero-rated item only (prices include VAT): VAT stays 137.93.
+        const promo = { subtotal: 1500, discountAmount: 250, serviceChargeAmount: 0, taxInclusive: true, taxAmount: 137.93, taxableAmount: 862.07, zeroRatedAmount: 250, exemptAmount: 0, totalAmount: 1250, items };
+        const lines = etimsLines(promo, cats, true, 1250);
+        assert.strictEqual(sum(lines, 'totAmt'), 1250);
+        assert.strictEqual(sum(lines, 'taxAmt'), 137.93, JSON.stringify(lines));
+        // A third of a 1500 bill refunded: the credit note is exactly 500.
+        const one = { ...promo, discountAmount: 0, taxAmount: 206.9, taxableAmount: 1293.1, zeroRatedAmount: 0, totalAmount: 1500, items: [{ ...items[0], unitPrice: 1500 }] };
+        assert.strictEqual(sum(etimsLines(one, cats, true, 500, 500 / 1500), 'totAmt'), 500);
+        // VAT added on top plus a 10% service charge: lines add up to what was paid.
+        const excl = { subtotal: 1000, discountAmount: 0, serviceChargeAmount: 100, taxInclusive: false, taxAmount: 160, taxableAmount: 1000, zeroRatedAmount: 0, exemptAmount: 0, totalAmount: 1260, items: [items[0]] };
+        const exclLines = etimsLines(excl, cats, true, 1260);
+        assert.strictEqual(sum(exclLines, 'totAmt'), 1260);
+        assert.strictEqual(sum(exclLines, 'taxAmt'), 160);
+        // A bill that doesn't match its lines is not sent.
+        assert.throws(() => etimsLines({ ...excl, totalAmount: 2000 }, cats, true, 2000), /not sent/);
+      });
+      await test('Connecting to another KRA branch number keeps each number sequence apart', async () => {
+        const before00 = (await prisma.etimsDevice.findUnique({ where: { branchId } }))!.lastInvoiceNo;
+        const base = { branchId, serialNumber: 'MELIO-TEST-01', itemClassCode: '9010150000' };
+        assert.strictEqual((await call('POST', '/etims/devices', ownerToken, { ...base, bhfId: '01' })).status, 200);
+        assert.strictEqual((await prisma.etimsDevice.findUnique({ where: { branchId } }))!.lastInvoiceNo, 0, 'KRA branch 01 starts at 1');
+        assert.strictEqual((await call('POST', '/etims/devices', ownerToken, { ...base, bhfId: '00' })).status, 200);
+        assert.strictEqual((await prisma.etimsDevice.findUnique({ where: { branchId } }))!.lastInvoiceNo, before00, 'back on 00, numbers carry on');
+      });
+      await test('An invoice KRA refuses stays on the list until someone fixes it and sends it again', async () => {
+        await prisma.restaurant.update({ where: { id: restaurantId }, data: { kraPin: null } });
+        const { order } = await paidBill();
+        await call('POST', '/etims/retry', ownerToken, {});
+        const inv = await prisma.etimsInvoice.findUnique({ where: { key: `S:${order.id}` } });
+        assert.strictEqual(inv?.status, 'REJECTED');
+        await prisma.restaurant.update({ where: { id: restaurantId }, data: { kraPin: 'P051234567X' } });
+        assert.strictEqual((await call('POST', '/etims/retry', cashierToken, { id: inv!.id })).status, 403);
+        const again = await call('POST', '/etims/retry', ownerToken, { id: inv!.id });
+        assert.strictEqual(again.status, 200, JSON.stringify(again.body));
+        assert.strictEqual((await prisma.etimsInvoice.findUnique({ where: { id: inv!.id } }))?.status, 'SIGNED');
+      });
+    } finally {
+      delete process.env.ETIMS_SIMULATION;
+      delete process.env.ETIMS_SIMULATE_DOWN;
+      await prisma.etimsInvoice.deleteMany({ where: { branchId } });
+      await prisma.etimsItem.deleteMany({ where: { branchId } });
+      await prisma.etimsDevice.deleteMany({ where: { branchId } });
+      await prisma.restaurant.update({
+        where: { id: restaurantId },
+        data: { kraPin: before!.kraPin, vatRegistered: before!.vatRegistered, taxRate: before!.taxRate, pricesIncludeTax: before!.pricesIncludeTax, serviceChargeRate: before!.serviceChargeRate },
+      });
+    }
+  }
+
   server.close();
   await prisma.$disconnect();
   console.log(`\n========================================\nIntegration Results: ${passed} Passed, ${failed} Failed\n========================================`);

@@ -7,6 +7,7 @@ import Input from '../../components/ui/Input';
 import Card from '../../components/ui/Card';
 import { CHANNEL_LABELS, COMMISSION_CHANNELS } from '../../lib/channels';
 import TillSettings from './TillSettings';
+import EtimsSettings from './EtimsSettings';
 
 export default function Settings() {
   const [, setRestaurant] = useState<Restaurant | null>(null);
@@ -286,6 +287,8 @@ export default function Settings() {
       </Card>
 
       <TillSettings />
+
+      <EtimsSettings />
 
       <Card title="My Password" description="Change your own sign-in password. Changing it signs out existing sessions for this account.">
         <form onSubmit={changePassword} className="space-y-4">
