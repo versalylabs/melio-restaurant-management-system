@@ -47,6 +47,8 @@ export interface OfflineOrder {
   createdAt: string; // ISO string
   syncStatus: 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED';
   syncError?: string;
+  /** Times the server refused it (not network failures). */
+  serverRejections?: number;
   serverOrderNumber?: string;
   syncedAt?: string;
 }
@@ -257,6 +259,7 @@ class OfflineSyncService {
         if (req.result) {
           req.result.syncStatus = 'SYNCED';
           req.result.serverOrderNumber = serverOrderNumber;
+          req.result.syncError = undefined;
           req.result.syncedAt = new Date().toISOString();
           store.put(req.result);
         }
@@ -266,7 +269,7 @@ class OfflineSyncService {
     }
   }
 
-  async markOrderFailed(id: string, errorMsg: string): Promise<void> {
+  async markOrderFailed(id: string, errorMsg: string, refused = false): Promise<void> {
     try {
       const db = await this.getDB();
       const tx = db.transaction('offline_orders', 'readwrite');
@@ -275,6 +278,7 @@ class OfflineSyncService {
       req.onsuccess = () => {
         if (req.result) {
           req.result.syncStatus = 'FAILED';
+          if (refused) req.result.serverRejections = (req.result.serverRejections || 0) + 1;
           req.result.syncError = errorMsg;
           store.put(req.result);
         }
@@ -307,9 +311,26 @@ class OfflineSyncService {
   /**
    * Syncs all pending offline orders to the cloud API safely.
    */
-  async syncOfflineOrders(apiClient: any): Promise<{ syncedCount: number; failedCount: number }> {
-    const pending = await this.getPendingOfflineOrders();
+  private inFlight: Promise<{ syncedCount: number; failedCount: number }> | null = null;
+
+  /**
+   * Sends queued orders. One run at a time (a manual Sync and the automatic
+   * retry share it). The automatic retry skips orders the server has refused
+   * three times (a deleted menu item, a discount over the limit…): those need
+   * someone to look, and Sync still tries them on request.
+   */
+  syncOfflineOrders(apiClient: { syncOfflineOrders?: (data: any) => Promise<any>; post?: (url: string, data: any) => Promise<any> }, options: { auto?: boolean } = {}): Promise<{ syncedCount: number; failedCount: number }> {
+    if (!this.inFlight) {
+      this.inFlight = this.runSync(apiClient, options).finally(() => { this.inFlight = null; });
+    }
+    return this.inFlight;
+  }
+
+  private async runSync(apiClient: { syncOfflineOrders?: (data: any) => Promise<any>; post?: (url: string, data: any) => Promise<any> }, options: { auto?: boolean }): Promise<{ syncedCount: number; failedCount: number }> {
+    const pending = (await this.getPendingOfflineOrders()).filter((o) => !options.auto || (o.serverRejections || 0) < 3);
     if (pending.length === 0) return { syncedCount: 0, failedCount: 0 };
+    // Accepts the orderApi helpers (what the POS passes) or a raw axios instance.
+    const send = (body: any) => (apiClient.syncOfflineOrders ? apiClient.syncOfflineOrders(body) : apiClient.post!('/orders/sync-offline', body));
 
     let syncedCount = 0;
     let failedCount = 0;
@@ -317,20 +338,20 @@ class OfflineSyncService {
     for (const order of pending) {
       await this.markOrderSyncing(order.id);
       try {
-        const res = await apiClient.post('/orders/sync-offline', {
-          orders: [order],
-        });
+        const res = await send({ orders: [order] });
 
         if (res.data?.success && res.data.data?.syncedOrders?.length > 0) {
           const result = res.data.data.syncedOrders[0];
           await this.markOrderSynced(order.id, result.serverOrderNumber || 'Synced');
           syncedCount++;
         } else {
-          await this.markOrderFailed(order.id, res.data?.message || 'Sync rejected by server');
+          await this.markOrderFailed(order.id, res.data?.message || 'Sync rejected by server', true);
           failedCount++;
         }
       } catch (err: any) {
-        await this.markOrderFailed(order.id, err.response?.data?.message || err.message || 'Network error');
+        // An answer from the server (4xx) is a refusal; no answer is just the network.
+        const refused = !!err.response && err.response.status < 500;
+        await this.markOrderFailed(order.id, err.response?.data?.message || err.message || 'Network error', refused);
         failedCount++;
       }
     }

@@ -1185,6 +1185,100 @@ async function run() {
     });
   }
 
+  console.log('\n--- Outages: M-Pesa taken while Safaricom is down ---');
+  {
+    const code = () => `L${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`.slice(0, 10).padEnd(10, 'Z');
+    const later = (orderId: string, body: Record<string, unknown>) => call('POST', `/payments/orders/${orderId}`, cashierToken, { method: 'MOBILE_MONEY', checkLater: true, approval, ...body });
+    let confirmedCode = '';
+    await test('Without "check later", M-Pesa still needs a code', async () => {
+      const order = (await newOrder()).body.data;
+      assert.strictEqual((await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: order.totalAmount })).status, 400);
+      assert.strictEqual((await later(order.id, { amount: order.totalAmount, reference: 'ABC' })).status, 400, 'a code, when given, must look real');
+      assert.strictEqual((await later(order.id, { amount: order.totalAmount, payerPhone: '123' })).status, 400);
+      const noPin = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'MOBILE_MONEY', checkLater: true, amount: order.totalAmount });
+      assert.strictEqual(noPin.status, 428, 'marking a bill paid with unseen money needs a manager PIN');
+    });
+    let pendingId = '';
+    let pendingOrder: any;
+    await test('"M-Pesa down": the bill is paid now and listed for a check', async () => {
+      pendingOrder = (await newOrder()).body.data;
+      const res = await later(pendingOrder.id, { amount: pendingOrder.totalAmount, payerPhone: '0712 345 678', notes: 'paid to till' });
+      assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+      pendingId = res.body.data.payment.id;
+      const pay = await prisma.payment.findUnique({ where: { id: pendingId } });
+      assert.ok(pay.verifyStatus === 'PENDING_CHECK' && pay.status === 'COMPLETED' && pay.payerPhone === '254712345678' && pay.reference === null, JSON.stringify(pay));
+      assert.strictEqual((await prisma.sale.findUnique({ where: { id: pendingOrder.id } })).paymentStatus, 'PAID');
+      const list = await call('GET', '/payments/mpesa-checks', cashierToken);
+      assert.strictEqual(list.status, 200, JSON.stringify(list.body));
+      const row = list.body.data.toCheck.find((c: any) => c.id === pendingId);
+      assert.ok(row && row.payerPhone === '2547*****678' && row.notes === 'paid to till', JSON.stringify(row));
+      const refund = await call('POST', `/payments/${pendingId}/refund`, ownerToken, { reason: 'test', approval });
+      assert.strictEqual(refund.status, 409, 'no refund of money nobody has checked');
+    });
+    await test('Only a manager checks it, and "received" needs the M-Pesa code', async () => {
+      assert.strictEqual((await call('POST', `/payments/${pendingId}/check`, cashierToken, { result: 'CONFIRMED', reference: code() })).status, 403);
+      assert.strictEqual((await call('POST', `/payments/${pendingId}/check`, ownerToken, { result: 'CONFIRMED' })).status, 400);
+      confirmedCode = code();
+      const ok = await call('POST', `/payments/${pendingId}/check`, ownerToken, { result: 'CONFIRMED', reference: confirmedCode });
+      assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+      const pay = await prisma.payment.findUnique({ where: { id: pendingId } });
+      assert.ok(pay.verifyStatus === 'CONFIRMED' && pay.reference === confirmedCode && pay.verifiedBy === owner.id);
+      assert.strictEqual((await call('POST', `/payments/${pendingId}/check`, ownerToken, { result: 'NOT_RECEIVED' })).status, 404, 'checked once only');
+    });
+    await test('A code already used elsewhere cannot confirm another payment', async () => {
+      const order = (await newOrder()).body.data;
+      const res = await later(order.id, { amount: order.totalAmount });
+      const again = await call('POST', `/payments/${res.body.data.payment.id}/check`, ownerToken, { result: 'CONFIRMED', reference: confirmedCode });
+      assert.strictEqual(again.status, 409, JSON.stringify(again.body));
+      const direct = await call('POST', `/payments/orders/${(await newOrder()).body.data.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: 1, reference: confirmedCode });
+      assert.strictEqual(direct.status, 409, 'nor be typed in at the till');
+      await call('POST', `/payments/${res.body.data.payment.id}/check`, ownerToken, { result: 'NOT_RECEIVED' });
+    });
+    await test('"Not received" takes it off the bill, which then shows what is owed', async () => {
+      const order = (await newOrder()).body.data;
+      const res = await later(order.id, { amount: order.totalAmount });
+      await require('../services/orderCompletionService').completeOrder(order.id, restaurantId, owner.id);
+      const out = await call('POST', `/payments/${res.body.data.payment.id}/check`, ownerToken, { result: 'NOT_RECEIVED' });
+      assert.strictEqual(out.status, 200, JSON.stringify(out.body));
+      assert.ok(Math.abs(out.body.data.balance - order.totalAmount) < 0.01, JSON.stringify(out.body));
+      const pay = await prisma.payment.findUnique({ where: { id: res.body.data.payment.id } });
+      assert.ok(pay.status === 'CANCELLED' && pay.verifyStatus === 'NOT_RECEIVED');
+      const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+      assert.ok(sale.paymentStatus !== 'PAID' && sale.amountPaid === 0, JSON.stringify(sale));
+      const report = await call('GET', '/reports/loss-prevention', ownerToken);
+      assert.ok(report.body.data.summary.mpesaNotReceived.count >= 1, JSON.stringify(report.body.data.summary));
+      const cashierRow = report.body.data.staff.find((r: any) => r.userId === cashier.id);
+      assert.ok(cashierRow && cashierRow.mpesaNotReceived.value >= order.totalAmount - 0.01, 'the loss shows against whoever took it');
+    });
+    process.env.PAYMENT_SIMULATION = 'true';
+    await test('A prompt answer that arrives after "M-Pesa down" replaces that entry instead of asking for a refund', async () => {
+      const order = (await newOrder()).body.data;
+      const sent = await call('POST', `/payments/orders/${order.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678' });
+      assert.strictEqual(sent.status, 201, JSON.stringify(sent.body));
+      await prisma.payment.updateMany({ where: { saleId: order.id, status: 'PENDING' }, data: { createdAt: new Date(Date.now() - 5 * 60_000) } });
+      const rec = await later(order.id, { amount: order.totalAmount });
+      assert.strictEqual(rec.status, 201, JSON.stringify(rec.body));
+      await call('POST', `/payments/mpesa/${sent.body.data.checkoutRequestId}/simulate`, cashierToken);
+      const replaced = await prisma.payment.findUnique({ where: { id: rec.body.data.payment.id } });
+      assert.ok(replaced.status === 'CANCELLED' && replaced.verifyStatus === 'SUPERSEDED', JSON.stringify(replaced));
+      const real = await prisma.payment.findFirst({ where: { saleId: order.id, status: 'COMPLETED' } });
+      assert.ok(real && !/REFUND/.test(real.notes || ''), JSON.stringify(real));
+      assert.strictEqual((await prisma.sale.findUnique({ where: { id: order.id } })).paymentStatus, 'PAID');
+    });
+    await test('A prompt whose answer never came is listed until Safaricom answers', async () => {
+      const order = (await newOrder()).body.data;
+      const sent = await call('POST', `/payments/orders/${order.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678' });
+      assert.strictEqual(sent.status, 201, JSON.stringify(sent.body));
+      await prisma.payment.updateMany({ where: { saleId: order.id, status: 'PENDING' }, data: { createdAt: new Date(Date.now() - 5 * 60_000) } });
+      const list = await call('GET', '/payments/mpesa-checks', cashierToken);
+      assert.ok(list.body.data.stuckPrompts.some((p: any) => p.order.orderNumber === order.orderNumber), JSON.stringify(list.body.data.stuckPrompts));
+      await call('POST', `/payments/mpesa/${sent.body.data.checkoutRequestId}/simulate`, cashierToken);
+      const after = await call('GET', '/payments/mpesa-checks', cashierToken);
+      assert.ok(!after.body.data.stuckPrompts.some((p: any) => p.order.orderNumber === order.orderNumber));
+    });
+    delete process.env.PAYMENT_SIMULATION;
+  }
+
   server.close();
   await prisma.$disconnect();
   console.log(`\n========================================\nIntegration Results: ${passed} Passed, ${failed} Failed\n========================================`);

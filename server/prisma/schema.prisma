@@ -1258,6 +1258,13 @@ model Payment {
   refundReason   String?
   refundedBy       String?
   refundApprovedBy String?
+  /// M-Pesa taken while Safaricom was down: PENDING_CHECK until a manager
+  /// confirms it against the till (CONFIRMED) or finds it never came (NOT_RECEIVED).
+  verifyStatus     String?
+  verifiedBy       String?
+  verifiedAt       DateTime?
+  /// The number the customer says they paid from (2547…), to find it later.
+  payerPhone       String?
 
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
@@ -1267,6 +1274,7 @@ model Payment {
   @@index([branchId, createdAt])
   @@index([saleId, status])
   @@index([reference])
+  @@index([restaurantId, verifyStatus])
   @@map("payments")
 }
 
