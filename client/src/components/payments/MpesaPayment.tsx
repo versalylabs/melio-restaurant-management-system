@@ -3,7 +3,8 @@ import { CheckCircle2, Clock, Copy, Link2, MessageCircle, Smartphone, XCircle } 
 import { paymentApi } from '../../services/api';
 import { isApprovalCancelled, withApproval } from '../../lib/approval';
 
-type Mode = 'prompt' | 'link' | 'code' | 'later';
+type Mode = 'till' | 'prompt' | 'link' | 'code' | 'later';
+type TillPayment = { id: string; transId: string; amount: number; transTime: string; firstName: string | null; msisdn: string | null };
 type PromptState =
   | { phase: 'idle' }
   | { phase: 'waiting'; checkoutRequestId: string; phone: string; amount: number; simulated: boolean; startedAt: number }
@@ -56,6 +57,39 @@ export default function MpesaPayment({
   const [mpesaDown, setMpesaDown] = useState(false);
   // The message names the amount: make a fresh one when the balance changes.
   useEffect(() => { setLink(null); }, [balance]);
+
+  // Payments sent straight to the branch's till (when Safaricom sends them to Melio).
+  const [tillOn, setTillOn] = useState(false);
+  const [till, setTill] = useState<TillPayment[]>([]);
+  useEffect(() => {
+    if (!canEnterCode) return;
+    let stop = false;
+    const load = () => paymentApi.getIncoming().then((r) => {
+      if (stop) return;
+      setTillOn(!!r.data.data.enabled);
+      setTill(r.data.data.payments || []);
+    }).catch(() => undefined);
+    void load();
+    // Keep the list fresh only while it is on screen.
+    const t = mode === 'till' ? setInterval(() => { if (document.visibilityState === 'visible') void load(); }, 8000) : undefined;
+    return () => { stop = true; clearInterval(t); };
+  }, [canEnterCode, mode]);
+  useEffect(() => { if (tillOn && mode === 'prompt') setMode('till'); }, [tillOn]);
+  const attachTill = async (p: TillPayment) => {
+    setError('');
+    setBusy(true);
+    try {
+      // Sent more than the bill: the bill takes what it owes, the excess is noted on the payment.
+      const amount = Math.min(p.amount, Math.round(balance * 100) / 100);
+      await paymentApi.recordPayment(orderId, { method: 'MOBILE_MONEY', amount, reference: p.transId });
+      setTill((list) => list.filter((x) => x.id !== p.id));
+      onPaid(`M-Pesa payment ${p.transId} (KES ${p.amount.toLocaleString()}) attached to this bill.${p.amount > balance + 1 ? ` KES ${(Math.round((p.amount - balance) * 100) / 100).toLocaleString()} more than the bill: give it back or keep it as a tip.` : ''}`);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Could not attach that payment');
+    } finally {
+      setBusy(false);
+    }
+  };
   const onPaidRef = useRef(onPaid);
   onPaidRef.current = onPaid;
 
@@ -210,8 +244,8 @@ export default function MpesaPayment({
 
   return (
     <div className="space-y-4">
-      <div className={`grid gap-2 ${canEnterCode ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2'}`} role="group" aria-label="How is the customer paying by M-Pesa?">
-          {([['prompt', 'Send prompt'], ['link', 'Payment link'], ...(canEnterCode ? [['code', 'Enter code'], ['later', 'M-Pesa down']] : [])] as Array<[Mode, string]>).map(([value, label]) => (
+      <div className={`grid gap-2 ${canEnterCode ? (tillOn ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-2 sm:grid-cols-4') : 'grid-cols-2'}`} role="group" aria-label="How is the customer paying by M-Pesa?">
+          {([...(tillOn ? [['till', 'Paid to till']] : []), ['prompt', 'Send prompt'], ['link', 'Payment link'], ...(canEnterCode ? [['code', 'Enter code'], ['later', 'M-Pesa down']] : [])] as Array<[Mode, string]>).map(([value, label]) => (
             <button
               key={value}
               type="button"
@@ -237,7 +271,29 @@ export default function MpesaPayment({
         </button>
       )}
 
-      {mode === 'later' ? (
+      {mode === 'till' ? (
+        <div className="space-y-2">
+          <p className="text-sm text-gray-600 dark:text-gray-300">Payments that just reached this branch's till. Tap the customer's payment to put it on this bill (KES {Math.round(balance).toLocaleString()} due).</p>
+          {!till.length ? (
+            <p className="rounded-lg border border-dashed border-gray-300 p-4 text-center text-sm text-gray-500 dark:border-gray-700">Waiting for payments… this list updates by itself.</p>
+          ) : (
+            <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200 dark:divide-gray-800 dark:border-gray-700">
+              {till.map((p) => (
+                <li key={p.id}>
+                  <button type="button" disabled={busy || balance <= 0} onClick={() => attachTill(p)} className="flex w-full items-center justify-between gap-3 p-3 text-left text-sm hover:bg-gray-50 disabled:opacity-40 dark:hover:bg-white/5">
+                    <span>
+                      <span className="font-semibold">{p.firstName || 'Customer'}</span>{p.msisdn ? <span className="text-gray-500"> · {p.msisdn}</span> : null}
+                      <span className="block text-xs text-gray-500">{new Date(p.transTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {p.transId}{p.amount > balance + 1 ? ' · more than this bill' : ''}</span>
+                    </span>
+                    <span className="font-bold tabular-nums">KES {p.amount.toLocaleString()}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+        </div>
+      ) : mode === 'later' ? (
         <form onSubmit={recordLater} className="space-y-3">
           <p className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
             <Clock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { checkStatement, parseStatement } from '../services/mpesaStatementService';
+import { incomingTillPayments, registerTill, simulateTillPayment, SIMULATED_BILL_REF } from '../services/tillService';
 import prisma from '../config/database';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
@@ -121,6 +122,85 @@ router.post('/mpesa-statement', authorize('OWNER', 'ADMIN', 'MANAGER'), (req, re
   return sendResponse(res, true, 'Statement checked', result);
 });
 
+/**
+ * Branch whose till is meant: the top-bar branch (staff: their own), or the
+ * branch picked in Settings. Staff tied to a branch may only pick their own.
+ */
+const tillBranch = async (req: AuthRequest, chosen?: unknown) => {
+  let id = req.user!.branchId || '';
+  if (typeof chosen === 'string' && chosen) {
+    const own = (await prisma.user.findUnique({ where: { id: req.user!.id }, select: { branchId: true } }))?.branchId;
+    if (own && own !== chosen) return null;
+    id = chosen;
+  }
+  return id ? prisma.branch.findFirst({ where: { id, restaurantId: req.user!.restaurantId }, select: { id: true, restaurantId: true, mpesaShortcode: true, mpesaShortcodeType: true, mpesaRegisteredAt: true } }) : null;
+};
+
+/** Payments sent straight to this branch's till that aren't on a bill yet (the POS list). */
+router.get('/incoming', authorize(...PAYMENT_ROLES), async (req: AuthRequest, res) => {
+  const branch = await tillBranch(req);
+  if (!branch?.mpesaShortcode || !branch.mpesaRegisteredAt) return sendResponse(res, true, 'No till connected', { enabled: false, payments: [] });
+  return sendResponse(res, true, 'Incoming till payments', { enabled: true, payments: await incomingTillPayments(req.user!.restaurantId, branch.id) });
+});
+
+/** Ask Safaricom to send this branch's till payments to Melio. */
+router.post('/till/register', authorize('OWNER', 'ADMIN'), async (req: AuthRequest, res) => {
+  const branch = await tillBranch(req, req.body?.branchId);
+  if (!branch) return sendError(res, 'Choose a branch');
+  try {
+    await registerTill(branch);
+  } catch (err: any) {
+    if (err?.message === 'NO_TILL') return sendError(res, 'Save the till or paybill number first');
+    if (err?.message === 'NOT_CONFIGURED') return sendError(res, 'M-Pesa is not set up on the server (MPESA_CALLBACK_URL)', undefined, 503);
+    if (err?.message === 'NO_IP_ALLOWLIST') return sendError(res, "Set MPESA_CALLBACK_ALLOWED_IPS to Safaricom's callback addresses before connecting a live till", undefined, 503);
+    return sendError(res, `Safaricom refused: ${err?.message || 'unknown error'}`, undefined, 502);
+  }
+  await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'Branch', branch.id, `Connected M-Pesa till ${branch.mpesaShortcode} to Melio`);
+  return sendResponse(res, true, 'Till connected: its payments will now appear in Melio');
+});
+
+/** A test payment to the till (test mode, or the Daraja sandbox). */
+router.post('/till/simulate', authorize('OWNER', 'ADMIN', 'MANAGER'), async (req: AuthRequest, res) => {
+  const branch = await tillBranch(req, req.body?.branchId);
+  const amount = Number(req.body?.amount || 0);
+  if (!branch) return sendError(res, 'Choose a branch');
+  if (!(amount >= 1 && amount <= 150000)) return sendError(res, 'Enter an amount between 1 and 150,000');
+  try {
+    return sendResponse(res, true, 'Test payment sent', await simulateTillPayment(branch, amount));
+  } catch (err: any) {
+    if (err?.message === 'NO_TILL') return sendError(res, 'Save the till or paybill number first');
+    if (err?.message === 'NOT_IN_PRODUCTION') return sendError(res, 'Test payments are only for the sandbox or test mode', undefined, 403);
+    return sendError(res, `Safaricom refused: ${err?.message || 'unknown error'}`, undefined, 502);
+  }
+});
+
+/**
+ * POST /payments/mpesa-day-check { date }: the statement check, run on the
+ * till payments Safaricom sent Melio for that day (no file needed).
+ */
+router.post('/mpesa-day-check', authorize('OWNER', 'ADMIN', 'MANAGER'), async (req: AuthRequest, res) => {
+  const branch = await tillBranch(req);
+  if (!branch?.mpesaShortcode || !branch.mpesaRegisteredAt) return sendError(res, 'This branch has no till connected to Melio. Use a statement file instead.');
+  const date = String(req.body?.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendError(res, 'Choose a day');
+  const since = branch.mpesaRegisteredAt.toLocaleDateString('en-CA', { timeZone: 'Africa/Nairobi' });
+  if (date < since) return sendError(res, `Melio has this till's payments from ${since} only. Use a statement file for earlier days.`);
+  const start = new Date(`${date}T00:00:00+03:00`);
+  const end = new Date(`${date}T23:59:59.999+03:00`);
+  const day = 24 * 60 * 60 * 1000;
+  // A day either side, so a code typed just after midnight still counts as received.
+  const near = await prisma.mpesaTransaction.findMany({
+    where: { restaurantId: req.user!.restaurantId, branchId: branch.id, transTime: { gte: new Date(start.getTime() - day), lte: new Date(end.getTime() + day) }, OR: [{ billRef: null }, { billRef: { not: SIMULATED_BILL_REF } }] },
+    orderBy: { transTime: 'asc' },
+  });
+  const txns = near.filter((t) => t.transTime >= start && t.transTime <= end);
+  if (!txns.length) return sendError(res, 'No till payments reached Melio that day');
+  const lines = txns.map((t) => ({ receipt: t.transId, time: t.transTime, amount: t.amount, from: t.firstName || '' }));
+  const result = await checkStatement(req.user!.restaurantId, branch.id, { lines, allReceipts: new Set(near.map((t) => t.transId)) }, req.user!.id);
+  await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'Payment', 'mpesa-day-check', `Checked M-Pesa till payments for ${date}: ${result.summary.lines} received, ${result.summary.matched} matched, ${result.summary.notInMelio} not on a bill, ${result.summary.missingFromStatement} codes not received`);
+  return sendResponse(res, true, 'Day checked', result);
+});
+
 router.get('/mpesa-checks', authorize(...PAYMENT_ROLES), async (req: AuthRequest, res) => {
   const restaurantId = req.user!.restaurantId;
   const branchId = req.user!.branchId || (typeof req.query.branchId === 'string' && req.query.branchId) || null;
@@ -188,12 +268,14 @@ router.post('/:id/check', authorize('OWNER', 'ADMIN', 'MANAGER'), async (req: Au
           LIMIT 1`;
         if (used.length) throw new PaymentInputError(`M-Pesa code ${code} was already used on order ${used[0].orderNumber}`, 409);
         await tx.payment.update({ where: { id: payment.id }, data: { reference: code, verifyStatus: 'CONFIRMED', verifiedBy: req.user!.id, verifiedAt: new Date() } });
+        await tx.mpesaTransaction.updateMany({ where: { restaurantId, transId: code, paymentId: null }, data: { paymentId: payment.id } });
         return { message: `Confirmed: ${code}`, balance: null as number | null };
       }
       await tx.payment.update({
         where: { id: payment.id },
         data: { status: 'CANCELLED', verifyStatus: 'NOT_RECEIVED', verifiedBy: req.user!.id, verifiedAt: new Date(), notes: `${payment.notes || ''} [Not received when checked]`.trim() },
       });
+      await tx.mpesaTransaction.updateMany({ where: { paymentId: payment.id }, data: { paymentId: null } });
       const state = await syncPaymentState(tx, payment.saleId);
       const sale = await tx.sale.findUnique({ where: { id: payment.saleId }, select: { orderNumber: true } });
       return { message: `Order ${sale?.orderNumber} still owes KES ${state.balance.toLocaleString()}`, balance: state.balance };
@@ -274,6 +356,7 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
       return sendError(res, "Enter the 10-character M-Pesa code from the customer's confirmation message (e.g. SKL7H2X9QD), or send them a prompt instead.");
     }
 
+    let till: { id: string; amount: number } | null = null;
     const result = await prisma.$transaction(async (tx) => {
       // Lock the order before reading its balance, so two cashiers (or a
       // cashier and an M-Pesa callback) can't both pay the same balance.
@@ -309,6 +392,9 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
           select: { id: true },
         });
         if (confirming) throw new PaymentInputError(`M-Pesa payment ${mpesaCode} came from a prompt and is being confirmed. It will show on the bill by itself shortly.`, 409);
+        // Safaricom already told Melio about this code: it can't pay more than was sent.
+        till = await tx.mpesaTransaction.findFirst({ where: { restaurantId: req.user!.restaurantId, transId: mpesaCode }, select: { id: true, amount: true } });
+        if (till && requested > till.amount + 1) throw new PaymentInputError(`M-Pesa payment ${mpesaCode} was KES ${till.amount.toLocaleString()}, less than the KES ${requested.toLocaleString()} entered`, 400);
       }
 
       const paid = sale.payments.reduce((s: number, p: any) => s + p.amount, 0);
@@ -329,9 +415,12 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
           reference: mpesaCode || (method === 'MOBILE_MONEY' ? null : reference?.trim() || null),
           notes: (checkLater ? `[M-Pesa to check] ${notes?.trim() || ''}`.trim() : notes?.trim()) || null,
           createdBy: req.user!.id,
-          ...(checkLater ? { verifyStatus: 'PENDING_CHECK', payerPhone, refundApprovedBy: null, notes: `[M-Pesa to check]${laterApprover ? ` [approved by ${laterApprover.id}]` : ''} ${notes?.trim() || ''}`.trim() } : {}),
+          ...(checkLater ? { verifyStatus: till ? 'CONFIRMED' : 'PENDING_CHECK', ...(till ? { verifiedAt: new Date() } : {}), payerPhone, refundApprovedBy: null, notes: `[M-Pesa to check]${laterApprover ? ` [approved by ${laterApprover.id}]` : ''} ${notes?.trim() || ''}`.trim() } : {}),
+          // The customer sent more than this bill: keep a note so the excess is refunded or used.
+          ...(till && till.amount > requested + 1 ? { notes: `${notes?.trim() || ''} [Till payment KES ${till.amount}; KES ${Math.round((till.amount - requested) * 100) / 100} more than this bill]`.trim() } : {}),
         },
       });
+      if (till) await tx.mpesaTransaction.update({ where: { id: till.id }, data: { paymentId: payment.id } });
       const state = await syncPaymentState(tx, sale.id);
       let receipt = null;
       if (state.paymentStatus === 'PAID') receipt = await ensureReceipt(tx, sale);

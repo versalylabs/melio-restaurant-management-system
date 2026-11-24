@@ -305,7 +305,8 @@ async function run() {
     assert.strictEqual(r.startAt.toISOString(), `${date}T16:00:00.000Z`);
   });
   await test('re-confirming a cancelled booking whose table was taken is refused', async () => {
-    const startAt = new Date(Date.now() + (800 + Math.floor(Math.random() * 300)) * 86_400_000).toISOString();
+    // Any moment in ~10 years: earlier runs' bookings on this table never collide.
+    const startAt = new Date(Date.now() + (800 + Math.random() * 3600) * 86_400_000).toISOString();
     const first = await call('POST', '/reservations', cashierToken, { customerName: 'A', partySize: 2, tableId: table.id, startAt, durationMinutes: 90 });
     await call('PATCH', `/reservations/${first.body.data.id}/status`, cashierToken, { status: 'CANCELLED' });
     const second = await call('POST', '/reservations', cashierToken, { customerName: 'B', partySize: 2, tableId: table.id, startAt, durationMinutes: 90 });
@@ -1455,6 +1456,113 @@ async function run() {
       assert.strictEqual(res.body.data.rows.find((r: any) => r.receipt === code)?.result, 'NEEDS_OTHER_MANAGER');
       assert.strictEqual((await prisma.payment.findUnique({ where: { id: p.id } })).verifyStatus, 'PENDING_CHECK');
     });
+  }
+
+  console.log('\n--- K8: payments sent straight to the till ---');
+  {
+    const crypto = await import('crypto');
+    const token = crypto.randomBytes(24).toString('hex');
+    const till = `6${String(Date.now()).slice(-5)}`;
+    const code = () => `K${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`.slice(0, 10).padEnd(10, 'Z');
+    const darajaNow = () => new Date(Date.now() + 3 * 3_600_000).toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const confirm = (body: Record<string, unknown>, t = token) =>
+      fetch(`${base}/api/public/till/confirm/${t}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+    const other = await prisma.branch.findFirst({ where: { restaurantId, id: { not: branchId } } });
+    const mgr = await prisma.user.findFirst({ where: { email: 'manager@example.com' } });
+    const managerToken = generateToken(mgr.id, restaurantId, mgr.tokenVersion);
+    try {
+      await test('A branch saves its till number; one till belongs to one branch; only owners change it', async () => {
+        assert.strictEqual((await call('PUT', `/branches/${branchId}`, ownerToken, { mpesaShortcode: '12ab' })).status, 400);
+        assert.strictEqual((await call('PUT', `/branches/${branchId}`, managerToken, { mpesaShortcode: till })).status, 403);
+        const ok = await call('PUT', `/branches/${branchId}`, ownerToken, { mpesaShortcode: till, mpesaShortcodeType: 'TILL' });
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+        assert.ok(!('mpesaCallbackToken' in ok.body.data), 'the callback secret never leaves the server');
+        if (other) assert.strictEqual((await call('PUT', `/branches/${other.id}`, ownerToken, { mpesaShortcode: till })).status, 409);
+        assert.strictEqual((await call('POST', '/payments/till/register', ownerToken, { branchId })).status, 503, 'needs the M-Pesa callback address on the server');
+        if (other) assert.strictEqual((await call('POST', '/payments/till/simulate', managerToken, { branchId: other.id, amount: 5 })).status, 400, 'a branch manager cannot pick another branch');
+      });
+      // What a successful registration leaves (Daraja itself isn't reachable from tests).
+      await prisma.branch.update({ where: { id: branchId }, data: { mpesaRegisteredAt: new Date(Date.now() - 60_000), mpesaCallbackToken: crypto.createHash('sha256').update(token).digest('hex') } });
+      let txCode = '';
+      await test("Safaricom's confirmations need the branch's address, are stored once, and show at the POS", async () => {
+        txCode = code();
+        const body = { TransactionType: 'Buy Goods', TransID: txCode, TransTime: darajaNow(), TransAmount: '450.00', BusinessShortCode: till, MSISDN: '254712345678', FirstName: 'WANJIKU' };
+        assert.strictEqual((await confirm(body, 'a'.repeat(48))).status, 401);
+        assert.strictEqual((await confirm(body)).body.ResultCode, 0);
+        assert.strictEqual((await confirm(body)).body.ResultCode, 0, 'Safaricom resending is harmless');
+        assert.strictEqual(await prisma.mpesaTransaction.count({ where: { transId: txCode } }), 1);
+        const stray = code();
+        await confirm({ ...body, TransID: stray, BusinessShortCode: '999999' });
+        assert.strictEqual(await prisma.mpesaTransaction.count({ where: { transId: stray } }), 0, "another till's payment is not stored under this branch");
+        const list = await call('GET', '/payments/incoming', cashierToken);
+        assert.strictEqual(list.status, 200, JSON.stringify(list.body));
+        const row = list.body.data.payments.find((p: any) => p.transId === txCode);
+        assert.ok(list.body.data.enabled && row && row.amount === 450 && row.firstName === 'WANJIKU' && row.msisdn === '2547*****678', JSON.stringify(row));
+        assert.strictEqual((await prisma.mpesaTransaction.findUnique({ where: { transId: txCode } })).msisdn, '2547*****678', 'stored masked');
+      });
+      await test('Tapping a till payment puts it on the bill and takes it off the list', async () => {
+        const o = (await newOrder()).body.data;
+        const paid = code();
+        await confirm({ TransID: paid, TransTime: darajaNow(), TransAmount: o.totalAmount, BusinessShortCode: till, FirstName: 'OTIENO' });
+        const res = await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: o.totalAmount, reference: paid });
+        assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+        const t = await prisma.mpesaTransaction.findUnique({ where: { transId: paid } });
+        assert.strictEqual(t.paymentId, res.body.data.payment.id);
+        const list = await call('GET', '/payments/incoming', cashierToken);
+        assert.ok(!list.body.data.payments.some((p: any) => p.transId === paid));
+        assert.strictEqual((await call('POST', `/payments/orders/${(await newOrder()).body.data.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: 1, reference: paid })).status, 409, 'a till payment goes on one bill only');
+      });
+      await test('A till payment cannot pay more than was sent; more than the bill is noted', async () => {
+        const small = code();
+        await confirm({ TransID: small, TransTime: darajaNow(), TransAmount: 5, BusinessShortCode: till });
+        const o = (await newOrder()).body.data;
+        const over = await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: o.totalAmount, reference: small });
+        assert.strictEqual(over.status, 400, JSON.stringify(over.body));
+        const big = code();
+        await confirm({ TransID: big, TransTime: darajaNow(), TransAmount: o.totalAmount + 100, BusinessShortCode: till });
+        const res = await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: o.totalAmount, reference: big });
+        assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+        assert.ok(/more than this bill/.test(res.body.data.payment.notes || ''), res.body.data.payment.notes);
+      });
+      await test('A payment recorded "M-Pesa down" is confirmed when Safaricom reports its code', async () => {
+        const o = (await newOrder()).body.data;
+        const c = code();
+        const p = (await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'MOBILE_MONEY', checkLater: true, approval, amount: o.totalAmount, reference: c })).body.data.payment;
+        await confirm({ TransID: c, TransTime: darajaNow(), TransAmount: o.totalAmount, BusinessShortCode: till });
+        const after = await prisma.payment.findUnique({ where: { id: p.id } });
+        assert.strictEqual(after.verifyStatus, 'CONFIRMED');
+        assert.strictEqual((await prisma.mpesaTransaction.findUnique({ where: { transId: c } })).paymentId, p.id);
+        // Already reported by Safaricom when recorded: confirmed straight away.
+        const o2 = (await newOrder()).body.data;
+        const c2 = code();
+        await confirm({ TransID: c2, TransTime: darajaNow(), TransAmount: o2.totalAmount, BusinessShortCode: till });
+        const p2 = (await call('POST', `/payments/orders/${o2.id}`, cashierToken, { method: 'MOBILE_MONEY', checkLater: true, approval, amount: o2.totalAmount, reference: c2 })).body.data.payment;
+        assert.strictEqual(p2.verifyStatus, 'CONFIRMED');
+      });
+      await test('Test payments (test mode) and the daily check from the till feed', async () => {
+        process.env.PAYMENT_SIMULATION = 'true';
+        const sim = await call('POST', '/payments/till/simulate', ownerToken, { branchId, amount: 9.13 });
+        delete process.env.PAYMENT_SIMULATION;
+        assert.strictEqual(sim.status, 200, JSON.stringify(sim.body));
+        assert.ok(await prisma.mpesaTransaction.findUnique({ where: { transId: sim.body.data.transId } }));
+        process.env.MPESA_ENVIRONMENT = 'production';
+        process.env.PAYMENT_SIMULATION = 'true';
+        const live = await call('POST', '/payments/till/simulate', ownerToken, { branchId, amount: 10 });
+        delete process.env.MPESA_ENVIRONMENT;
+        delete process.env.PAYMENT_SIMULATION;
+        assert.strictEqual(live.status, 403, 'never on a live till, even with test mode on');
+        const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Nairobi' });
+        const dayCheck = (date: string) => fetch(`${base}/api/payments/mpesa-day-check`, { method: 'POST', headers: { Authorization: `Bearer ${ownerToken}`, 'Content-Type': 'application/json', 'x-branch-id': branchId }, body: JSON.stringify({ date }) }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+        const res = await dayCheck(day);
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.ok(res.body.data.rows.some((r: any) => r.receipt === txCode && r.result === 'NOT_IN_MELIO'), 'the unattached payment is on no bill');
+        assert.ok(!res.body.data.rows.some((r: any) => r.receipt === sim.body.data.transId), 'test payments are left out');
+        assert.strictEqual((await dayCheck('2020-01-01')).status, 400, 'no check for days before the till was connected');
+        assert.strictEqual((await call('POST', '/payments/mpesa-day-check', cashierToken, { date: day })).status, 403);
+      });
+    } finally {
+      await prisma.branch.update({ where: { id: branchId }, data: { mpesaShortcode: null, mpesaShortcodeType: null, mpesaRegisteredAt: null, mpesaCallbackToken: null } });
+    }
   }
 
   server.close();

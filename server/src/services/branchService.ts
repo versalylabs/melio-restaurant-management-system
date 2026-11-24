@@ -9,7 +9,7 @@ export const getBranches = async (req: AuthRequest, res: ExpressResponse) => {
 
   const branches = await prisma.branch.findMany({
     where: { restaurantId },
-    select: { id: true, name: true, code: true, address: true, city: true, status: true },
+    select: { id: true, name: true, code: true, address: true, city: true, status: true, mpesaShortcode: true, mpesaShortcodeType: true, mpesaRegisteredAt: true },
     orderBy: { name: 'asc' },
   });
 
@@ -80,7 +80,27 @@ export const updateBranch = async (req: AuthRequest, res: ExpressResponse) => {
   const existing = await prisma.branch.findFirst({ where: { id, restaurantId } });
   if (!existing) return sendError(res, 'Branch not found', undefined, 404);
 
-  const { name, code, phone, email, address, city, callPhone, diningHours, status } = req.body || {};
+  const { name, code, phone, email, address, city, callPhone, diningHours, status, mpesaShortcode, mpesaShortcodeType } = req.body || {};
+  // The M-Pesa till or paybill whose payments come to this branch.
+  let till: { mpesaShortcode?: string | null; mpesaShortcodeType?: string | null; mpesaRegisteredAt?: null; mpesaCallbackToken?: null } = {};
+  if ((mpesaShortcode !== undefined || mpesaShortcodeType !== undefined) && !['OWNER', 'ADMIN'].includes(req.user!.roleName)) {
+    return sendError(res, "Only the owner can change a branch's M-Pesa till", undefined, 403);
+  }
+  if (mpesaShortcode !== undefined) {
+    const sc = String(mpesaShortcode || '').replace(/\s/g, '');
+    if (sc && !/^\d{5,7}$/.test(sc)) return sendError(res, 'Enter the till or paybill number (5 to 7 digits)');
+    if (sc) {
+      // Payments are routed by this number, so it can belong to one branch only.
+      const taken = await prisma.branch.findFirst({ where: { mpesaShortcode: sc, id: { not: id } }, select: { id: true } });
+      if (taken) return sendError(res, 'That till or paybill number is already used by another branch', undefined, 409);
+    }
+    // A new number must be connected again; the old callback address stops working.
+    till = { mpesaShortcode: sc || null, ...(sc !== existing.mpesaShortcode ? { mpesaRegisteredAt: null, mpesaCallbackToken: null } : {}) };
+  }
+  if (mpesaShortcodeType !== undefined) {
+    if (!['TILL', 'PAYBILL'].includes(mpesaShortcodeType)) return sendError(res, 'Choose till (Buy Goods) or paybill');
+    till.mpesaShortcodeType = mpesaShortcodeType;
+  }
 
   let trimmedName = existing.name;
   if (name !== undefined) {
@@ -100,7 +120,9 @@ export const updateBranch = async (req: AuthRequest, res: ExpressResponse) => {
     }
   }
 
-  const branch = await prisma.branch.update({
+  let branch;
+  try {
+    branch = await prisma.branch.update({
     where: { id },
     data: {
       name: trimmedName,
@@ -112,11 +134,18 @@ export const updateBranch = async (req: AuthRequest, res: ExpressResponse) => {
       callPhone: callPhone !== undefined ? (callPhone ? String(callPhone).trim() : null) : existing.callPhone,
       diningHours: diningHours !== undefined ? (typeof diningHours === 'object' ? JSON.stringify(diningHours) : String(diningHours)) : existing.diningHours,
       status: status !== undefined ? status : existing.status,
+      ...till,
     },
   });
+  } catch (err: any) {
+    // Two owners saving the same till number at once: the unique index decides.
+    if (err?.code === 'P2002') return sendError(res, 'That till or paybill number is already used by another branch', undefined, 409);
+    throw err;
+  }
+  const { mpesaCallbackToken: _secret, ...safeBranch } = branch;
 
   await createAuditLog(restaurantId, req.user!.id, 'UPDATE', 'Branch', branch.id, `Updated branch ${branch.name}`);
-  return sendResponse(res, true, 'Branch updated successfully', branch);
+  return sendResponse(res, true, 'Branch updated successfully', safeBranch);
 };
 
 export const createStockTransfer = async (req: AuthRequest, res: ExpressResponse) => {
