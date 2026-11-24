@@ -41,6 +41,7 @@ export const ROUTE_ROLES: Record<string, string[] | undefined> = {
   '/roles': ['OWNER', 'ADMIN'],
   '/automated-messaging': ['OWNER', 'ADMIN'],
   '/settings': ['OWNER', 'ADMIN', 'MANAGER'],
+  '/licences': ['OWNER', 'ADMIN', 'MANAGER'],
   '/website-management': ['OWNER', 'ADMIN', 'MANAGER'],
   '/audit-log': ['OWNER', 'ADMIN'],
   // Every signed-in staff member may open notifications.
@@ -70,7 +71,7 @@ export const permissionForPath = (path: string): string | null => {
   if (path === '/notifications') return 'dashboard.view';
   if (path === '/deliveries') return 'orders.view';
   if (path === '/automated-messaging') return 'settings.manage';
-  if (path === '/settings') return 'settings.manage';
+  if (path === '/settings' || path === '/licences') return 'settings.manage';
   if (path === '/dashboard') return 'dashboard.view';
   return null;
 };

@@ -83,6 +83,7 @@ model Restaurant {
 
   @@map("restaurants")
   smsMessages SmsMessage[]
+  licences Licence[]
 }
 
 model Branch {
@@ -1581,4 +1582,32 @@ model SmsOptOut {
   createdAt DateTime @default(now())
 
   @@map("sms_opt_outs")
+}
+
+/// A licence or permit the restaurant must keep valid (county, health, fire, liquor, tourism).
+model Licence {
+  id            String    @id @default(uuid())
+  restaurantId  String
+  /// null: covers every branch.
+  branchId      String?
+  name          String
+  authority     String?
+  number        String?
+  expiresAt     DateTime
+  notes         String?
+  /// shortcut: the scan is kept in the database (max 3 MB); move to private storage if files grow.
+  documentName  String?
+  documentType  String?
+  documentData  Bytes?
+  /// When the 30-day and 7-day reminders went out; cleared when the expiry date changes.
+  reminded30At  DateTime?
+  reminded7At   DateTime?
+  createdBy     String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, expiresAt])
+  @@map("licences")
 }
