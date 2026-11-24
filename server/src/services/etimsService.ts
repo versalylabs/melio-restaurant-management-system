@@ -147,10 +147,28 @@ export async function queueEtimsSale(tx: Tx, sale: { id: string; restaurantId: s
   await tx.etimsInvoice.createMany({ data: [{ restaurantId: sale.restaurantId, branchId: sale.branchId, saleId: sale.id, kind: 'SALE', key: `S:${sale.id}` }], skipDuplicates: true });
 }
 
+/** The bill's latest invoice to KRA (a bill paid again after a refund has more than one). */
+const latestSale = (db: Tx | typeof prisma, saleId: string, before?: Date) =>
+  db.etimsInvoice.findFirst({ where: { saleId, kind: 'SALE', status: { not: 'DROPPED' }, ...(before ? { createdAt: { lt: before } } : {}) }, orderBy: { createdAt: 'desc' } });
+
+/**
+ * A bill paid again after a refund: KRA's net for it (invoices minus credit
+ * notes) is now short of what was paid, so KRA gets a new invoice for the difference.
+ */
+export async function topUpEtimsSale(tx: Tx, sale: { id: string }) {
+  const invoices = await tx.etimsInvoice.findMany({ where: { saleId: sale.id, status: { in: ['PENDING', 'SIGNED'] } }, select: { kind: true, amount: true } });
+  if (!invoices.some((i) => i.kind === 'SALE')) return;
+  const bill = (await tx.sale.findUnique({ where: { id: sale.id }, select: { totalAmount: true, restaurantId: true, branchId: true } }))!;
+  const net = invoices.reduce((t, i) => t + (i.kind === 'SALE' ? i.amount ?? bill.totalAmount : -(i.amount || 0)), 0);
+  const missing = money(bill.totalAmount - net);
+  if (missing <= 0.01) return;
+  const n = await tx.etimsInvoice.count({ where: { saleId: sale.id, kind: 'SALE' } });
+  await tx.etimsInvoice.createMany({ data: [{ restaurantId: bill.restaurantId, branchId: bill.branchId, saleId: sale.id, kind: 'SALE', key: `S:${sale.id}:${n + 1}`, amount: missing }], skipDuplicates: true });
+}
+
 /** A refund of a bill that went to KRA: a credit note (with Melio's credit note, or for a refund before the bill was closed). */
 export async function queueEtimsCredit(tx: Tx, input: { restaurantId: string; branchId: string; saleId: string; amount: number; key: string; reference?: string; creditNoteId?: string }) {
-  const original = await tx.etimsInvoice.findUnique({ where: { key: `S:${input.saleId}` }, select: { status: true } });
-  if (!original || original.status === 'DROPPED') return;
+  if (!(await latestSale(tx, input.saleId))) return;
   await tx.etimsInvoice.createMany({
     data: [{ restaurantId: input.restaurantId, branchId: input.branchId, saleId: input.saleId, creditNoteId: input.creditNoteId || null, kind: 'CREDIT_NOTE', key: input.key, amount: money(input.amount), reference: input.reference || null }],
     skipDuplicates: true,
@@ -310,17 +328,18 @@ async function signInvoice(id: string, timeoutMs = 20_000): Promise<Outcome> {
     }))!;
 
     let orgInvcNo = 0;
-    let target = money(sale.totalAmount);
+    let target = money(inv.amount ?? sale.totalAmount);
     if (inv.kind === 'CREDIT_NOTE') {
-      const original = await prisma.etimsInvoice.findUnique({ where: { key: `S:${inv.saleId}` } });
+      const original = await latestSale(prisma, inv.saleId, inv.createdAt);
       if (!original || original.status === 'REJECTED' || original.status === 'DROPPED') throw new KraError('ORIGINAL_NOT_SIGNED', 'The bill it refunds was not signed by KRA', true);
       // The bill isn't signed yet: wait for it without counting a failed try.
       if (original.status !== 'SIGNED' || !original.invoiceNo) return wait('Waiting for the bill it refunds to be signed', 60_000);
       if (original.environment !== device.environment || original.bhfId !== device.bhfId) throw new KraError('OTHER_DEVICE', 'The bill was signed on a different KRA device', true);
       orgInvcNo = original.invoiceNo;
-      // Never credit more than the bill: earlier refunds of it count first.
-      const earlier = await prisma.etimsInvoice.aggregate({ where: { saleId: inv.saleId, kind: 'CREDIT_NOTE', id: { not: id }, createdAt: { lt: inv.createdAt }, status: { in: ['PENDING', 'SIGNED'] } }, _sum: { amount: true } });
-      target = money(Math.min(inv.amount || 0, sale.totalAmount - (earlier._sum.amount || 0)));
+      // Never credit more than KRA has for this bill: its invoices minus earlier credit notes.
+      const earlier = await prisma.etimsInvoice.findMany({ where: { saleId: inv.saleId, id: { not: id }, createdAt: { lt: inv.createdAt }, status: { in: ['PENDING', 'SIGNED'] } }, select: { kind: true, amount: true } });
+      const net = earlier.reduce((t, i) => t + (i.kind === 'SALE' ? i.amount ?? sale.totalAmount : -(i.amount || 0)), 0);
+      target = money(Math.min(inv.amount || 0, net));
       if (target <= 0) throw new KraError('NOTHING_LEFT', 'Nothing left to credit on this bill', true);
     }
 
@@ -438,7 +457,7 @@ export async function signPendingEtims(restaurantId: string, branchId?: string |
 
 /** Signs a bill's receipt right away when it is printed (short wait), if it is still waiting. */
 export async function signSaleNow(saleId: string) {
-  const inv = await prisma.etimsInvoice.findUnique({ where: { key: `S:${saleId}` }, select: { id: true, status: true } });
+  const inv = await latestSale(prisma, saleId);
   if (inv?.status !== 'PENDING') return;
   if ((await signInvoice(inv.id, 6_000)) !== 'busy') return;
   // Another request is sending it right now (e.g. just after the payment): wait briefly for its answer.
@@ -452,8 +471,8 @@ export async function signSaleNow(saleId: string) {
 
 /** What the receipt shows: KRA's numbers and QR code once signed, marked as a test on anything but the live system. */
 export async function etimsReceiptInfo(saleId: string) {
-  const inv = await prisma.etimsInvoice.findUnique({ where: { key: `S:${saleId}` } });
-  if (!inv || inv.status === 'DROPPED') return null;
+  const inv = await latestSale(prisma, saleId);
+  if (!inv) return null;
   const device = await prisma.etimsDevice.findUnique({ where: { branchId: inv.branchId }, select: { sdcId: true, mrcNo: true, environment: true } });
   const restaurant = await prisma.restaurant.findUnique({ where: { id: inv.restaurantId }, select: { kraPin: true } });
   // The environment that signed it, not the device's current one.

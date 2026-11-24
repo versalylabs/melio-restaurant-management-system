@@ -2,45 +2,50 @@
 # UNIFIED ALL-IN-ONE RESTAURANT MANAGEMENT SYSTEM DOCKERFILE
 # Builds both Client (Vite React) and Server (Express + Prisma) into
 # a single production container for simple 1-click cloud deployments.
+#
+# The repo is an npm workspace with one lockfile at the root, so every
+# install runs from the root with that lockfile.
 # ====================================================================
 
-# Stage 1: Build Frontend SPA
-FROM node:20-alpine AS client-builder
-WORKDIR /app/client
-COPY client/package*.json ./
+# Stage 1: All dependencies (client + server), from the root lockfile
+FROM node:20-alpine AS deps
+# Prisma's query engine needs OpenSSL on Alpine.
+RUN apk add --no-cache openssl
+WORKDIR /app
+COPY package.json package-lock.json .npmrc ./
+COPY client/package.json ./client/
+COPY server/package.json ./server/
+# The server's postinstall runs `prisma generate`, which needs the schema.
+COPY server/prisma ./server/prisma/
 RUN npm ci
-COPY client/ ./
-RUN npm run build
 
-# Stage 2: Build Backend API
-FROM node:20-alpine AS server-builder
-WORKDIR /app/server
-COPY server/package*.json ./
-COPY server/prisma ./prisma/
-RUN npm ci
-COPY server/ ./
-RUN npx prisma generate
-RUN npm run build
+# Stage 2: Build Frontend SPA
+FROM deps AS client-builder
+COPY client/ ./client/
+RUN npm run build -w client
 
-# Stage 3: Production Runtime
+# Stage 3: Build Backend API
+FROM deps AS server-builder
+COPY server/ ./server/
+RUN npm run build -w server
+
+# Stage 4: Production Runtime
 FROM node:20-alpine AS runner
+RUN apk add --no-cache openssl
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=5000
 
-# Install production dependencies for server
-COPY server/package*.json ./
-COPY server/prisma ./prisma/
-RUN npm ci --only=production && \
-    npx prisma generate && \
-    npm cache clean --force
+# Production dependencies for the server only (postinstall generates the Prisma client)
+COPY package.json package-lock.json .npmrc ./
+COPY server/package.json ./server/
+COPY server/prisma ./server/prisma/
+RUN npm ci --omit=dev -w server && npm cache clean --force
 
-# Copy compiled backend output
-COPY --from=server-builder /app/server/dist ./dist
-
-# Copy built frontend assets into location served by Express static handler
-COPY --from=client-builder /app/client/dist /app/client/dist
+# Compiled backend, and the built frontend where the server looks for it (../../client/dist from server/dist)
+COPY --from=server-builder /app/server/dist ./server/dist
+COPY --from=client-builder /app/client/dist ./client/dist
 
 # Security: Non-root user
 RUN addgroup --system --gid 1001 nodejs && \
@@ -48,6 +53,7 @@ RUN addgroup --system --gid 1001 nodejs && \
     chown -R rmsuser:nodejs /app
 
 USER rmsuser
+WORKDIR /app/server
 
 EXPOSE 5000
 
