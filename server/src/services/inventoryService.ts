@@ -2878,7 +2878,8 @@ export const completeStocktake = async (req: AuthRequest, res: ExpressResponse) 
       await tx.stocktakeItem.update({ where: { id: item.id }, data: { expectedQty: stock.quantity, variance, unitCost: stock.costPerUnit, varianceValue: Math.round(variance * stock.costPerUnit * 100) / 100 } });
     }
     return await tx.stocktake.update({ where: { id }, data: { status: 'COMPLETED', completedBy: req.user!.id, completedAt: new Date() }, include: { items: true, branch: true } });
-  });
+    // A few queries per counted item: a full stocktake far outlasts Prisma's 5-second default.
+  }, { timeout: 60_000, maxWait: 10_000 });
   if ((result as any).error === 'NOT_FOUND') return sendError(res, 'Stocktake not found', undefined, 404);
   if ((result as any).error === 'NOT_DRAFT') return sendError(res, 'Stocktake is already completed', undefined, 409);
   await createAuditLog(restaurantId, req.user!.id, 'UPDATE', 'Stocktake', id, `Completed stocktake ${(result as any).reference}`);

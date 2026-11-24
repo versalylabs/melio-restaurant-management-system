@@ -1377,6 +1377,86 @@ async function run() {
     });
   }
 
+  console.log('\n--- M-Pesa statement check ---');
+  {
+    const mk = () => `S${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`.slice(0, 10).padEnd(10, 'Q');
+    const nairobi = (d: Date) => d.toLocaleString('en-GB', { timeZone: 'Africa/Nairobi', hour12: false }).replace(',', '');
+    const upload = (csv: string, token = ownerToken, branch: string | null = branchId) => {
+      const f = new FormData();
+      f.append('statement', new Blob([csv], { type: 'text/csv' }), 'statement.csv');
+      return fetch(`${base}/api/payments/mpesa-statement`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, ...(branch ? { 'x-branch-id': branch } : {}) }, body: f }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }));
+    };
+    const { parseStatement, parseStatementTime } = require('../services/mpesaStatementService');
+    await test('Statement times and amounts are read the way the M-Pesa portal writes them', async () => {
+      assert.strictEqual(parseStatementTime('24/11/2026 14:02:11').toISOString(), '2026-11-24T11:02:11.000Z');
+      assert.strictEqual(parseStatementTime('2026-11-24 14:02:11').toISOString(), '2026-11-24T11:02:11.000Z');
+      assert.strictEqual(parseStatementTime('24-11-2026 02:02:11 PM').toISOString(), '2026-11-24T11:02:11.000Z', 'AM/PM');
+      assert.strictEqual(parseStatementTime('11/24/2026 14:02'), null, 'month-first dates are refused, not guessed');
+      assert.strictEqual(parseStatementTime('31/02/2026 10:00'), null);
+      assert.ok(/can't be read/.test(parseStatement('Receipt No.,Completion Time,Paid In\nSKL7H2X9QD,11/24/2026 14:02,100\n').error), 'an unreadable time stops the check');
+      const parsed = parseStatement('Receipt No.;Completion Time;Details;Transaction Status;Paid In;Withdrawn\nSKL7H2X9QD;24/11/2026 14:02:11;Pay Bill;Completed;"1,250.00";\nSKL7H2X9QE;24/11/2026 14:03:00;Withdraw;Completed;;500\nSKL7H2X9QF;24/11/2026 14:04:00;Pay;Failed;100;\n');
+      assert.ok(parsed.lines.length === 1 && parsed.lines[0].amount === 1250 && parsed.lines[0].receipt === 'SKL7H2X9QD', JSON.stringify(parsed));
+      assert.ok(parseStatement('name,age\nx,1').error);
+    });
+    await test('Checking a statement: matched, confirmed, possible, missing and fake-looking codes', async () => {
+      const now = new Date();
+      // 1. Typed in at the till with a real code.
+      const o1 = (await newOrder()).body.data;
+      const c1 = mk();
+      await call('POST', `/payments/orders/${o1.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: o1.totalAmount, reference: c1 });
+      // 2. "M-Pesa down" with the code: the statement proves it.
+      const o2 = (await newOrder()).body.data;
+      const c2 = mk();
+      const p2 = (await call('POST', `/payments/orders/${o2.id}`, cashierToken, { method: 'MOBILE_MONEY', checkLater: true, approval, amount: o2.totalAmount, reference: c2 })).body.data.payment;
+      // 3. "M-Pesa down" with no code, an unusual amount: a possible match.
+      const o3 = (await newOrder()).body.data;
+      const p3 = (await call('POST', `/payments/orders/${o3.id}`, cashierToken, { method: 'MOBILE_MONEY', checkLater: true, approval, amount: 7.77 })).body.data.payment;
+      // 4. A code typed at the till that never reached the till (fake or reused message).
+      const o4 = (await newOrder()).body.data;
+      const c4 = mk();
+      await call('POST', `/payments/orders/${o4.id}`, cashierToken, { method: 'MOBILE_MONEY', amount: o4.totalAmount, reference: c4 });
+      const c3 = mk();
+      const stray = mk();
+      // The statement runs from before these payments to after them.
+      const t = nairobi(new Date(now.getTime() - 60_000));
+      const tEnd = nairobi(new Date(Date.now() + 120_000));
+      const csv = [
+        '"Receipt No.","Completion Time","Initiation Time","Details","Transaction Status","Paid In","Withdrawn","Balance","Other Party Info"',
+        `"${c1}","${t}","${t}","Pay Merchant","Completed","${o1.totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}","","","2547*****678 - J DOE"`,
+        `"${c2}","${t}","${t}","Pay Merchant","Completed","${o2.totalAmount}","","",""`,
+        `"${c3}","${t}","${t}","Pay Merchant","Completed","7.77","","",""`,
+        `"${stray}","${tEnd}","${tEnd}","Pay Merchant","Completed","4.21","","",""`,
+      ].join('\r\n');
+      assert.strictEqual((await upload(csv, cashierToken)).status, 403);
+      const res = await upload(csv);
+      assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+      const d = res.body.data;
+      const row = (code: string) => d.rows.find((r: any) => r.receipt === code);
+      assert.ok(!row(c1) && !row(c2) && d.summary.matched >= 1 && d.summary.confirmedNow === 1, 'matched and confirmed lines are counted, not listed');
+      assert.strictEqual((await prisma.payment.findUnique({ where: { id: p2.id } })).verifyStatus, 'CONFIRMED');
+      assert.strictEqual(row(c3).result, 'POSSIBLE_MATCH');
+      assert.ok(row(c3).candidates.some((c: any) => c.paymentId === p3.id));
+      assert.strictEqual(row(stray).result, 'NOT_IN_MELIO');
+      assert.ok(d.missingFromStatement.some((m: any) => m.reference === c4), 'the code nobody paid is flagged');
+      assert.ok(!d.missingFromStatement.some((m: any) => m.reference === c1));
+      // The manager confirms the possible match with the statement's code.
+      const ok = await call('POST', `/payments/${p3.id}/check`, ownerToken, { result: 'CONFIRMED', reference: c3 });
+      assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+      assert.strictEqual((await upload('nothing here')).status, 400);
+      assert.strictEqual((await upload(csv, ownerToken, null)).status, 400, 'an owner must pick the branch the till belongs to');
+    });
+    await test("A manager can't confirm their own \"M-Pesa to check\" payment with a statement", async () => {
+      const o = (await newOrder()).body.data;
+      const code = mk();
+      const p = (await call('POST', `/payments/orders/${o.id}`, ownerToken, { method: 'MOBILE_MONEY', checkLater: true, approval, amount: o.totalAmount, reference: code })).body.data.payment;
+      const t = nairobi(new Date());
+      const res = await upload(`Receipt No.,Completion Time,Transaction Status,Paid In\n${code},${t},Completed,${o.totalAmount}\n`);
+      assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+      assert.strictEqual(res.body.data.rows.find((r: any) => r.receipt === code)?.result, 'NEEDS_OTHER_MANAGER');
+      assert.strictEqual((await prisma.payment.findUnique({ where: { id: p.id } })).verifyStatus, 'PENDING_CHECK');
+    });
+  }
+
   server.close();
   await prisma.$disconnect();
   console.log(`\n========================================\nIntegration Results: ${passed} Passed, ${failed} Failed\n========================================`);
