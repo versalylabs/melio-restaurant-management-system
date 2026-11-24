@@ -82,6 +82,7 @@ model Restaurant {
   messageTemplates MessageTemplate[]
 
   @@map("restaurants")
+  smsMessages SmsMessage[]
 }
 
 model Branch {
@@ -1195,9 +1196,24 @@ model Customer {
   notes String?
   status String @default("ACTIVE")
   loyaltyBalance Int @default(0)
+  /// Agreed (at the till or online) to get receipts and points by SMS.
+  smsReceipts Boolean @default(false)
+  /// Separate, optional consent for offers by SMS (Data Protection Act).
+  marketingConsent Boolean @default(false)
+  marketingConsentAt DateTime?
+  /// POS, WEBSITE or STAFF, and the staff member who recorded it.
+  marketingConsentSource String?
+  marketingConsentBy String?
+  /// "en" or "sw".
+  language String @default("en")
+  /// Replied STOP (or asked staff): no SMS of any kind.
+  smsOptOutAt DateTime?
+  /// SMS (replied STOP), STAFF or BLACKLIST (network refuses).
+  smsOptOutSource String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   restaurant Restaurant @relation(fields:[restaurantId], references:[id], onDelete: Cascade)
+  smsMessages SmsMessage[]
   orders Sale[]
   reservations Reservation[]
   loyaltyTransactions LoyaltyTransaction[]
@@ -1522,4 +1538,39 @@ model PaymentLink {
 
   @@index([saleId])
   @@map("payment_links")
+}
+
+/// Every SMS the system sends (or would send in test mode), kept for the restaurant to see.
+model SmsMessage {
+  id           String    @id @default(uuid())
+  restaurantId String
+  customerId   String?
+  saleId       String?
+  phone        String
+  kind         String
+  language     String    @default("en")
+  body         String
+  /// SENT, SIMULATED, FAILED or SKIPPED (opted out)
+  status       String
+  providerId   String?
+  cost         String?
+  error        String?
+  createdAt    DateTime  @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@unique([saleId, kind])
+  @@index([restaurantId, createdAt])
+  @@index([customerId, createdAt])
+  @@map("sms_messages")
+}
+
+/// A number that asked for no SMS (replied STOP) or that the network refuses. Checked before every send.
+model SmsOptOut {
+  phone     String   @id
+  source    String
+  createdAt DateTime @default(now())
+
+  @@map("sms_opt_outs")
 }

@@ -13,6 +13,16 @@ export interface NotificationLog {
 
 // In-memory inspection log for simulated / dev messages
 import { resolveMessage } from './automatedMessagingService';
+import { afterResponse, sendSms } from './smsService';
+import { orderUpdateSms, reservationSms, smsLanguage } from './smsTemplates';
+
+/** Full link for SMS: the first configured site address. */
+const siteLink = (path: string) => {
+  const base = (process.env.FRONTEND_URL || '').split(',')[0].trim().replace(/\/$/, '');
+  return /^https?:\/\//.test(base) ? `${base}${path}` : '';
+};
+const languageOf = async (customerId?: string | null) =>
+  customerId ? smsLanguage((await prisma.customer.findUnique({ where: { id: customerId }, select: { language: true } }))?.language) : 'en';
 
 export const notificationHistory: NotificationLog[] = [];
 
@@ -27,7 +37,11 @@ export async function notifyCustomerOrderUpdate({
   restaurantId,
   totalAmount,
   deliveryAddress,
+  saleId,
+  customerId,
 }: {
+  saleId?: string | null;
+  customerId?: string | null;
   trackingToken: string;
   orderNumber: string;
   status: string;
@@ -35,7 +49,7 @@ export async function notifyCustomerOrderUpdate({
   customerPhone?: string | null;
   customerEmail?: string | null;
   restaurantName: string;
-  restaurantId?: string | null;
+  restaurantId: string;
   totalAmount?: number;
   deliveryAddress?: string | null;
 }) {
@@ -52,7 +66,8 @@ export async function notifyCustomerOrderUpdate({
   let message = statusMessages[status] || `Your order ${orderNumber} status is now ${status}.`;
   let subject = `${restaurantName} — Order ${orderNumber} Update: ${status}`;
   let sendEmail = !!customerEmail;
-  let sendSms = !!customerPhone;
+  let sendSms_ = !!customerPhone;
+  let usedCustom = false;
 
   // Check if owner has configured a custom automated message template for this action
   if (restaurantId) {
@@ -70,11 +85,12 @@ export async function notifyCustomerOrderUpdate({
       // The owner turned this message off: keep the live tracking update below,
       // but send no SMS or email.
       sendEmail = false;
-      sendSms = false;
+      sendSms_ = false;
     } else if (custom) {
+      usedCustom = true;
       message = custom.body;
       subject = custom.subject;
-      if (custom.channel === 'EMAIL') sendSms = false;
+      if (custom.channel === 'EMAIL') sendSms_ = false;
       if (custom.channel === 'SMS') sendEmail = false;
     }
   }
@@ -88,19 +104,11 @@ export async function notifyCustomerOrderUpdate({
     timestamp: new Date().toISOString(),
   });
 
-  // 2. Dispatch simulated/live SMS if phone is provided
-  if (customerPhone && sendSms) {
-    const smsEntry: NotificationLog = {
-      id: `sms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      type: 'SMS',
-      recipient: customerPhone,
-      message,
-      status: process.env.SMS_API_KEY ? 'SENT' : 'SIMULATED',
-      createdAt: new Date(),
-    };
-    notificationHistory.unshift(smsEntry);
-    if (notificationHistory.length > 500) notificationHistory.pop();
-    console.log(`[SMS DISPATCH -> ${customerPhone}]: ${message}`);
+  // 2. SMS (really sent when Africa's Talking is set up; logged in test mode)
+  if (customerPhone && sendSms_ && restaurantId) {
+    const language = await languageOf(customerId);
+    const body = usedCustom ? message : orderUpdateSms(language, status, { restaurant: restaurantName, orderNumber, trackingLink: siteLink(`/online-order/${trackingToken}`) });
+    afterResponse(sendSms({ restaurantId, phone: customerPhone, kind: `ORDER_${status}`, body, language, customerId, saleId }));
   }
 
   // 3. Dispatch simulated/live Email if email is provided
@@ -131,7 +139,11 @@ export async function notifyCustomerReservation({
   reservationTime,
   guestCount,
   status,
+  restaurantId,
+  customerId,
 }: {
+  restaurantId?: string | null;
+  customerId?: string | null;
   reference: string;
   customerName: string;
   customerPhone?: string | null;
@@ -153,17 +165,10 @@ export async function notifyCustomerReservation({
     timestamp: new Date().toISOString(),
   });
 
-  // 2. Dispatch SMS
-  if (customerPhone) {
-    const smsEntry: NotificationLog = {
-      id: `sms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      type: 'SMS',
-      recipient: customerPhone,
-      message,
-      status: process.env.SMS_API_KEY ? 'SENT' : 'SIMULATED',
-      createdAt: new Date(),
-    };
-    notificationHistory.unshift(smsEntry);
-    console.log(`[RESERVATION SMS -> ${customerPhone}]: ${message}`);
+  // 2. SMS
+  if (customerPhone && restaurantId) {
+    const language = await languageOf(customerId);
+    const body = reservationSms(language, { restaurant: restaurantName, branch: branchName, reference, guests: guestCount, date: reservationDate, time: reservationTime });
+    afterResponse(sendSms({ restaurantId, phone: customerPhone, kind: 'RESERVATION', body, language, customerId }));
   }
 }

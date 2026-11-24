@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { Request, Response } from 'express';
 import prisma from '../config/database';
 import { sendError, sendResponse } from '../utils/response';
+import { kenyanPhone } from './smsService';
 
 /** JWT secret for customer sessions. The server refuses to start in production without JWT_SECRET. */
 const customerJwtSecret = () => {
@@ -167,6 +168,10 @@ export const registerCustomer = async (req: Request, res: Response) => {
         phone: customer.phone,
         address: customer.address,
         loyaltyBalance: customer.loyaltyBalance,
+        language: customer.language,
+        smsReceipts: customer.smsReceipts,
+        marketingConsent: customer.marketingConsent,
+        smsOptOutAt: customer.smsOptOutAt,
       },
       token,
     },
@@ -232,6 +237,10 @@ export const loginCustomer = async (req: Request, res: Response) => {
       address: customer.address,
       loyaltyBalance: customer.loyaltyBalance,
       favoriteItemIds: favoriteIds,
+      language: customer.language,
+      smsReceipts: customer.smsReceipts,
+      marketingConsent: customer.marketingConsent,
+      smsOptOutAt: customer.smsOptOutAt,
     },
     token,
   });
@@ -249,6 +258,10 @@ export const getCustomerProfile = async (req: CustomerAuthRequest, res: Response
       address: true,
       loyaltyBalance: true,
       favoriteItemIds: true,
+      language: true,
+      smsReceipts: true,
+      marketingConsent: true,
+      smsOptOutAt: true,
       createdAt: true,
     },
   });
@@ -268,7 +281,14 @@ export const getCustomerProfile = async (req: CustomerAuthRequest, res: Response
 
 export const updateCustomerProfile = async (req: CustomerAuthRequest, res: Response) => {
   const customerId = req.customer!.id;
-  const { name, phone, email, address } = req.body || {};
+  const { name, phone, email, address, language, smsReceipts, marketingConsent } = req.body || {};
+  if (language !== undefined && !['en', 'sw'].includes(language)) return sendError(res, 'Language must be English or Swahili');
+  const current = await prisma.customer.findUnique({ where: { id: customerId }, select: { marketingConsent: true, phone: true } });
+  // The signed-in customer turning SMS back on lifts the STOP for their own number.
+  if (smsReceipts === true || marketingConsent === true) {
+    const own = kenyanPhone(phone || current?.phone);
+    if (own) await prisma.smsOptOut.deleteMany({ where: { phone: own } });
+  }
 
   const updated = await prisma.customer.update({
     where: { id: customerId },
@@ -277,6 +297,14 @@ export const updateCustomerProfile = async (req: CustomerAuthRequest, res: Respo
       ...(phone ? { phone } : {}),
       ...(email ? { email } : {}),
       ...(address !== undefined ? { address } : {}),
+      ...(language !== undefined ? { language } : {}),
+      // Turning SMS back on here also lifts an earlier STOP.
+      ...(smsReceipts !== undefined ? { smsReceipts: !!smsReceipts, ...(smsReceipts ? { smsOptOutAt: null, smsOptOutSource: null } : {}) } : {}),
+      ...(marketingConsent !== undefined && !!marketingConsent !== current?.marketingConsent
+        ? marketingConsent
+          ? { marketingConsent: true, marketingConsentAt: new Date(), marketingConsentSource: 'WEBSITE', marketingConsentBy: null, smsOptOutAt: null, smsOptOutSource: null }
+          : { marketingConsent: false }
+        : {}),
     },
     select: {
       id: true,
@@ -286,6 +314,10 @@ export const updateCustomerProfile = async (req: CustomerAuthRequest, res: Respo
       address: true,
       loyaltyBalance: true,
       favoriteItemIds: true,
+      language: true,
+      smsReceipts: true,
+      marketingConsent: true,
+      smsOptOutAt: true,
     },
   });
 

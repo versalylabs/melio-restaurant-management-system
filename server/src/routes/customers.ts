@@ -3,6 +3,7 @@ import prisma from '../config/database';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { createAuditLog } from '../services/auditLogService';
+import { customersByPhone, isOptedOut, kenyanPhone, maskPhone, smsMode, smsSenderId } from '../services/smsService';
 
 import { safeRouter } from '../utils/safeRouter';
 const router = safeRouter();
@@ -31,6 +32,26 @@ router.get('/', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) => {
   }
 });
 
+/** Whether SMS really goes out, and the latest messages (managers). */
+router.get('/sms/status', authorize('OWNER', 'ADMIN', 'MANAGER'), async (req: AuthRequest, res) => {
+  const restaurantId = req.user!.restaurantId;
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [recent, counts, consenting, receipts] = await Promise.all([
+    prisma.smsMessage.findMany({ where: { restaurantId }, orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, phone: true, kind: true, body: true, status: true, error: true, createdAt: true, customer: { select: { id: true, name: true } } } }),
+    prisma.smsMessage.groupBy({ by: ['status'], where: { restaurantId, createdAt: { gte: since } }, _count: { _all: true } }),
+    prisma.customer.count({ where: { restaurantId, marketingConsent: true, smsOptOutAt: null } }),
+    prisma.customer.count({ where: { restaurantId, smsReceipts: true, smsOptOutAt: null } }),
+  ]);
+  return sendResponse(res, true, 'SMS status', {
+    mode: smsMode(),
+    senderId: smsSenderId(),
+    last30Days: Object.fromEntries(counts.map((c) => [c.status, c._count._all])),
+    customersWithReceipts: receipts,
+    customersAgreedToOffers: consenting,
+    recent: recent.map((m) => ({ ...m, phone: maskPhone(m.phone) })),
+  });
+});
+
 // Keep this route before /:id so "loyalty/rules" is never treated as a customer id.
 router.get('/loyalty/rules', async (_req: AuthRequest, res) => {
   return sendResponse(res, true, 'Loyalty rules retrieved', {
@@ -53,6 +74,7 @@ router.get('/:id', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) =
           },
         },
         loyaltyTransactions: { orderBy: { createdAt: 'desc' }, take: 100 },
+        smsMessages: { orderBy: { createdAt: 'desc' }, take: 50, select: { id: true, kind: true, body: true, status: true, error: true, createdAt: true } },
       },
     });
 
@@ -98,6 +120,10 @@ router.post('/', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) => 
         return sendError(res, 'A customer with this phone or email already exists in this restaurant', undefined, 409);
       }
     }
+    const newIntl = kenyanPhone(trimmedPhone);
+    if (newIntl && (await customersByPhone(req.user!.restaurantId, newIntl)).length) {
+      return sendError(res, 'A customer with this phone number already exists in this restaurant', undefined, 409);
+    }
 
     const customer = await prisma.customer.create({
       data: {
@@ -121,9 +147,31 @@ router.put('/:id', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) =
     const existing = await prisma.customer.findFirst({ where: { id: req.params.id, restaurantId: req.user!.restaurantId } });
     if (!existing) return sendError(res, 'Customer not found', undefined, 404);
 
-    const { name, phone, email, address, notes, status } = req.body || {};
+    const { name, phone, email, address, notes, status, language, smsReceipts, marketingConsent, smsOptOut } = req.body || {};
     if (name !== undefined && (typeof name !== 'string' || !name.trim())) return sendError(res, 'Name is required');
     if (status !== undefined && !['ACTIVE', 'INACTIVE'].includes(status)) return sendError(res, 'Invalid customer status');
+    if (language !== undefined && !['en', 'sw'].includes(language)) return sendError(res, 'Language must be English or Swahili');
+    // SMS preferences. Offers need the customer's own yes; staff record it on their behalf.
+    const smsData: Record<string, unknown> = {};
+    if (language !== undefined) smsData.language = language;
+    if (smsReceipts !== undefined) smsData.smsReceipts = !!smsReceipts;
+    if (marketingConsent !== undefined && !!marketingConsent !== existing.marketingConsent) {
+      Object.assign(smsData, marketingConsent
+        ? { marketingConsent: true, marketingConsentAt: new Date(), marketingConsentSource: 'STAFF', marketingConsentBy: req.user!.id }
+        : { marketingConsent: false });
+    }
+    if (smsOptOut === false && existing.smsOptOutAt) {
+      // Lifting an opt-out is a manager's decision, and never over a STOP the customer texted.
+      if (!['OWNER', 'ADMIN', 'MANAGER'].includes(req.user!.roleName)) return sendError(res, 'Ask a manager to turn SMS back on for this customer', undefined, 403);
+      if (existing.smsOptOutSource === 'SMS' || existing.smsOptOutSource === 'BLACKLIST') return sendError(res, 'The customer texted STOP. They can text START to turn SMS back on.', undefined, 409);
+      Object.assign(smsData, { smsOptOutAt: null, smsOptOutSource: null });
+    } else if (smsOptOut === true && !existing.smsOptOutAt) {
+      Object.assign(smsData, { smsOptOutAt: new Date(), smsOptOutSource: 'STAFF', marketingConsent: false });
+    }
+    const intl = kenyanPhone(existing.phone);
+    if ((marketingConsent === true || smsReceipts === true) && (existing.smsOptOutAt && smsOptOut !== false || (intl && (await isOptedOut(req.user!.restaurantId, intl, existing.id)) && smsOptOut !== false))) {
+      return sendError(res, 'This customer asked for no SMS', undefined, 409);
+    }
 
     const trimmedPhone = phone !== undefined ? (phone?.trim() || null) : existing.phone;
     const trimmedEmail = email !== undefined ? (email?.trim() ? email.trim().toLowerCase() : null) : existing.email;
@@ -143,6 +191,10 @@ router.put('/:id', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) =
         return sendError(res, 'A customer with this phone or email already exists in this restaurant', undefined, 409);
       }
     }
+    const intlPhone = kenyanPhone(trimmedPhone);
+    if (intlPhone && (await customersByPhone(req.user!.restaurantId, intlPhone)).some((cid) => cid !== existing.id)) {
+      return sendError(res, 'A customer with this phone number already exists in this restaurant', undefined, 409);
+    }
 
     const customer = await prisma.customer.update({
       where: { id: existing.id },
@@ -153,10 +205,17 @@ router.put('/:id', authorize(...CUSTOMER_ROLES), async (req: AuthRequest, res) =
         ...(address !== undefined ? { address: address?.trim() || null } : {}),
         ...(notes !== undefined ? { notes: notes?.trim() || null } : {}),
         ...(status !== undefined ? { status } : {}),
+        ...smsData,
       },
     });
 
-    await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'Customer', customer.id, `Updated customer ${customer.name}`);
+    const smsLog = [
+      language !== undefined && language !== existing.language ? `language ${language}` : '',
+      smsReceipts !== undefined && !!smsReceipts !== existing.smsReceipts ? `receipts ${smsReceipts ? 'on' : 'off'}` : '',
+      'marketingConsent' in smsData ? `offers ${smsData.marketingConsent ? 'agreed' : 'withdrawn'}` : '',
+      'smsOptOutAt' in smsData ? (smsData.smsOptOutAt ? 'no SMS at all' : 'SMS allowed again') : '',
+    ].filter(Boolean).join(', ');
+    await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'Customer', customer.id, `Updated customer ${customer.name}${smsLog ? ` (SMS: ${smsLog})` : ''}`);
     return sendResponse(res, true, 'Customer updated', customer);
   } catch (error) {
     console.error('Update customer failed:', error);

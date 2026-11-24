@@ -379,6 +379,8 @@ export const customerApi = {
   updateCustomer: (id: string, data: any) => api.put('/customers/' + id, data),
   deactivateCustomer: (id: string) => api.delete('/customers/' + id),
   getLoyaltyRules: () => cachedGet('/customers/loyalty/rules'),
+  /** Whether SMS really goes out (Africa's Talking) and the latest messages. */
+  getSmsStatus: () => api.get('/customers/sms/status'),
   adjustLoyalty: (id: string, data: { points: number; note?: string }) => api.post(`/customers/${id}/loyalty/adjust`, data),
   redeemLoyalty: (id: string, data: { points: number; note?: string }) => api.post(`/customers/${id}/loyalty/redeem`, data),
 };

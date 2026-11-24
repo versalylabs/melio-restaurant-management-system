@@ -102,6 +102,13 @@ export default function POS() {
   const [servedBy, setServedBy] = useState('');
   // Where the order came from: walk-in, phone, WhatsApp or a delivery app.
   const [channel, setChannel] = useState<string>('POS');
+  // "Receipt and points by SMS?": now that M-Pesa hides numbers, the only way to reach a walk-in again.
+  const [smsOn, setSmsOn] = useState(false);
+  const [smsPhone, setSmsPhone] = useState('');
+  const [smsLang, setSmsLang] = useState<'en' | 'sw'>('en');
+  const [smsOffers, setSmsOffers] = useState(false);
+  const smsPayload = () => (smsOn && smsPhone.trim() ? { phone: smsPhone.trim(), language: smsLang, marketing: smsOffers } : undefined);
+  const resetSms = () => { setSmsOn(false); setSmsPhone(''); setSmsLang('en'); setSmsOffers(false); };
   const [staff, setStaff] = useState<{ id: string; name: string; role: string }[]>([]);
   const picksServer = !!user && user.roleName !== 'WAITER';
   useEffect(() => {
@@ -555,6 +562,7 @@ export default function POS() {
     setTimeout(() => setSuccessMessage(''), 5000);
     setCart([]);
     setChannel('POS');
+    resetSms();
     setCustomerName('');
     setSelectedCustomerId('');
     setOrderNotes('');
@@ -594,6 +602,7 @@ export default function POS() {
         approval,
         servedBy: picksServer ? servedBy || undefined : undefined,
         channel,
+        smsReceipt: smsPayload(),
         orderType,
         tableId: selectedTable?.id,
         customerName: customerName || undefined,
@@ -621,7 +630,7 @@ export default function POS() {
         const orderNum = response.data.data?.orderNumber || 'New';
         setSuccessMessage(`Order #${orderNum} submitted to kitchen!`);
         setTimeout(() => setSuccessMessage(''), 4000);
-        setCart([]); setServedBy(''); setChannel('POS');
+        setCart([]); setServedBy(''); setChannel('POS'); resetSms();
         setCustomerName('');
         setSelectedCustomerId('');
         setOrderNotes('');
@@ -681,6 +690,7 @@ export default function POS() {
         notes: orderNotes || undefined,
         servedBy: picksServer ? servedBy || undefined : undefined,
         channel,
+        smsReceipt: smsPayload(),
         status: 'HELD',
         items: cart.map((item) => ({
           menuItemId: item.menuItemId,
@@ -700,7 +710,7 @@ export default function POS() {
         const orderNum = response.data.data?.orderNumber || 'Held';
         setSuccessMessage(`Order #${orderNum} held successfully`);
         setTimeout(() => setSuccessMessage(''), 4000);
-        setCart([]); setServedBy(''); setChannel('POS');
+        setCart([]); setServedBy(''); setChannel('POS'); resetSms();
         setCustomerName('');
         setSelectedCustomerId('');
         setOrderNotes('');
@@ -1047,12 +1057,45 @@ export default function POS() {
               <label className="block text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">Customer (optional)</label>
               <select
                 value={selectedCustomerId}
-                onChange={(e) => { setSelectedCustomerId(e.target.value); const c = customers.find((x) => x.id === e.target.value); setCustomerName(c?.name || ''); }}
+                onChange={(e) => { setSelectedCustomerId(e.target.value); const c = customers.find((x) => x.id === e.target.value); setCustomerName(c?.name || ''); setSmsPhone(c?.phone || ''); }}
                 className="w-full rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-2 text-xs sm:text-sm bg-white/80 dark:bg-[#121218]/80 text-gray-900 dark:text-gray-100 outline-none focus:ring-2 focus:ring-orange-500"
               >
                 <option value="">Walk-in customer</option>
                 {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` — ${c.phone}` : ''}</option>)}
               </select>
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-50/50 p-2.5 dark:bg-emerald-500/5">
+                <label className="flex items-center gap-2 text-xs font-semibold text-gray-800 dark:text-gray-100">
+                  <input type="checkbox" className="h-4 w-4" checked={smsOn} onChange={(e) => setSmsOn(e.target.checked)} />
+                  Receipt and points by SMS
+                </label>
+                {!smsOn && <p className="mt-1 pl-6 text-[11px] text-gray-500 dark:text-gray-400">Ask: "Would you like your receipt and points by SMS?"</p>}
+                {smsOn && (
+                  <div className="mt-2 space-y-2">
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      aria-label="Customer's phone number"
+                      placeholder="0712 345 678"
+                      value={smsPhone}
+                      onChange={(e) => setSmsPhone(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-emerald-500 dark:border-white/10 dark:bg-[#121218] dark:text-gray-100"
+                    />
+                    <div className="flex gap-1.5" role="group" aria-label="SMS language">
+                      {([['en', 'English'], ['sw', 'Kiswahili']] as const).map(([v, label]) => (
+                        <button key={v} type="button" aria-pressed={smsLang === v} onClick={() => setSmsLang(v)}
+                          className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-semibold ${smsLang === v ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-gray-300 text-gray-700 dark:border-white/10 dark:text-gray-300'}`}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="flex items-start gap-2 text-[11px] text-gray-600 dark:text-gray-300">
+                      <input type="checkbox" className="mt-0.5 h-3.5 w-3.5" checked={smsOffers} onChange={(e) => setSmsOffers(e.target.checked)} />
+                      <span>They also said yes to offers by SMS (ask; don't assume)</span>
+                    </label>
+                    {!navigator.onLine && <p className="text-[11px] text-amber-700">Offline: the SMS details are not saved with offline orders.</p>}
+                  </div>
+                )}
+              </div>
               <label htmlFor="pos-channel" className="block pt-1 text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">Order from</label>
               <select
                 id="pos-channel"

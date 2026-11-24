@@ -47,6 +47,7 @@ export const permissionForPath = (rawPath: string, rawMethod: string): string | 
   if (is('/orders')) return viewOrManage(method, 'orders.view', 'orders.manage');
   if (is('/kitchen')) return viewOrManage(method, 'kitchen.view', 'kitchen.manage');
   if (is('/reservations')) return viewOrManage(method, 'reservations.view', 'reservations.manage');
+  if (/^\/tables\/[^/]+\/service$/.test(path)) return 'pos.use';
   if (is('/tables') || is('/sections') || is('/table-combinations')) return viewOrManage(method, 'orders.view', 'settings.manage');
   if (is('/branches')) return viewOrManage(method, 'dashboard.view', 'settings.manage');
   if (is('/settings') || is('/restaurant') || is('/website') || is('/automated-messaging')) return 'settings.manage';

@@ -1,3 +1,5 @@
+import { afterResponse, sendSms } from './smsService';
+import { receiptSms, smsLanguage } from './smsTemplates';
 import { syncTableStatus } from './tableFloorService';
 import prisma from '../config/database';
 import { deductInventoryForOrderSafely } from './inventoryService';
@@ -102,6 +104,8 @@ export const completeOrder = async (orderId: string, restaurantId: string, userI
         console.error('Loyalty award failed:', error);
       }
     }
+    // Receipt and points by SMS, for customers who asked for it at the till.
+    afterResponse(sendReceiptSms(orderId, existing.customerId, restaurantId, order.orderNumber, order.totalAmount));
   }
 
   realtimeService.broadcast(`orders:${existing.branchId}`, 'order_status_updated', { orderId, status: 'COMPLETED' });
@@ -150,3 +154,16 @@ export const markSaleServedFromKitchen = async (orderId: string, restaurantId: s
   }
   return sale;
 };
+
+async function sendReceiptSms(saleId: string, customerId: string, restaurantId: string, orderNumber: string, total: number) {
+  try {
+    const customer = await prisma.customer.findUnique({ where: { id: customerId }, select: { phone: true, smsReceipts: true, language: true, loyaltyBalance: true, restaurant: { select: { name: true } } } });
+    if (!customer?.smsReceipts || !customer.phone) return;
+    const language = smsLanguage(customer.language);
+    const earned = (await prisma.loyaltyTransaction.findFirst({ where: { customerId, orderId: saleId, type: 'EARN' }, select: { points: true } }))?.points || 0;
+    const body = receiptSms(language, { restaurant: customer.restaurant.name, orderNumber, total, points: earned, balance: customer.loyaltyBalance });
+    await sendSms({ restaurantId, phone: customer.phone, kind: 'RECEIPT', body, language, customerId, saleId });
+  } catch (err) {
+    console.error('Receipt SMS failed:', err);
+  }
+}

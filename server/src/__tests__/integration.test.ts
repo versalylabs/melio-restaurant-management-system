@@ -28,6 +28,9 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'integration-secret-0123456789';
 delete process.env.UPSTASH_REDIS_REST_URL;
 delete process.env.PAYMENT_SIMULATION;
+delete process.env.AT_USERNAME;
+delete process.env.AT_API_KEY;
+process.env.SMS_WEBHOOK_SECRET = 'it-sms-webhook-secret-0123456789';
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const app = require('../index').default;
@@ -1071,6 +1074,115 @@ async function run() {
       await prisma.sale.updateMany({ where: { tableId: { in: [t1.id, t2.id, t3.id] }, status: { notIn: ['COMPLETED', 'CANCELLED'] } }, data: { tableId: null } });
       await prisma.table.updateMany({ where: { id: { in: [t1.id, t2.id, t3.id] } }, data: { status: 'INACTIVE' } });
     }
+  }
+
+  console.log('\n--- Customers: receipts and points by SMS, consent, STOP ---');
+  {
+    const tail = String(Date.now()).slice(-7);
+    const phoneLocal = `071${tail}`;
+    const phoneIntl = `+25471${tail}`;
+    const completeOrder = (id: string) => require('../services/orderCompletionService').completeOrder(id, restaurantId, owner.id);
+    // Receipts go out after the response: wait for the SMS row to settle.
+    const smsFor = async (saleId: string) => {
+      for (let i = 0; i < 40; i++) {
+        const rows = await prisma.smsMessage.findMany({ where: { saleId } });
+        if (rows.length && rows.every((r: any) => r.status !== 'QUEUED')) return rows;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return prisma.smsMessage.findMany({ where: { saleId } });
+    };
+    let customerId = '';
+    await test('A wrong number at the till is refused before anything is saved', async () => {
+      const res = await newOrder({ smsReceipt: { phone: '12345', language: 'sw' } });
+      assert.strictEqual(res.status, 400, JSON.stringify(res.body));
+    });
+    await test('Asking for SMS at the till creates the customer, without offers consent', async () => {
+      const res = await newOrder({ smsReceipt: { phone: phoneLocal, language: 'sw', marketing: false } });
+      assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+      const sale = await prisma.sale.findUnique({ where: { id: res.body.data.id } });
+      const c = await prisma.customer.findUnique({ where: { id: sale.customerId } });
+      customerId = c.id;
+      assert.ok(c.smsReceipts && c.language === 'sw' && !c.marketingConsent && c.phone === phoneLocal, JSON.stringify(c));
+    });
+    await test('The same number typed another way finds the same customer and records offers consent', async () => {
+      const res = await newOrder({ smsReceipt: { phone: phoneIntl, language: 'sw', marketing: true } });
+      assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+      const sale = await prisma.sale.findUnique({ where: { id: res.body.data.id } });
+      assert.strictEqual(sale.customerId, customerId);
+      const c = await prisma.customer.findUnique({ where: { id: customerId } });
+      assert.ok(c.marketingConsent && c.marketingConsentSource === 'POS' && c.marketingConsentBy === cashier.id && c.marketingConsentAt, JSON.stringify(c));
+    });
+    await test('Closing the bill texts a Swahili receipt with points, once', async () => {
+      const order = (await newOrder({ customerId })).body.data;
+      await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+      await completeOrder(order.id);
+      await completeOrder(order.id);
+      const msgs = await smsFor(order.id);
+      assert.strictEqual(msgs.length, 1, JSON.stringify(msgs));
+      const m = msgs[0];
+      assert.strictEqual(m.kind, 'RECEIPT');
+      assert.strictEqual(m.status, 'SIMULATED', 'test mode without Africa\'s Talking keys');
+      assert.ok(m.body.includes('Asante') && m.body.includes(order.orderNumber), m.body);
+      assert.ok(!m.body.includes('STOP'), 'no "reply STOP" without a shortcode to reply to');
+      const earned = Math.floor(order.totalAmount / 100);
+      if (earned > 0) assert.ok(m.body.includes(`pointi ${earned}`), m.body);
+    });
+    await test('Replies need the webhook key; STOP turns all SMS off, START turns receipts back on', async () => {
+      const denied = await fetch(`${base}/api/public/sms/inbound?key=wrong`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `from=${encodeURIComponent(phoneIntl)}&text=STOP` });
+      assert.strictEqual(denied.status, 403);
+      const stop = await fetch(`${base}/api/public/sms/inbound?key=it-sms-webhook-secret-0123456789`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `from=${encodeURIComponent(phoneIntl)}&text=stop please` });
+      assert.strictEqual(stop.status, 200);
+      const c = await prisma.customer.findUnique({ where: { id: customerId } });
+      assert.ok(c.smsOptOutAt && !c.marketingConsent, JSON.stringify(c));
+      const order = (await newOrder({ customerId })).body.data;
+      await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+      await completeOrder(order.id);
+      const [m] = await smsFor(order.id);
+      assert.strictEqual(m?.status, 'SKIPPED', 'no SMS after STOP');
+      const till = await newOrder({ smsReceipt: { phone: phoneLocal, language: 'en' } });
+      assert.strictEqual(till.status, 409, 'the till cannot undo a STOP');
+      const mgr = await call('PUT', `/customers/${customerId}`, ownerToken, { smsOptOut: false });
+      assert.strictEqual(mgr.status, 409, 'staff cannot undo a STOP the customer texted');
+      await fetch(`${base}/api/public/sms/inbound?key=it-sms-webhook-secret-0123456789`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `from=${encodeURIComponent(phoneLocal)}&text=START` });
+      const back = await prisma.customer.findUnique({ where: { id: customerId } });
+      assert.ok(!back.smsOptOutAt && !back.marketingConsent, 'offers stay off until they agree again');
+    });
+    await test('Two tills entering the same new number at once make one customer', async () => {
+      const fresh = `+254 74${tail.slice(0, 1)} ${tail.slice(1, 4)} ${tail.slice(4)}`;
+      const [a, b] = await Promise.all([newOrder({ smsReceipt: { phone: fresh } }), newOrder({ smsReceipt: { phone: `074${tail}` } })]);
+      assert.ok(a.status === 201 && b.status === 201, `${a.status}/${b.status}`);
+      const [sa, sb] = await Promise.all([prisma.sale.findUnique({ where: { id: a.body.data.id } }), prisma.sale.findUnique({ where: { id: b.body.data.id } })]);
+      assert.strictEqual(sa.customerId, sb.customerId);
+      const dupe = await call('POST', '/customers', cashierToken, { name: 'IT Dupe', phone: `+25474${tail}` });
+      assert.strictEqual(dupe.status, 409, 'the same number written another way is the same customer');
+    });
+    await test("Africa's Talking opt-out notices are honoured", async () => {
+      const num = `075${tail}`;
+      const res = await fetch(`${base}/api/public/sms/inbound?key=it-sms-webhook-secret-0123456789`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `phoneNumber=${encodeURIComponent('+25475' + tail)}&senderId=MELIO` });
+      assert.strictEqual(res.status, 200);
+      assert.ok(await prisma.smsOptOut.findUnique({ where: { phone: `25475${tail}` } }));
+      assert.strictEqual((await newOrder({ smsReceipt: { phone: num } })).status, 409);
+    });
+    await test('Staff record consent and language; the SMS history and status are visible', async () => {
+      // Staff mark a customer "no SMS"; only a manager can lift that.
+      const other = (await newOrder({ smsReceipt: { phone: `072${tail}`, language: 'en' } })).body.data;
+      const otherId = (await prisma.sale.findUnique({ where: { id: other.id } })).customerId;
+      assert.strictEqual((await call('PUT', `/customers/${otherId}`, cashierToken, { smsOptOut: true })).status, 200);
+      assert.strictEqual((await call('PUT', `/customers/${otherId}`, cashierToken, { smsOptOut: false })).status, 403);
+      assert.strictEqual((await call('PUT', `/customers/${otherId}`, ownerToken, { smsOptOut: false })).status, 200);
+      const upd = await call('PUT', `/customers/${customerId}`, cashierToken, { marketingConsent: true, language: 'en' });
+      assert.strictEqual(upd.status, 200, JSON.stringify(upd.body));
+      const c = await prisma.customer.findUnique({ where: { id: customerId } });
+      assert.ok(c.marketingConsent && c.marketingConsentSource === 'STAFF' && c.language === 'en');
+      assert.strictEqual((await call('PUT', `/customers/${customerId}`, cashierToken, { language: 'fr' })).status, 400);
+      const detail = await call('GET', `/customers/${customerId}`, cashierToken);
+      assert.ok(detail.body.data.smsMessages.length >= 2);
+      const status = await call('GET', '/customers/sms/status', ownerToken);
+      assert.strictEqual(status.status, 200, JSON.stringify(status.body));
+      assert.strictEqual(status.body.data.mode, 'TEST');
+      assert.ok(status.body.data.recent.every((m: any) => m.phone.includes('***')), 'numbers are masked in the list');
+      assert.strictEqual((await call('GET', '/customers/sms/status', cashierToken)).status, 403);
+    });
   }
 
   server.close();
