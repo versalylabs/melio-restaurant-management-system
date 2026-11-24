@@ -9,7 +9,7 @@
  * both acting on stale balances.
  */
 import { Prisma } from '@prisma/client';
-import { queueEtimsSale } from './etimsService';
+import { queueEtimsSale, topUpEtimsSale } from './etimsService';
 
 type Tx = Prisma.TransactionClient;
 
@@ -47,7 +47,11 @@ export async function syncPaymentState(tx: Tx, saleId: string) {
 /** Issues the order's receipt number once (idempotent). */
 export async function ensureReceipt(tx: Tx, sale: { id: string; restaurantId: string; branchId: string }) {
   const existing = await tx.receipt.findUnique({ where: { saleId: sale.id } });
-  if (existing) return existing;
+  if (existing) {
+    // Paid again after a refund: KRA hears about the money again.
+    await topUpEtimsSale(tx, sale);
+    return existing;
+  }
   const counter = await tx.receiptCounter.upsert({
     where: { restaurantId_branchId: { restaurantId: sale.restaurantId, branchId: sale.branchId } },
     create: { restaurantId: sale.restaurantId, branchId: sale.branchId, lastNumber: 1 },

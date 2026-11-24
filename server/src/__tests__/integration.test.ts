@@ -1646,6 +1646,33 @@ async function run() {
         for (let i = 0; i < 30 && (await prisma.etimsInvoice.count({ where: { key: `P:${paymentId}`, status: 'PENDING' } })); i++) await new Promise((r) => setTimeout(r, 300));
         const credit = await prisma.etimsInvoice.findUnique({ where: { key: `P:${paymentId}` } });
         assert.strictEqual(credit?.status, 'SIGNED', credit?.lastError || 'missing');
+        // Paid again after the refund: KRA gets a new invoice for the bill, and the receipt shows it.
+        const again = await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+        assert.strictEqual(again.status, 201, JSON.stringify(again.body));
+        const resale = await prisma.etimsInvoice.findFirst({ where: { saleId: order.id, kind: 'SALE' }, orderBy: { createdAt: 'desc' } });
+        assert.ok(resale && resale.key !== `S:${order.id}` && resale.amount === order.totalAmount, JSON.stringify(resale));
+        const printed = await receipt(order.id);
+        assert.strictEqual(printed.etims?.status, 'SIGNED', JSON.stringify(printed.etims));
+        assert.strictEqual(printed.etims.invoiceNo, (await prisma.etimsInvoice.findUnique({ where: { id: resale!.id } }))?.invoiceNo, 'the receipt shows the new KRA invoice');
+      });
+      await test('The scheduled job needs its secret, then sends what is waiting', async () => {
+        assert.strictEqual((await call('GET', '/cron/sweep', 'no-secret-set-yet')).status, 401, 'off without CRON_SECRET');
+        process.env.CRON_SECRET = 'it-cron-secret-0123456789';
+        try {
+          assert.strictEqual((await call('GET', '/cron/sweep', 'wrong-secret-wrong-secret')).status, 401);
+          process.env.ETIMS_SIMULATE_DOWN = 'true';
+          const { order } = await paidBill();
+          // Let the send started by the payment fail first (KRA down), so the job has something to do.
+          const failedOnce = () => prisma.etimsInvoice.count({ where: { key: `S:${order.id}`, attempts: { gte: 1 }, lockedUntil: null } });
+          for (let i = 0; i < 30 && !(await failedOnce()); i++) await new Promise((r) => setTimeout(r, 200));
+          delete process.env.ETIMS_SIMULATE_DOWN;
+          await prisma.etimsInvoice.updateMany({ where: { saleId: order.id }, data: { nextTryAt: new Date(), lockedUntil: null } });
+          const run = await call('GET', '/cron/sweep', 'it-cron-secret-0123456789');
+          assert.strictEqual(run.status, 200, JSON.stringify(run.body));
+          assert.strictEqual((await prisma.etimsInvoice.findUnique({ where: { key: `S:${order.id}` } }))?.status, 'SIGNED');
+        } finally {
+          delete process.env.CRON_SECRET;
+        }
       });
       await test('KRA lines match the bill: promotions per VAT category, partial refunds, VAT added on top', async () => {
         const { etimsLines } = require('../services/etimsService');
@@ -1680,8 +1707,9 @@ async function run() {
         await prisma.restaurant.update({ where: { id: restaurantId }, data: { kraPin: null } });
         const { order } = await paidBill();
         await call('POST', '/etims/retry', ownerToken, {});
+        for (let i = 0; i < 30 && (await prisma.etimsInvoice.count({ where: { key: `S:${order.id}`, status: 'PENDING' } })); i++) await new Promise((r) => setTimeout(r, 200));
         const inv = await prisma.etimsInvoice.findUnique({ where: { key: `S:${order.id}` } });
-        assert.strictEqual(inv?.status, 'REJECTED');
+        assert.strictEqual(inv?.status, 'REJECTED', `${inv?.lastError} locked=${inv?.lockedUntil}`);
         await prisma.restaurant.update({ where: { id: restaurantId }, data: { kraPin: 'P051234567X' } });
         assert.strictEqual((await call('POST', '/etims/retry', cashierToken, { id: inv!.id })).status, 403);
         const again = await call('POST', '/etims/retry', ownerToken, { id: inv!.id });
