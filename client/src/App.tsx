@@ -28,6 +28,8 @@ const Payments = lazy(() => import('./pages/payments/Payments'));
 const Reports = lazy(() => import('./pages/reports/Reports'));
 const LossPrevention = lazy(() => import('./pages/reports/LossPrevention'));
 const TaxSummary = lazy(() => import('./pages/reports/TaxSummary'));
+const ChannelReport = lazy(() => import('./pages/reports/ChannelReport'));
+const PayLink = lazy(() => import('./pages/pay/PayLink'));
 const QuickPurchase = lazy(() => import('./pages/inventory/QuickPurchase'));
 const FoodCost = lazy(() => import('./pages/inventory/FoodCost'));
 const Reservations = lazy(() => import('./pages/reservations/Reservations'));
@@ -132,6 +134,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/reports': 'Financial Reports — Melio',
   '/loss-prevention': 'Loss Prevention — Melio',
   '/tax-summary': 'Tax Summary — Melio',
+  '/channel-report': 'Sales by Channel — Melio',
   '/quick-purchase': 'Quick Purchase — Melio',
   '/food-cost': 'Food Cost — Melio',
   '/analytics': 'Business Analytics — Melio',
@@ -155,6 +158,7 @@ function TitleAndFaviconUpdater() {
     if (!title) {
       if (path.startsWith('/customers/')) title = 'Customer Details — Melio';
       else if (path.startsWith('/online-order/')) title = 'Order Tracking — Melio';
+      else if (path.startsWith('/pay/')) title = 'Pay your bill';
       else title = 'Melio — Restaurant Management';
     }
     document.title = title;
@@ -185,6 +189,7 @@ function App() {
       <Routes>
         <Route path="/order-online" element={<OnlineOrdering />} />
         <Route path="/online-order/:trackingToken" element={<OnlineOrderTracking />} />
+        <Route path="/pay/:token" element={<PayLink />} />
         <Route path="/account" element={<CustomerAccount />} />
         <Route path="/customer/login" element={<Navigate to="/account" replace />} />
         <Route path="/customer/account" element={<Navigate to="/account" replace />} />
@@ -331,6 +336,7 @@ function App() {
         <Route path="/reports" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><ReportsErrorBoundary><Reports /></ReportsErrorBoundary></ProtectedRoute>} />
         <Route path="/loss-prevention" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><LossPrevention /></ProtectedRoute>} />
         <Route path="/tax-summary" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><TaxSummary /></ProtectedRoute>} />
+        <Route path="/channel-report" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER']}><ChannelReport /></ProtectedRoute>} />
         <Route path="/quick-purchase" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER','CASHIER']}><QuickPurchase /></ProtectedRoute>} />
         <Route path="/food-cost" element={<ProtectedRoute allowedRoles={['OWNER','ADMIN','MANAGER','INVENTORY_MANAGER']}><FoodCost /></ProtectedRoute>} />
         {/* Public landing page: visiting localhost:5173 always opens the Melio website. */}

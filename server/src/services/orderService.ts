@@ -3,6 +3,10 @@ import { notifyRestaurantStaff } from './notificationService';
 import { manualDiscountError } from '../utils/discountPolicy';
 import { cancelOrderSafely, NOT_FIRED_STATUSES, OrderCancelError } from './orderCancellationService';
 import { Approver, sendApprovalError, verifyApproval } from './approvalService';
+import { channelFields, commissionOn, commissionRateFor, STAFF_CHANNELS } from './channelService';
+
+/** Commission is a cost figure: owners and managers only. */
+const seesCommission = (req: AuthRequest) => ['OWNER', 'ADMIN', 'MANAGER'].includes(req.user?.roleName || '');
 import { blockingPaymentsForCancel, lockSale } from './saleLedgerService';
 import { isUniqueViolationOn, normalizeClientRequestId } from '../utils/idempotency';
 import { AuthRequest } from '../middleware/auth';
@@ -187,6 +191,8 @@ export const getOrders = async (req: AuthRequest, res: ExpressResponse) => {
         notes: o.notes,
         createdBy: o.createdBy,
         servedBy: o.servedBy,
+        channel: o.channel,
+        ...(seesCommission(req) ? { commissionAmount: o.commissionAmount } : {}),
         servedByName: o.servedBy ? serverName.get(o.servedBy) || null : null,
         completedAt: o.completedAt,
         cancelledAt: o.cancelledAt,
@@ -246,8 +252,10 @@ export const getOrder = async (req: AuthRequest, res: ExpressResponse) => {
     ? await prisma.user.findFirst({ where: { id: order.servedBy, restaurantId }, select: { firstName: true, lastName: true } })
     : null;
 
+  const { commissionRate, commissionAmount, ...orderFields } = order;
   return sendResponse(res, true, 'Order retrieved', {
-    ...order,
+    ...orderFields,
+    ...(seesCommission(req) ? { commissionRate, commissionAmount } : {}),
     servedByName: server ? `${server.firstName} ${server.lastName}`.trim() : null,
     amountPaid: calculatedAmountPaid,
     paymentStatus: calculatedPaymentStatus,
@@ -393,7 +401,7 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
   const baseSubtotal = normalizedItems.reduce(
     (sum: number, item: any) =>
       sum +
-      (item.unitPrice + item.modifiers.reduce((m: number, mod: any) => m + mod.priceAdjustment, 0)) *
+      (item.unitPrice + item.modifiers.reduce((m: number, mod: any) => m + Math.max(0, mod.priceAdjustment), 0)) *
         item.quantity,
     0
   );
@@ -419,6 +427,9 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     if (approved === false) return;
     discountApprover = approved;
   }
+  // Where the order came from (walk-in, phone, WhatsApp, a delivery app).
+  const channel = req.body.channel === undefined || req.body.channel === '' ? 'POS' : String(req.body.channel);
+  if (!STAFF_CHANNELS.includes(channel)) return sendError(res, 'Choose where the order came from');
   // Waiters serve their own orders; a cashier ringing up for a waiter picks them.
   const servedByInput = req.body.servedBy !== undefined ? await resolveServedBy(restaurantId, req.body.servedBy) : req.user!.roleName === 'WAITER' ? userId : null;
   if (servedByInput === 'INVALID') return sendError(res, 'Choose a staff member from this restaurant as the server');
@@ -432,6 +443,8 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
   };
 
   const totals = await calculateOrderTotals(calculationInput);
+  // Read before the transaction: it must not need a second connection.
+  const channelData = await channelFields(restaurantId, channel, totals.totalAmount);
 
   let order: any;
   try {
@@ -458,6 +471,7 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
         discountAppliedBy: (totals.discountAmount > 0 ? userId : null) as any,
         discountApprovedBy: totals.discountAmount > 0 && discountApprover ? discountApprover.id : null,
         servedBy: servedByInput,
+        ...channelData,
         ...(promotionId
           ? { promotion: { connect: { id: promotionId } } }
           : {}),
@@ -480,7 +494,7 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
             itemNameSnapshot: item.itemNameSnapshot,
             unitPrice: item.unitPrice,
             quantity: item.quantity,
-            subtotal: Math.round((item.unitPrice * item.quantity + item.modifiers.reduce((sum: number, m: any) => sum + m.priceAdjustment * item.quantity, 0)) * 100) / 100,
+            subtotal: Math.round((item.unitPrice * item.quantity + item.modifiers.reduce((sum: number, m: any) => sum + Math.max(0, m.priceAdjustment) * item.quantity, 0)) * 100) / 100,
             notes: item.notes || null,
             modifiers: {
               create: item.modifiers.map((mod: any) => ({
@@ -680,7 +694,7 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     const baseSubtotal = normalizedItems.reduce(
       (sum: number, item: any) =>
         sum +
-        (item.unitPrice + item.modifiers.reduce((m: number, mod: any) => m + mod.priceAdjustment, 0)) *
+        (item.unitPrice + item.modifiers.reduce((m: number, mod: any) => m + Math.max(0, mod.priceAdjustment), 0)) *
           item.quantity,
       0
     );
@@ -746,8 +760,9 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
     order = await prisma.$transaction(async (tx) => {
       // Re-check under the order lock: it may have been submitted or paid since it was read.
       await lockSale(tx, id);
-      const current = await tx.sale.findUnique({ where: { id }, select: { status: true } });
+      const current = await tx.sale.findUnique({ where: { id }, select: { status: true, commissionRate: true } });
       if (!current || !['DRAFT', 'HELD'].includes(current.status)) throw new Error('ORDER_NOT_EDITABLE');
+      updateData.commissionAmount = commissionOn(totals.totalAmount, current.commissionRate);
       if (await tx.payment.count({ where: { saleId: id, status: 'COMPLETED' } })) throw new Error('ORDER_NOT_EDITABLE');
       await tx.saleItem.deleteMany({ where: { saleId: id } });
 
@@ -761,7 +776,7 @@ export const updateOrder = async (req: AuthRequest, res: ExpressResponse) => {
               itemNameSnapshot: item.itemNameSnapshot,
               unitPrice: item.unitPrice,
               quantity: item.quantity,
-              subtotal: Math.round((item.unitPrice * item.quantity + item.modifiers.reduce((sum: number, m: any) => sum + m.priceAdjustment * item.quantity, 0)) * 100) / 100,
+              subtotal: Math.round((item.unitPrice * item.quantity + item.modifiers.reduce((sum: number, m: any) => sum + Math.max(0, m.priceAdjustment) * item.quantity, 0)) * 100) / 100,
               notes: item.notes || null,
               modifiers: {
                 create: item.modifiers.map((mod: any) => ({
@@ -1244,7 +1259,7 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
       let offlinePromotion: any = undefined;
       if (offlineOrder.promotionId) {
         const offlineSubtotal = normalizedItems.reduce(
-          (sum: number, item: any) => sum + (item.unitPrice + item.modifiers.reduce((m: number, mod: any) => m + (mod.priceAdjustment || 0), 0)) * item.quantity,
+          (sum: number, item: any) => sum + (item.unitPrice + item.modifiers.reduce((m: number, mod: any) => m + Math.max(0, mod.priceAdjustment || 0), 0)) * item.quantity,
           0,
         );
         try {
@@ -1286,6 +1301,8 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
       const priceNote = Number.isFinite(clientTotal) && Math.abs(clientTotal - totals.totalAmount) > 0.01
         ? ` [Offline total ${clientTotal} re-priced to ${totals.totalAmount}]`
         : '';
+
+      const offlineChannel = await channelFields(restaurantId, STAFF_CHANNELS.includes(String(offlineOrder.channel)) ? String(offlineOrder.channel) : 'POS', totals.totalAmount);
 
       // 3. Process inside transaction
       const createdSale = await prisma.$transaction(async (tx) => {
@@ -1332,6 +1349,7 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
             ...taxFields(totals),
             serviceChargeAmount: totals.serviceChargeAmount,
             totalAmount: totals.totalAmount,
+            ...offlineChannel,
             notes: notesWithTag,
             createdBy: userId,
             createdAt,
@@ -1344,7 +1362,7 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
                 itemNameSnapshot: item.itemNameSnapshot,
                 unitPrice: item.unitPrice,
                 quantity: item.quantity,
-                subtotal: Math.round((item.unitPrice * item.quantity + item.modifiers.reduce((sum: number, m: { priceAdjustment: number }) => sum + m.priceAdjustment * item.quantity, 0)) * 100) / 100,
+                subtotal: Math.round((item.unitPrice * item.quantity + item.modifiers.reduce((sum: number, m: { priceAdjustment: number }) => sum + Math.max(0, m.priceAdjustment) * item.quantity, 0)) * 100) / 100,
                 notes: item.notes,
                 modifiers: { create: item.modifiers },
               })),
@@ -1410,4 +1428,36 @@ export const syncOfflineOrders = async (req: AuthRequest, res: ExpressResponse) 
     syncedOrders,
     errors,
   });
+};
+
+
+/** PATCH /orders/:id/channel { channel } — correct where an open order came from. */
+export const updateOrderChannel = async (req: AuthRequest, res: ExpressResponse) => {
+  const channel = String(req.body?.channel || '');
+  if (!STAFF_CHANNELS.includes(channel)) return sendError(res, 'Choose where the order came from');
+  const found = await prisma.sale.findFirst({
+    where: { id: req.params.id, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) },
+    select: { id: true },
+  });
+  if (!found) return sendError(res, 'Order not found', undefined, 404);
+  const rate = await commissionRateFor(req.user!.restaurantId, channel);
+  // Under the order lock, so an edit or payment at the same moment can't leave
+  // the commission out of step with the total.
+  const result = await prisma.$transaction(async (tx) => {
+    await lockSale(tx, found.id);
+    const sale = await tx.sale.findUnique({ where: { id: found.id }, select: { id: true, status: true, totalAmount: true, channel: true, orderNumber: true } });
+    if (!sale) return { error: 'Order not found' };
+    if (sale.channel === 'WEBSITE') return { error: 'Website orders keep their channel' };
+    if (['COMPLETED', 'CANCELLED'].includes(sale.status)) return { error: `A ${sale.status.toLowerCase()} order can't be changed` };
+    const updated = await tx.sale.update({
+      where: { id: sale.id },
+      data: { channel, commissionRate: rate, commissionAmount: commissionOn(sale.totalAmount, rate) },
+      select: { id: true, channel: true, commissionRate: true, commissionAmount: true },
+    });
+    return { sale, updated };
+  });
+  if ('error' in result) return sendError(res, result.error!);
+  const { sale, updated } = result;
+  await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'Order', sale.id, `Order ${sale.orderNumber} channel: ${sale.channel} → ${channel}`);
+  return sendResponse(res, true, 'Channel updated', seesCommission(req) ? updated : { id: updated.id, channel: updated.channel });
 };

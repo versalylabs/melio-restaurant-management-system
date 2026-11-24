@@ -238,6 +238,10 @@ export interface Sale {
   /** Staff member who served the table. */
   servedBy?: string | null;
   servedByName?: string | null;
+  /** Where the order came from: POS, PHONE, WHATSAPP, WEBSITE, GLOVO, UBER_EATS, BOLT. */
+  channel?: string;
+  commissionRate?: number;
+  commissionAmount?: number;
   completedAt?: string;
   cancelledAt?: string;
   cancelReason?: string;

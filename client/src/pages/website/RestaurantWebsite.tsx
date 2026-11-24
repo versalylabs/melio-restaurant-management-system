@@ -30,7 +30,8 @@ import {
   Image as ImageIcon,
   Wine,
   Leaf,
-  Home as HomeIcon
+  Home as HomeIcon,
+  MessageCircle,
 } from 'lucide-react';
 import { publicOrderingApi, websiteApi } from '../../services/api';
 import { useCustomerAuth } from '../../contexts/CustomerAuthContext';
@@ -53,6 +54,7 @@ type Restaurant = {
   city?: string;
   currency?: string;
   logo?: string;
+  whatsappNumber?: string | null;
   branches: Branch[];
 };
 type Category = { id: string; name: string };
@@ -1427,6 +1429,19 @@ export default function RestaurantWebsite() {
       />
 
       {/* ======================= MOBILE BOTTOM QUICK ACTION BAR ======================= */}
+      {restaurant?.whatsappNumber && (
+        <a
+          href={`https://wa.me/${restaurant.whatsappNumber}?text=${encodeURIComponent(`Hi ${restaurant.name}, I'd like to place an order.`)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Order on WhatsApp"
+          title="Order on WhatsApp"
+          className="fixed right-4 bottom-20 md:bottom-6 md:right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 active:scale-95 transition"
+        >
+          <MessageCircle size={24} />
+        </a>
+      )}
+
       <nav aria-label="Mobile Navigation" className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-xl border-t border-orange-500/20 px-2 py-2 flex items-center justify-around text-center shadow-2xl safe-area-pb">
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}

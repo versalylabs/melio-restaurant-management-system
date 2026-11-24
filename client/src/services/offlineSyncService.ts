@@ -32,6 +32,8 @@ export interface OfflineOrder {
   customerName?: string;
   customerId?: string;
   notes?: string;
+  /** Where the order came from (POS, PHONE, GLOVO…). */
+  channel?: string;
   status: 'SUBMITTED' | 'HELD';
   items: OfflineOrderItem[];
   subtotal: number;

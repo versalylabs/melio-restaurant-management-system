@@ -9,6 +9,7 @@ import { completeOrder } from '../services/orderCompletionService';
 import { confirmSimulatedMpesaPayment, getStaffMpesaStatus, initiateStaffMpesaPrompt, mpesaReceiptLockKey, PROMPT_IN_FLIGHT_MS, reverifyAwaitingPayment } from '../services/mpesaService';
 import { isPaymentSimulationEnabled, PaymentError } from '../services/onlinePaymentService';
 import { issueCreditNote } from '../services/taxService';
+import { createPaymentLink } from '../services/paymentLinkService';
 import { realtimeService } from '../services/realtimeService';
 import { sendApprovalError, verifyApproval } from '../services/approvalService';
 
@@ -41,6 +42,9 @@ const sendMpesaError = (res: any, err: unknown) => {
   console.error('M-Pesa prompt failed:', err);
   return sendError(res, "Couldn't reach M-Pesa. Check the connection and try again, or take the M-Pesa code instead.", undefined, 502);
 };
+
+/** A payment link to send the customer on WhatsApp. */
+router.post('/orders/:orderId/payment-link', authorize(...ORDER_PAYMENT_VIEW_ROLES), createPaymentLink);
 
 /** Send an M-Pesa prompt to the customer's phone for this bill (or part of it). */
 router.post('/orders/:orderId/mpesa-prompt', authorize(...ORDER_PAYMENT_VIEW_ROLES), async (req: AuthRequest, res) => {

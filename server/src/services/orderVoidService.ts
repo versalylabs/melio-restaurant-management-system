@@ -6,6 +6,7 @@ import { createAuditLog } from './auditLogService';
 import { blockingPaymentsForCancel, lockSale } from './saleLedgerService';
 import { validatePromotion } from './promotionService';
 import { calculateOrderTotals, taxFields } from './orderCalculationService';
+import { commissionOn } from './channelService';
 import { realtimeService } from './realtimeService';
 import { NOT_FIRED_STATUSES } from './orderCancellationService';
 import { sendApprovalError, verifyApproval } from './approvalService';
@@ -137,6 +138,7 @@ export async function voidOrderItem(req: AuthRequest, res: Response) {
           ...taxFields(totals),
           serviceChargeAmount: totals.serviceChargeAmount,
           totalAmount: totals.totalAmount,
+          commissionAmount: commissionOn(totals.totalAmount, order.commissionRate),
         },
         include: {
           branch: { select: { id: true, name: true, code: true } },

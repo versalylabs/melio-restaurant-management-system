@@ -11,6 +11,7 @@ import { notify, promptDialog } from '../../lib/dialogs';
 import { receiptHtml } from '../../lib/receiptHtml';
 import { isApprovalCancelled, withApproval } from '../../lib/approval';
 import MpesaPayment from '../../components/payments/MpesaPayment';
+import { channelLabel, STAFF_CHANNELS, CHANNEL_LABELS } from '../../lib/channels';
 
 /** The kitchen has these orders; removing an item needs a manager's PIN. */
 const VOIDABLE_STATUSES = ['SUBMITTED', 'PREPARING', 'READY', 'SERVED', 'OUT_FOR_DELIVERY'];
@@ -41,6 +42,23 @@ export default function Orders() {
   const showSuccess = (msg: string) => {
     setSuccess(msg);
     setTimeout(() => setSuccess(''), 4000);
+  };
+
+  // Correct where an open order came from (e.g. it was really a Glovo order).
+  const [channelSaving, setChannelSaving] = useState(false);
+  const changeChannel = async (channel: string) => {
+    if (!selectedOrder) return;
+    setChannelSaving(true);
+    try {
+      const res = await orderApi.updateChannel(selectedOrder.id, channel);
+      const d = res.data.data;
+      setSelectedOrder((current) => (current && current.id === d.id ? { ...current, channel: d.channel, commissionRate: d.commissionRate, commissionAmount: d.commissionAmount } : current));
+      void fetchOrders();
+    } catch (err: any) {
+      notify(err.response?.data?.message || 'Could not change where the order came from', 'error');
+    } finally {
+      setChannelSaving(false);
+    }
   };
 
   const fetchOrders = async (isManualRefresh = false) => {
@@ -471,6 +489,25 @@ export default function Orders() {
                 <Badge variant={selectedOrder.status === 'COMPLETED' ? 'success' : selectedOrder.status === 'CANCELLED' ? 'danger' : 'warning'}>
                   {selectedOrder.status}
                 </Badge>
+              </div>
+              <div>
+                <label htmlFor="order-channel" className="text-xs text-gray-500 dark:text-gray-400 uppercase">Order from</label>
+                {selectedOrder.channel === 'WEBSITE' || ['COMPLETED', 'CANCELLED'].includes(selectedOrder.status) ? (
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{channelLabel(selectedOrder.channel)}</p>
+                ) : (
+                  <select
+                    id="order-channel"
+                    value={selectedOrder.channel || 'POS'}
+                    disabled={channelSaving}
+                    onChange={(e) => changeChannel(e.target.value)}
+                    className="mt-0.5 w-full h-9 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] px-2 text-sm disabled:opacity-50"
+                  >
+                    {STAFF_CHANNELS.map((c) => <option key={c} value={c}>{CHANNEL_LABELS[c]}</option>)}
+                  </select>
+                )}
+                {(selectedOrder.commissionAmount || 0) > 0 && (
+                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">Commission KES {Number(selectedOrder.commissionAmount).toLocaleString()} ({Math.round((selectedOrder.commissionRate || 0) * 1000) / 10}%)</p>
+                )}
               </div>
               {selectedOrder.servedByName && (
                 <div>

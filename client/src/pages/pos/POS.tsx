@@ -11,6 +11,7 @@ import Modal from '../../components/ui/Modal';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
 import { OptimizedImage } from '../../components/common/OptimizedImage';
 import { preloadImages } from '../../utils/imagePreloader';
+import { CHANNEL_LABELS, STAFF_CHANNELS } from '../../lib/channels';
 import { offlineSyncService, type OfflineOrder } from '../../services/offlineSyncService';
 
 const ORDER_TYPES = [
@@ -95,6 +96,8 @@ export default function POS() {
   // Who served the table. Waiters are recorded automatically; cashiers and
   // managers ringing up for a waiter pick them here.
   const [servedBy, setServedBy] = useState('');
+  // Where the order came from: walk-in, phone, WhatsApp or a delivery app.
+  const [channel, setChannel] = useState<string>('POS');
   const [staff, setStaff] = useState<{ id: string; name: string; role: string }[]>([]);
   const picksServer = !!user && user.roleName !== 'WAITER';
   useEffect(() => {
@@ -500,6 +503,7 @@ export default function POS() {
       customerName: customerName || undefined,
       customerId: selectedCustomerId || undefined,
       notes: orderNotes || undefined,
+      channel,
       status,
       items: cart.map((item) => ({
         menuItemId: item.menuItemId,
@@ -524,6 +528,7 @@ export default function POS() {
     setSuccessMessage(`Order #${offOrder.offlineOrderNumber} saved to Offline Queue! Will auto-sync when online.`);
     setTimeout(() => setSuccessMessage(''), 5000);
     setCart([]);
+    setChannel('POS');
     setCustomerName('');
     setSelectedCustomerId('');
     setOrderNotes('');
@@ -562,6 +567,7 @@ export default function POS() {
         clientRequestId: requestId,
         approval,
         servedBy: picksServer ? servedBy || undefined : undefined,
+        channel,
         orderType,
         tableId: selectedTable?.id,
         customerName: customerName || undefined,
@@ -589,7 +595,7 @@ export default function POS() {
         const orderNum = response.data.data?.orderNumber || 'New';
         setSuccessMessage(`Order #${orderNum} submitted to kitchen!`);
         setTimeout(() => setSuccessMessage(''), 4000);
-        setCart([]); setServedBy('');
+        setCart([]); setServedBy(''); setChannel('POS');
         setCustomerName('');
         setSelectedCustomerId('');
         setOrderNotes('');
@@ -648,6 +654,7 @@ export default function POS() {
         customerId: selectedCustomerId || undefined,
         notes: orderNotes || undefined,
         servedBy: picksServer ? servedBy || undefined : undefined,
+        channel,
         status: 'HELD',
         items: cart.map((item) => ({
           menuItemId: item.menuItemId,
@@ -667,7 +674,7 @@ export default function POS() {
         const orderNum = response.data.data?.orderNumber || 'Held';
         setSuccessMessage(`Order #${orderNum} held successfully`);
         setTimeout(() => setSuccessMessage(''), 4000);
-        setCart([]); setServedBy('');
+        setCart([]); setServedBy(''); setChannel('POS');
         setCustomerName('');
         setSelectedCustomerId('');
         setOrderNotes('');
@@ -1019,6 +1026,15 @@ export default function POS() {
               >
                 <option value="">Walk-in customer</option>
                 {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` — ${c.phone}` : ''}</option>)}
+              </select>
+              <label htmlFor="pos-channel" className="block pt-1 text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">Order from</label>
+              <select
+                id="pos-channel"
+                value={channel}
+                onChange={(e) => setChannel(e.target.value)}
+                className="w-full rounded-xl border border-orange-500/15 dark:border-white/10 px-3 py-2 text-xs sm:text-sm bg-white/80 dark:bg-[#121218]/80 text-gray-900 dark:text-gray-100 outline-none focus:ring-2 focus:ring-orange-500"
+              >
+                {STAFF_CHANNELS.map((c) => <option key={c} value={c}>{CHANNEL_LABELS[c]}</option>)}
               </select>
               {picksServer && staff.length > 0 && (
                 <>
