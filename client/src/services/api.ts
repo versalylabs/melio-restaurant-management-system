@@ -444,6 +444,7 @@ export const publicOrderingApi = {
   createReservation: (data: any) => api.post('/public/reservations', data),
   getReservation: (codeOrId: string, config?: any) => cachedGet(`/public/reservations/${codeOrId}`, config),
   checkAvailability: (params: { restaurantId: string; branchId: string; date: string; partySize?: number }) => cachedGet('/public/reservations/availability', { params }),
+  sendEnquiry: (data: { restaurantId: string; name: string; phone: string; email?: string; subject: string; message: string }) => api.post('/public/enquiries', data),
 };
 
 export const publicPaymentsApi = {

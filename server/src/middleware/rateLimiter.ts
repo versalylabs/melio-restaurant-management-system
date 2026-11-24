@@ -192,6 +192,22 @@ export const reservationRateLimiter = createRateLimiter({
   message: 'Reservation limit reached for this session. Please wait before submitting another request.',
 });
 
+export const enquiryRateLimiter = createRateLimiter({
+  name: 'enquiry',
+  windowMs: 60 * 60 * 1000,
+  maxRequests: 10,
+  message: 'You have sent several messages already. Please call us instead, or try again in an hour.',
+});
+
+/** Caps enquiries per restaurant too, so rotating IPs can't bury the managers' notifications. */
+export const enquiryPerRestaurantLimiter = createRateLimiter({
+  name: 'enquiry-restaurant',
+  windowMs: 60 * 60 * 1000,
+  maxRequests: 30,
+  message: 'We are receiving a lot of messages right now. Please call us instead.',
+  keyGenerator: (req) => (typeof req.body?.restaurantId === 'string' ? req.body.restaurantId.slice(0, 64) : null),
+});
+
 // 4. Public API: 150 / minute
 export const publicApiRateLimiter = createRateLimiter({
   name: 'public',

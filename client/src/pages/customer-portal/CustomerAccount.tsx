@@ -184,7 +184,7 @@ export default function CustomerAccount() {
             </div>
             <h1 className="font-serif text-2xl font-bold text-white mb-2">Welcome to Diners Hub</h1>
             <p className="text-xs text-gray-400 mb-6 leading-relaxed">
-              Track your live food orders, view table reservations, redeem loyalty rewards, and save your favourite artisanal dishes.
+              Track your live food orders, view table reservations, redeem loyalty rewards, and save your favourite dishes.
             </p>
             <div className="space-y-3">
               <button
@@ -596,7 +596,7 @@ export default function CustomerAccount() {
                       <div className="p-5">
                         <h4 className="font-serif font-bold text-lg text-slate-950 dark:text-white">{dish.name}</h4>
                         <p className="mt-1 line-clamp-2 text-xs text-slate-500 dark:text-gray-400">
-                          {dish.description || 'Prepared fresh with signature artisanal ingredients.'}
+                          {dish.description || ''}
                         </p>
                       </div>
                     </div>

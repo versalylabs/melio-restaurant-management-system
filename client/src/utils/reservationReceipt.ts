@@ -26,7 +26,7 @@ export interface ReservationReceiptData {
 
 export function printReservationReceipt(data: ReservationReceiptData) {
   const code = data.reservationCode || `RES-${(data.reservationId || data.id || '').slice(-6).toUpperCase()}`;
-  const restaurantName = data.restaurantName || 'Melio Fine Dining';
+  const restaurantName = data.restaurantName || 'Melio';
   const branchName = data.branch?.name || 'Main Branch';
   const branchAddress = [data.branch?.address, data.branch?.city].filter(Boolean).join(', ') || 'Melio Restaurant';
   const branchPhone = data.branch?.phone || '+254 700 000 000';

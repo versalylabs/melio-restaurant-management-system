@@ -30,7 +30,9 @@ router.get('/sweep', async (req: Request, res: Response) => {
   const licences = await prisma.licence.findMany({ distinct: ['restaurantId'], select: { restaurantId: true } });
   let reminders = 0;
   for (const r of licences) reminders += await sendLicenceReminders(r.restaurantId);
-  return res.json({ success: true, data: { invoicesTried: invoices, remindersSent: reminders, ms: Date.now() - started } });
+  // Website enquiries hold customers' contact details: keep them 90 days (Data Protection Act: no longer than needed).
+  const enquiriesDeleted = (await prisma.notification.deleteMany({ where: { type: 'WEBSITE_ENQUIRY', createdAt: { lt: new Date(Date.now() - 90 * 86_400_000) } } })).count;
+  return res.json({ success: true, data: { invoicesTried: invoices, remindersSent: reminders, enquiriesDeleted, ms: Date.now() - started } });
 });
 
 export default router;

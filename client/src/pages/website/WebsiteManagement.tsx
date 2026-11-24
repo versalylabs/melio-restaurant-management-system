@@ -208,7 +208,7 @@ export default function WebsiteManagement() {
       setEditingTestimonial(null);
       setTestimonialForm({
         name: '',
-        role: 'Verified Guest',
+        role: 'Guest',
         rating: 5,
         dateLabel: new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(new Date()),
         text: '',
@@ -796,7 +796,7 @@ export default function WebsiteManagement() {
               <Input
                 id="tRole"
                 label="Role or Tagline"
-                placeholder="e.g. Food Critic / Verified Guest"
+                placeholder="e.g. Regular, Westlands"
                 value={testimonialForm.role}
                 onChange={(e) => setTestimonialForm({ ...testimonialForm, role: e.target.value })}
               />
