@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { registerServiceWorker } from '../lib/pwa';
 import type { User } from '../types';
 import { authApi, invalidateCache } from '../services/api';
 
@@ -81,6 +82,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = (newToken: string, newUser: User) => {
+    // Staff signed in: keep the app on this device for working offline.
+    registerServiceWorker(true);
     // A different person on this terminal must not inherit the previous
     // user's cached screens or branch selection.
     invalidateCache();

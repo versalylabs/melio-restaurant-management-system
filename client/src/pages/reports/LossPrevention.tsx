@@ -57,6 +57,8 @@ export default function LossPrevention() {
         { label: 'Refunds', ...s.refunds },
         { label: 'Shift shortages', count: s.shiftShortage > 0 ? 1 : 0, value: s.shiftShortage, noCount: true },
         { label: `Not fully paid ${data.unpaidAfterHours}+ hours after the kitchen got them`, ...s.unpaid },
+        ...(s.mpesaNotReceived ? [{ label: 'M-Pesa recorded during an outage, not received', ...s.mpesaNotReceived }] : []),
+        ...(s.mpesaToCheck?.count ? [{ label: 'M-Pesa still to check (all dates)', ...s.mpesaToCheck }] : []),
       ]
     : [];
 

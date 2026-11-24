@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { usePwa } from '../../lib/pwa';
 import { confirmDialog } from '../../lib/dialogs';
 import { newRequestId } from '../../lib/utils';
 import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Clock, CheckCircle, AlertCircle, UtensilsCrossed, WifiOff, UploadCloud, RefreshCw, Trash2 } from 'lucide-react';
@@ -128,6 +129,7 @@ export default function POS() {
   const [selectedModifiers, setSelectedModifiers] = useState<SaleItemModifier[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [activeBranchName, setActiveBranchName] = useState('');
+  const pwa = usePwa();
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [pendingOfflineCount, setPendingOfflineCount] = useState(0);
   const [showOfflineModal, setShowOfflineModal] = useState(false);
@@ -137,7 +139,8 @@ export default function POS() {
   const refreshOfflineQueue = async () => {
     const list = await offlineSyncService.getAllOfflineOrders();
     setOfflineOrders(list);
-    const pending = list.filter((o) => o.syncStatus === 'PENDING' || o.syncStatus === 'FAILED');
+    // SYNCING too: a tab closed mid-send leaves orders in that state, and they must be sent again.
+    const pending = list.filter((o) => o.syncStatus === 'PENDING' || o.syncStatus === 'FAILED' || o.syncStatus === 'SYNCING');
     setPendingOfflineCount(pending.length);
   };
 
@@ -167,6 +170,35 @@ export default function POS() {
       window.removeEventListener('rms-offline-queue-changed', handleQueueChange);
     };
   }, []);
+
+  // The internet can come back without the device noticing (the Wi-Fi stayed
+  // up while the line was down): retry the queue soon after the POS opens and
+  // every 30 seconds while anything is waiting, so no queued sale is forgotten.
+  const autoSyncing = useRef(false);
+  useEffect(() => {
+    if (!pendingOfflineCount) return;
+    const attempt = async () => {
+      if (autoSyncing.current || !navigator.onLine) return;
+      autoSyncing.current = true;
+      try {
+        const res = await offlineSyncService.syncOfflineOrders(orderApi, { auto: true });
+        if (res.syncedCount > 0) {
+          setIsOnline(true);
+          setSuccessMessage(`Back online: ${res.syncedCount} queued order(s) sent.`);
+          setTimeout(() => setSuccessMessage(''), 4500);
+        }
+        await refreshOfflineQueue();
+      } catch {
+        /* still offline; try again on the next round */
+      } finally {
+        autoSyncing.current = false;
+      }
+    };
+    const first = setTimeout(attempt, 3000);
+    const every = setInterval(attempt, 30_000);
+    return () => { clearTimeout(first); clearInterval(every); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOfflineCount]);
 
   const triggerSync = async () => {
     if (!navigator.onLine) {
@@ -750,6 +782,11 @@ export default function POS() {
         </div>
 
         <div className="flex items-center gap-2">
+          {pwa.canInstall && (
+            <button type="button" onClick={pwa.install} title="Install the POS on this device so it opens without internet" className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-orange-500/30 bg-orange-500/10 px-2.5 py-1 text-xs font-semibold text-orange-600 hover:bg-orange-500/20 dark:text-orange-400">
+              <UploadCloud className="w-3.5 h-3.5 rotate-180" aria-hidden="true" /> Install app
+            </button>
+          )}
           {/* Offline/Online Network Indicator */}
           {!isOnline ? (
             <div className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-amber-600 dark:text-amber-400">

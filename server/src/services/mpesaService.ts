@@ -71,6 +71,7 @@ async function getAccessToken(): Promise<string> {
   const basic = Buffer.from(`${c.consumerKey}:${c.consumerSecret}`).toString('base64');
   const res = await fetch(`${c.baseUrl}/oauth/v1/generate?grant_type=client_credentials`, {
     headers: { Authorization: `Basic ${basic}` },
+    signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) throw new PaymentError('MPESA_AUTH_FAILED', 'Could not reach M-Pesa. Please try again shortly.', 502);
   const body = (await res.json()) as { access_token: string; expires_in: string | number };
@@ -84,6 +85,7 @@ async function darajaPost<T>(path: string, payload: Record<string, unknown>): Pr
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(8000),
   });
   const body = (await res.json().catch(() => ({}))) as T & { errorMessage?: string };
   if (!res.ok) {
@@ -274,8 +276,18 @@ export async function settleStaffStkPayment(paymentId: string, checkoutRequestId
       }
     }
 
-    const sale = await tx.sale.findUnique({ where: { id: payment.saleId }, include: { payments: { where: { status: 'COMPLETED' } } } });
+    let sale = await tx.sale.findUnique({ where: { id: payment.saleId }, include: { payments: { where: { status: 'COMPLETED' } } } });
     if (!sale) return null;
+    // The bill was marked paid "M-Pesa to check" while this prompt's answer was
+    // missing: this is that money. Replace the unchecked entry with the real one.
+    if (round2(sale.totalAmount - sale.payments.reduce((sum, p) => sum + p.amount, 0)) <= 0.005) {
+      const unchecked = sale.payments.find((p) => p.verifyStatus === 'PENDING_CHECK' && p.method === 'MOBILE_MONEY' && Math.abs(p.amount - paidAmount) <= 1);
+      if (unchecked) {
+        await tx.payment.update({ where: { id: unchecked.id }, data: { status: 'CANCELLED', verifyStatus: 'SUPERSEDED', verifiedAt: new Date(), notes: `${unchecked.notes || ''} [Replaced by the M-Pesa prompt payment ${receipt || checkoutRequestId}]`.trim() } });
+        sale = await tx.sale.findUnique({ where: { id: payment.saleId }, include: { payments: { where: { status: 'COMPLETED' } } } });
+        if (!sale) return null;
+      }
+    }
     const balance = round2(sale.totalAmount - sale.payments.reduce((sum, p) => sum + p.amount, 0));
     const reference = receipt || `STK_${checkoutRequestId}`;
     const tag = CHECKOUT_TAG(checkoutRequestId);
@@ -422,6 +434,9 @@ function verifyCallbackToken(token: unknown): boolean {
 }
 
 /** Ask Safaricom directly whether the STK request succeeded (defence in depth on top of the callback secret). */
+/** Daraja result codes that mean the payment did not happen (wrong PIN, cancelled, timed out, low balance…). */
+const STK_DEFINITE_FAILURES = new Set(['1', '1001', '1019', '1025', '1032', '1037', '2001', '2006', '2028', '2029']);
+
 async function queryStkResult(checkoutRequestId: string): Promise<'SUCCESS' | 'FAILED' | 'UNKNOWN'> {
   try {
     const c = config();
@@ -433,7 +448,11 @@ async function queryStkResult(checkoutRequestId: string): Promise<'SUCCESS' | 'F
       CheckoutRequestID: checkoutRequestId,
     });
     if (result.ResultCode === undefined) return 'UNKNOWN';
-    return String(result.ResultCode) === '0' ? 'SUCCESS' : 'FAILED';
+    const code = String(result.ResultCode);
+    if (code === '0') return 'SUCCESS';
+    // Only answers that mean the customer did not pay. Anything else (still
+    // processing, system busy during an outage) is asked again later.
+    return STK_DEFINITE_FAILURES.has(code) ? 'FAILED' : 'UNKNOWN';
   } catch (err) {
     console.warn('[M-Pesa] STK status query failed; relying on authenticated callback:', err);
     return 'UNKNOWN';
@@ -683,4 +702,46 @@ export async function getStaffMpesaStatus(checkoutRequestId: string, restaurantI
     reason: payment.status === 'FAILED' ? failedReason || 'The customer did not complete the payment' : undefined,
     awaitingVerification: /AWAITING_VERIFICATION/.test(notes),
   };
+}
+
+/**
+ * Prompts sent from the till whose answer never arrived (M-Pesa was down, or
+ * Safaricom's callback was lost): ask Safaricom again. Runs when M-Pesa is
+ * answering again (a new prompt went through) and when the "M-Pesa to check"
+ * list is opened. A few at a time, and never the same prompt twice in 20 s.
+ */
+export async function recheckStuckStaffPrompts(restaurantId: string, branchId?: string | null, limit = 10) {
+  const now = Date.now();
+  const stuck = await prisma.payment.findMany({
+    where: {
+      restaurantId, ...(branchId ? { branchId } : {}), method: 'MOBILE_MONEY', status: 'PENDING',
+      notes: { contains: STAFF_PROMPT_TAG },
+      createdAt: { lt: new Date(now - 2 * 60_000), gt: new Date(now - 48 * 60 * 60_000) },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    select: { id: true, notes: true, reference: true, amount: true },
+  });
+  const out = { checked: 0, settled: 0, failed: 0, unknown: 0 };
+  const deadline = Date.now() + 20_000;
+  for (const p of stuck) {
+    if (Date.now() > deadline) { out.unknown++; continue; }
+    const id = p.notes?.match(/\[CheckoutRequestID: ([^\]]+)\]/)?.[1] || p.reference?.replace(/^STK_/, '');
+    if (!id || id.startsWith('SIM_') || id.startsWith('PROMPT_') || now - (lastStatusQuery.get(id) || 0) < QUERY_EVERY_MS) { out.unknown++; continue; }
+    lastStatusQuery.set(id, now);
+    out.checked++;
+    try {
+      if (AWAITING_VERIFICATION_RE.test(p.notes || '')) { await reverifyAwaitingPayment(id); continue; }
+      const answer = await queryStkResult(id);
+      if (answer === 'SUCCESS') { await settleStaffStkPayment(p.id, id, null, p.amount); out.settled++; }
+      else if (answer === 'FAILED') {
+        await prisma.payment.updateMany({ where: { id: p.id, status: 'PENDING' }, data: { status: 'FAILED', notes: `${p.notes || ''} [Failed: Safaricom says the payment was not completed]`.trim() } });
+        out.failed++;
+      } else out.unknown++;
+    } catch (err) {
+      console.error('[M-Pesa] re-check failed:', err);
+      out.unknown++;
+    }
+  }
+  return out;
 }

@@ -3,15 +3,17 @@ import prisma from '../config/database';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { createAuditLog } from '../services/auditLogService';
+import { notifyRestaurantStaff } from '../services/notificationService';
 import { createKitchenTicketForOrder } from '../services/kitchenService';
 import { ensureReceipt, lockSale, syncPaymentState } from '../services/saleLedgerService';
 import { completeOrder } from '../services/orderCompletionService';
-import { confirmSimulatedMpesaPayment, getStaffMpesaStatus, initiateStaffMpesaPrompt, mpesaReceiptLockKey, PROMPT_IN_FLIGHT_MS, reverifyAwaitingPayment } from '../services/mpesaService';
+import { confirmSimulatedMpesaPayment, getStaffMpesaStatus, initiateStaffMpesaPrompt, mpesaReceiptLockKey, PROMPT_IN_FLIGHT_MS, recheckStuckStaffPrompts, reverifyAwaitingPayment } from '../services/mpesaService';
 import { isPaymentSimulationEnabled, PaymentError } from '../services/onlinePaymentService';
 import { issueCreditNote } from '../services/taxService';
 import { createPaymentLink } from '../services/paymentLinkService';
 import { realtimeService } from '../services/realtimeService';
 import { sendApprovalError, verifyApproval } from '../services/approvalService';
+import { afterResponse, kenyanPhone, maskPhone } from '../services/smsService';
 
 import { safeRouter } from '../utils/safeRouter';
 const router = safeRouter();
@@ -59,6 +61,8 @@ router.post('/orders/:orderId/mpesa-prompt', authorize(...ORDER_PAYMENT_VIEW_ROL
       amount: amount === undefined || amount === null || amount === '' ? undefined : Number(amount),
     });
     await createAuditLog(req.user!.restaurantId, req.user!.id, 'CREATE', 'Payment', req.params.orderId, `Sent an M-Pesa prompt of KES ${result.amount} to ${result.phoneNumber} for order ${result.orderNumber}`);
+    // M-Pesa is answering: settle any earlier prompts whose answer never came.
+    afterResponse(recheckStuckStaffPrompts(req.user!.restaurantId));
     return sendResponse(res, true, `Prompt sent to ${result.phoneNumber}. Ask the customer to enter their M-Pesa PIN.`, result, 201);
   } catch (err) {
     return sendMpesaError(res, err);
@@ -82,6 +86,98 @@ router.post('/mpesa/:checkoutRequestId/simulate', authorize(...ORDER_PAYMENT_VIE
     return sendResponse(res, true, 'Simulated payment confirmed', result);
   } catch (err) {
     return sendMpesaError(res, err);
+  }
+});
+
+/**
+ * M-Pesa to check: payments taken while M-Pesa was down, and prompts whose
+ * answer never came (asked again here first).
+ */
+router.get('/mpesa-checks', authorize(...PAYMENT_ROLES), async (req: AuthRequest, res) => {
+  const restaurantId = req.user!.restaurantId;
+  const branchId = req.user!.branchId || (typeof req.query.branchId === 'string' && req.query.branchId) || null;
+  // Asking Safaricom again can be slow during an outage: never hold the list for it.
+  const recheck = req.query.recheck === '1' ? await recheckStuckStaffPrompts(restaurantId, branchId) : null;
+  if (!recheck) afterResponse(recheckStuckStaffPrompts(restaurantId, branchId));
+  const scope = { restaurantId, ...(branchId ? { branchId } : {}) };
+  const [toCheck, stuck] = await Promise.all([
+    prisma.payment.findMany({
+      where: { ...scope, verifyStatus: 'PENDING_CHECK', status: 'COMPLETED' },
+      orderBy: { createdAt: 'asc' },
+      include: { sale: { select: { id: true, orderNumber: true, totalAmount: true, status: true } } },
+    }),
+    prisma.payment.findMany({
+      where: { ...scope, method: 'MOBILE_MONEY', status: 'PENDING', notes: { contains: '[STAFF_PROMPT]' }, createdAt: { lt: new Date(Date.now() - 2 * 60_000), gt: new Date(Date.now() - 48 * 60 * 60_000) } },
+      orderBy: { createdAt: 'asc' },
+      include: { sale: { select: { id: true, orderNumber: true, totalAmount: true, status: true } } },
+    }),
+  ]);
+  const staffIds = [...new Set(toCheck.map((p) => p.createdBy))];
+  const staff = staffIds.length ? await prisma.user.findMany({ where: { id: { in: staffIds }, restaurantId }, select: { id: true, firstName: true } }) : [];
+  const name = new Map(staff.map((u) => [u.id, u.firstName]));
+  return sendResponse(res, true, 'M-Pesa to check', {
+    recheck,
+    toCheck: toCheck.map((p) => ({
+      id: p.id, amount: p.amount, reference: p.reference, payerPhone: p.payerPhone ? maskPhone(p.payerPhone) : null,
+      createdAt: p.createdAt, takenBy: name.get(p.createdBy) || null, takenById: p.createdBy, notes: p.notes?.replace('[M-Pesa to check]', '').replace(/\[approved by [^\]]+\]/, '').trim() || null, order: p.sale,
+    })),
+    stuckPrompts: stuck.map((p) => ({ id: p.id, amount: p.amount, createdAt: p.createdAt, order: p.sale })),
+    totalToCheck: Math.round(toCheck.reduce((t, p) => t + p.amount, 0) * 100) / 100,
+  });
+});
+
+/**
+ * A manager checks a payment taken while M-Pesa was down against the till:
+ * CONFIRMED (with its M-Pesa code) or NOT_RECEIVED (it comes off the bill,
+ * which then shows what is still owed).
+ */
+router.post('/:id/check', authorize('OWNER', 'ADMIN', 'MANAGER'), async (req: AuthRequest, res) => {
+  if (!['OWNER', 'ADMIN', 'MANAGER'].includes(req.user!.roleName)) return sendError(res, 'Only a manager can check M-Pesa payments', undefined, 403);
+  const result = String(req.body?.result || '');
+  if (!['CONFIRMED', 'NOT_RECEIVED'].includes(result)) return sendError(res, 'Choose confirmed or not received');
+  const restaurantId = req.user!.restaurantId;
+  const found = await prisma.payment.findFirst({
+    where: { id: req.params.id, restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}), verifyStatus: 'PENDING_CHECK' },
+    select: { id: true, saleId: true, reference: true, createdBy: true, amount: true, branchId: true },
+  });
+  if (!found) return sendError(res, 'This payment is not waiting for a check', undefined, 404);
+  if (found.createdBy === req.user!.id) return sendError(res, 'Someone other than the person who took this payment must check it', undefined, 403);
+  const code = normaliseMpesaCode(req.body?.reference) || found.reference || '';
+  if (result === 'CONFIRMED' && !MPESA_CODE.test(code)) return sendError(res, 'Enter the 10-character M-Pesa code you found on the till statement');
+  try {
+    const out = await prisma.$transaction(async (tx) => {
+      // Same lock order as a prompt settling: the M-Pesa code first, then the order.
+      if (result === 'CONFIRMED') await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${mpesaReceiptLockKey(restaurantId, code)}))`;
+      await lockSale(tx, found.saleId);
+      const payment = await tx.payment.findUnique({ where: { id: found.id } });
+      if (!payment || payment.verifyStatus !== 'PENDING_CHECK' || payment.status !== 'COMPLETED') throw new PaymentInputError('This payment was already checked, replaced or refunded', 409);
+      if (result === 'CONFIRMED') {
+        const used = await tx.$queryRaw<{ orderNumber: string }[]>`
+          SELECT s."orderNumber" FROM "payments" p JOIN "orders" s ON s."id" = p."saleId"
+          WHERE p."restaurantId" = ${restaurantId} AND p."method" = 'MOBILE_MONEY' AND p."id" <> ${payment.id}
+            AND p."status" IN ('COMPLETED', 'REFUNDED', 'DUPLICATE')
+            AND upper(regexp_replace(coalesce(p."reference", ''), '[^A-Za-z0-9]', '', 'g')) = ${code}
+          LIMIT 1`;
+        if (used.length) throw new PaymentInputError(`M-Pesa code ${code} was already used on order ${used[0].orderNumber}`, 409);
+        await tx.payment.update({ where: { id: payment.id }, data: { reference: code, verifyStatus: 'CONFIRMED', verifiedBy: req.user!.id, verifiedAt: new Date() } });
+        return { message: `Confirmed: ${code}`, balance: null as number | null };
+      }
+      await tx.payment.update({
+        where: { id: payment.id },
+        data: { status: 'CANCELLED', verifyStatus: 'NOT_RECEIVED', verifiedBy: req.user!.id, verifiedAt: new Date(), notes: `${payment.notes || ''} [Not received when checked]`.trim() },
+      });
+      const state = await syncPaymentState(tx, payment.saleId);
+      const sale = await tx.sale.findUnique({ where: { id: payment.saleId }, select: { orderNumber: true } });
+      return { message: `Order ${sale?.orderNumber} still owes KES ${state.balance.toLocaleString()}`, balance: state.balance };
+    });
+    await createAuditLog(restaurantId, req.user!.id, 'UPDATE', 'Payment', found.id, result === 'CONFIRMED' ? `Checked an M-Pesa payment taken during an outage: received (${code})` : 'Checked an M-Pesa payment taken during an outage: NOT received; it was taken off the bill');
+    if (result === 'NOT_RECEIVED') {
+      notifyRestaurantStaff(restaurantId, found.branchId, 'MPESA_NOT_RECEIVED', 'M-Pesa payment not received', `KES ${found.amount.toLocaleString()} recorded as M-Pesa during an outage was not on the till statement. ${out.message}.`, 'Payment', found.id).catch(() => undefined);
+    }
+    return sendResponse(res, true, out.message, out);
+  } catch (err: any) {
+    if (err instanceof PaymentInputError) return sendError(res, err.message, undefined, err.statusCode);
+    throw err;
   }
 });
 
@@ -121,6 +217,22 @@ router.get('/order/:orderId', authorize(...ORDER_PAYMENT_VIEW_ROLES), async (req
 router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthRequest, res) => {
   try {
     const { method, amount, amountTendered, reference, notes } = req.body || {};
+    // M-Pesa is down (or the customer's message hasn't arrived): take the payment
+    // now and let a manager check it against the till once M-Pesa is back.
+    const checkLater = method === 'MOBILE_MONEY' && req.body?.checkLater === true;
+    const payerPhone = checkLater && req.body?.payerPhone ? kenyanPhone(String(req.body.payerPhone)) : null;
+    if (checkLater && req.body?.payerPhone && !payerPhone) return sendError(res, "Enter the customer's number like 0712 345 678, or leave it empty");
+    // Marking a bill paid with money nobody has seen yet needs a manager's PIN.
+    let laterApprover: { id: string } | null = null;
+    if (checkLater) {
+      const branchRow = await prisma.sale.findFirst({ where: { id: req.params.orderId, restaurantId: req.user!.restaurantId }, select: { branchId: true } });
+      try {
+        laterApprover = await verifyApproval(req, 'record an M-Pesa payment to check later', { branchId: branchRow?.branchId });
+      } catch (err) {
+        if (sendApprovalError(res, err)) return;
+        throw err;
+      }
+    }
     if (!METHODS.includes(method)) return sendError(res, 'Invalid payment method');
     const requested = Number(amount);
     if (!Number.isFinite(requested) || requested <= 0) return sendError(res, 'Payment amount must be greater than zero');
@@ -130,7 +242,7 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
     const change = method === 'CASH' ? tendered - requested : 0;
 
     const mpesaCode = method === 'MOBILE_MONEY' ? normaliseMpesaCode(reference) : '';
-    if (method === 'MOBILE_MONEY' && !MPESA_CODE.test(mpesaCode)) {
+    if (method === 'MOBILE_MONEY' && !(checkLater && !mpesaCode) && !MPESA_CODE.test(mpesaCode)) {
       return sendError(res, "Enter the 10-character M-Pesa code from the customer's confirmation message (e.g. SKL7H2X9QD), or send them a prompt instead.");
     }
 
@@ -186,9 +298,10 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
           amount: requested,
           amountTendered: tendered,
           changeAmount: change,
-          reference: mpesaCode || reference?.trim() || null,
-          notes: notes?.trim() || null,
+          reference: mpesaCode || (method === 'MOBILE_MONEY' ? null : reference?.trim() || null),
+          notes: (checkLater ? `[M-Pesa to check] ${notes?.trim() || ''}`.trim() : notes?.trim()) || null,
           createdBy: req.user!.id,
+          ...(checkLater ? { verifyStatus: 'PENDING_CHECK', payerPhone, refundApprovedBy: null, notes: `[M-Pesa to check]${laterApprover ? ` [approved by ${laterApprover.id}]` : ''} ${notes?.trim() || ''}`.trim() } : {}),
         },
       });
       const state = await syncPaymentState(tx, sale.id);
@@ -222,6 +335,9 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
     }
 
     realtimeService.broadcast(`orders:${result.branchId}`, 'order_paid', { orderId: result.saleId, paymentStatus: result.paymentStatus });
+    if (checkLater) {
+      notifyRestaurantStaff(req.user!.restaurantId, result.branchId, 'MPESA_TO_CHECK', 'M-Pesa to check', `KES ${requested.toLocaleString()} for order ${result.orderNumber} was recorded while M-Pesa was down. Check it against the till once M-Pesa is back.`, 'Payment', result.payment.id).catch(() => undefined);
+    }
     await createAuditLog(req.user!.restaurantId, req.user!.id, 'CREATE', 'Payment', result.payment.id, `Recorded ${method} payment of KES ${requested.toFixed(2)} for ${result.orderNumber}`);
     return sendResponse(res, true, 'Payment recorded', result, 201);
   } catch (e: any) {
@@ -243,9 +359,10 @@ router.post('/:id/refund', authorize(...REFUND_ROLES), async (req: AuthRequest, 
     if (!reason) return sendError(res, 'Refund reason is required');
     const target = await prisma.payment.findFirst({
       where: { id: req.params.id, restaurantId: req.user!.restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) },
-      select: { branchId: true },
+      select: { branchId: true, verifyStatus: true },
     });
     if (!target) return sendError(res, 'Payment not found', undefined, 404);
+    if (target.verifyStatus === 'PENDING_CHECK') return sendError(res, 'This M-Pesa payment has not been checked yet. Check it against the till first (Payments, M-Pesa to check).', undefined, 409);
     let approver;
     try {
       approver = await verifyApproval(req, 'refund a payment', { branchId: target.branchId });

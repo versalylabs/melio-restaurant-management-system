@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Copy, Link2, MessageCircle, Smartphone, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, Copy, Link2, MessageCircle, Smartphone, XCircle } from 'lucide-react';
 import { paymentApi } from '../../services/api';
+import { isApprovalCancelled, withApproval } from '../../lib/approval';
 
-type Mode = 'prompt' | 'link' | 'code';
+type Mode = 'prompt' | 'link' | 'code' | 'later';
 type PromptState =
   | { phase: 'idle' }
   | { phase: 'waiting'; checkoutRequestId: string; phone: string; amount: number; simulated: boolean; startedAt: number }
@@ -49,6 +50,10 @@ export default function MpesaPayment({
   // Payment link for a customer who isn't here (WhatsApp or phone order).
   const [link, setLink] = useState<{ url: string; whatsappUrl: string; message: string; expiresAt: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  // M-Pesa down: take the payment now, a manager checks it against the till later.
+  const [laterPhone, setLaterPhone] = useState(defaultPhone || '');
+  const [laterNote, setLaterNote] = useState('');
+  const [mpesaDown, setMpesaDown] = useState(false);
   // The message names the amount: make a fresh one when the balance changes.
   useEffect(() => { setLink(null); }, [balance]);
   const onPaidRef = useRef(onPaid);
@@ -98,6 +103,8 @@ export default function MpesaPayment({
       setState({ phase: 'waiting', checkoutRequestId: d.checkoutRequestId, phone: d.phoneNumber, amount: d.amount, simulated: !!d.simulated, startedAt: Date.now() });
     } catch (err: any) {
       setError(err.response?.data?.message || 'Could not send the prompt');
+      // No answer from M-Pesa (or from our server): offer to record it for checking later.
+      if (!err.response || err.response.status >= 500) setMpesaDown(true);
     } finally {
       setBusy(false);
     }
@@ -139,6 +146,23 @@ export default function MpesaPayment({
       setCopied(true);
     } catch {
       setError('Copy failed. Select the link and copy it by hand.');
+    }
+  };
+
+  const recordLater = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const value = Number(amount);
+      // A manager's PIN: the bill is marked paid before anyone has seen the money.
+      await withApproval((approval) => paymentApi.recordPayment(orderId, { method: 'MOBILE_MONEY', amount: value, checkLater: true, reference: code.trim() || undefined, payerPhone: laterPhone.trim() || undefined, notes: laterNote.trim() || undefined, approval }));
+      onPaid(`KES ${value.toLocaleString()} recorded as M-Pesa to check. A manager confirms it against the till once M-Pesa is back.`);
+    } catch (err: any) {
+      if (isApprovalCancelled(err)) return;
+      setError(err.response?.data?.message || 'Could not record the payment');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -186,8 +210,8 @@ export default function MpesaPayment({
 
   return (
     <div className="space-y-4">
-      <div className={`grid gap-2 ${canEnterCode ? 'grid-cols-3' : 'grid-cols-2'}`} role="group" aria-label="How is the customer paying by M-Pesa?">
-          {([['prompt', 'Send prompt'], ['link', 'Send payment link'], ...(canEnterCode ? [['code', 'Enter code']] : [])] as Array<[Mode, string]>).map(([value, label]) => (
+      <div className={`grid gap-2 ${canEnterCode ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2'}`} role="group" aria-label="How is the customer paying by M-Pesa?">
+          {([['prompt', 'Send prompt'], ['link', 'Payment link'], ...(canEnterCode ? [['code', 'Enter code'], ['later', 'M-Pesa down']] : [])] as Array<[Mode, string]>).map(([value, label]) => (
             <button
               key={value}
               type="button"
@@ -207,7 +231,41 @@ export default function MpesaPayment({
         </div>
       )}
 
-      {mode === 'link' ? (
+      {mpesaDown && canEnterCode && mode === 'prompt' && (
+        <button type="button" onClick={() => { setMode('later'); setError(''); }} className="w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+          M-Pesa isn't answering. <strong>Record the payment to check later</strong> so the customer isn't kept waiting.
+        </button>
+      )}
+
+      {mode === 'later' ? (
+        <form onSubmit={recordLater} className="space-y-3">
+          <p className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            <Clock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>Only when M-Pesa isn't working, or the customer paid the till and their message hasn't arrived. Needs a manager's PIN. The bill counts as paid now; a manager checks it against the till statement once M-Pesa is back (Payments, "M-Pesa to check").</span>
+          </p>
+          <label className="block text-sm font-medium">
+            Amount (KES)
+            <input type="number" min="1" step="0.01" max={Math.ceil(balance)} required value={amount} onChange={(e) => setAmount(e.target.value)} className={field} />
+          </label>
+          <label className="block text-sm font-medium">
+            M-Pesa code, if they have it (optional)
+            <input autoComplete="off" autoCapitalize="characters" maxLength={12} placeholder="e.g. SKL7H2X9QD" value={code} onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} className={`${field} font-mono tracking-widest`} />
+          </label>
+          <label className="block text-sm font-medium">
+            Number they paid from (optional)
+            <input type="tel" inputMode="tel" autoComplete="off" placeholder="0712 345 678" value={laterPhone} onChange={(e) => setLaterPhone(e.target.value)} className={field} />
+            <span className="mt-1 block text-xs font-normal text-gray-500">Helps find the payment on the statement.</span>
+          </label>
+          <label className="block text-sm font-medium">
+            Note (optional)
+            <input value={laterNote} onChange={(e) => setLaterNote(e.target.value)} maxLength={200} placeholder="e.g. paid to till, message delayed" className={field} />
+          </label>
+          {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+          <button type="submit" disabled={busy || (code.length > 0 && code.length !== 10)} className="h-10 w-full rounded-md bg-amber-600 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-50">
+            {busy ? 'Recording…' : 'Record M-Pesa to check later'}
+          </button>
+        </form>
+      ) : mode === 'link' ? (
         link ? (
           <div className="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
             <p className="text-sm font-medium">Send this link to the customer. It opens their bill and an M-Pesa prompt for what is left to pay.</p>

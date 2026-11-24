@@ -16,6 +16,7 @@ interface StaffRow {
   cancels: { count: number; value: number };
   discounts: { count: number; value: number };
   refunds: { count: number; value: number };
+  mpesaNotReceived: { count: number; value: number };
   approvals: { count: number; value: number };
   shifts: { closed: number; shortage: number; over: number };
 }
@@ -32,7 +33,7 @@ export async function buildLossReport(restaurantId: string, options: { startDate
   const branch = options.branchId ? { branchId: options.branchId } : {};
   const inRange = { gte: start, lte: end };
 
-  const [voids, discounted, refunds, shifts, unpaid] = await Promise.all([
+  const [voids, discounted, refunds, shifts, unpaid, mpesaMissing, mpesaToCheck] = await Promise.all([
     prisma.voidRecord.findMany({ where: { restaurantId, ...branch, createdAt: inRange }, orderBy: { createdAt: 'desc' } }),
     prisma.sale.findMany({
       // Only orders that went ahead: not cancelled, and not still a draft or held.
@@ -62,6 +63,11 @@ export async function buildLossReport(restaurantId: string, options: { startDate
       select: { id: true, orderNumber: true, status: true, totalAmount: true, amountPaid: true, createdBy: true, servedBy: true, createdAt: true, table: { select: { tableNumber: true, name: true } } },
       orderBy: { createdAt: 'desc' },
     }).then((rows) => rows.filter((u) => u.totalAmount - u.amountPaid > 0.005)),
+    prisma.payment.findMany({
+      where: { restaurantId, ...branch, verifyStatus: 'NOT_RECEIVED', verifiedAt: inRange },
+      select: { amount: true, createdBy: true },
+    }),
+    prisma.payment.aggregate({ where: { restaurantId, ...branch, verifyStatus: 'PENDING_CHECK', status: 'COMPLETED' }, _sum: { amount: true }, _count: { _all: true } }),
   ]);
 
   const userIds = new Set<string>();
@@ -93,6 +99,7 @@ export async function buildLossReport(restaurantId: string, options: { startDate
         cancels: { count: 0, value: 0 },
         discounts: { count: 0, value: 0 },
         refunds: { count: 0, value: 0 },
+        mpesaNotReceived: { count: 0, value: 0 },
         approvals: { count: 0, value: 0 },
         shifts: { closed: 0, shortage: 0, over: 0 },
       };
@@ -118,6 +125,7 @@ export async function buildLossReport(restaurantId: string, options: { startDate
     if (r.refundedBy) add(row(r.refundedBy).refunds, r.amount);
     if (r.refundApprovedBy) add(row(r.refundApprovedBy).approvals, r.amount);
   }
+  for (const m of mpesaMissing) add(row(m.createdBy).mpesaNotReceived, m.amount);
   for (const s of shifts) {
     const r = row(s.userId);
     r.shifts.closed += 1;
@@ -134,7 +142,7 @@ export async function buildLossReport(restaurantId: string, options: { startDate
   const unpaidBalance = round2(unpaid.reduce((t, u) => t + (u.totalAmount - u.amountPaid), 0));
 
   // Most money at risk first.
-  const risk = (r: StaffRow) => r.voids.value + r.cancels.value + r.discounts.value + r.refunds.value + r.shifts.shortage;
+  const risk = (r: StaffRow) => r.voids.value + r.cancels.value + r.discounts.value + r.refunds.value + r.mpesaNotReceived.value + r.shifts.shortage;
 
   return {
     range: { start, end, timeZone },
@@ -146,6 +154,8 @@ export async function buildLossReport(restaurantId: string, options: { startDate
       refunds: { count: refunds.length, value: round2(refunds.reduce((t, r) => t + r.amount, 0)) },
       shiftShortage: round2([...staff.values()].reduce((t, r) => t + r.shifts.shortage, 0)),
       unpaid: { count: unpaid.length, value: unpaidBalance },
+      mpesaNotReceived: { count: mpesaMissing.length, value: round2(mpesaMissing.reduce((t, m) => t + m.amount, 0)) },
+      mpesaToCheck: { count: mpesaToCheck._count._all, value: round2(mpesaToCheck._sum.amount || 0) },
     },
     staff: [...staff.values()].sort((a, b) => risk(b) - risk(a)),
     voids: voids.slice(0, 200).map((v) => ({
