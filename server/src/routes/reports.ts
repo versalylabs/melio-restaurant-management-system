@@ -3,6 +3,7 @@ import { authenticate, authorize } from '../middleware/auth';
 import { getSalesReport, exportSalesReport } from '../controllers/reportController';
 import { buildLossReport } from '../services/lossReportService';
 import { buildTaxSummary, taxSummaryCsv } from '../services/taxService';
+import { buildChannelReport } from '../services/channelReportService';
 import { sendError } from '../utils/response';
 import { sendResponse } from '../utils/response';
 import { AuthRequest } from '../middleware/auth';
@@ -13,6 +14,16 @@ router.use(authenticate);
 router.use(authorize('OWNER', 'ADMIN', 'MANAGER'));
 router.get('/sales', getSalesReport);
 router.get('/sales/export', exportSalesReport);
+/** Profit by channel: sales, commission and what the restaurant kept, per channel. */
+router.get('/channels', async (req: AuthRequest, res) => {
+  const branchId = req.user!.branchId || (typeof req.query.branchId === 'string' && req.query.branchId ? req.query.branchId : undefined);
+  const report = await buildChannelReport(req.user!.restaurantId, {
+    startDate: typeof req.query.startDate === 'string' ? req.query.startDate : undefined,
+    endDate: typeof req.query.endDate === 'string' ? req.query.endDate : undefined,
+    branchId,
+  });
+  return sendResponse(res, true, 'Profit by channel', report);
+});
 /** Monthly tax summary (?month=YYYY-MM), as JSON or, with &format=csv, a CSV for the accountant. */
 router.get('/tax-summary', async (req: AuthRequest, res) => {
   const month = typeof req.query.month === 'string' ? req.query.month : '';

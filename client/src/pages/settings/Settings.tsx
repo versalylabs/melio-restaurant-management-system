@@ -5,6 +5,7 @@ import type { Restaurant } from '../../types';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
 import Card from '../../components/ui/Card';
+import { CHANNEL_LABELS, COMMISSION_CHANNELS } from '../../lib/channels';
 
 export default function Settings() {
   const [, setRestaurant] = useState<Restaurant | null>(null);
@@ -34,6 +35,8 @@ export default function Settings() {
     vatRegistered: false,
     pricesIncludeTax: false,
     tourismLevyRate: 0,
+    whatsappNumber: '',
+    channelCommissions: {} as Record<string, string>,
   });
 
   useEffect(() => {
@@ -61,6 +64,8 @@ export default function Settings() {
             vatRegistered: !!data.vatRegistered,
             pricesIncludeTax: !!data.pricesIncludeTax,
             tourismLevyRate: Math.round((data.tourismLevyRate || 0) * 10000) / 100,
+            whatsappNumber: data.whatsappNumber ? `0${String(data.whatsappNumber).slice(3)}` : '',
+            channelCommissions: Object.fromEntries(Object.entries((data as any).channelCommissions || {}).map(([k, v]) => [k, String(v)])),
           });
         }
       } catch (err: any) {
@@ -237,6 +242,30 @@ export default function Settings() {
               </p>
             )}
             <p className="mt-3 text-xs text-gray-500">The Tourism Levy is worked out on your monthly sales in the tax summary; it is not added to bills. Melio is not an eTIMS system: keep issuing eTIMS invoices through KRA tools.</p>
+          </fieldset>
+
+          <fieldset className="rounded-xl border border-gray-200 p-4 dark:border-white/10">
+            <legend className="px-1 text-sm font-semibold">Selling direct</legend>
+            <Input id="whatsappNumber" type="tel" label="WhatsApp number for orders" placeholder="0712 345 678" value={formData.whatsappNumber} onChange={e=>setFormData({...formData,whatsappNumber:e.target.value})} />
+            <p className="mt-1 text-xs text-gray-500">Adds an "Order on WhatsApp" button to your website and online menu. Leave empty to hide it.</p>
+            <p className="mt-4 text-sm font-medium">Commission each channel takes (%)</p>
+            <p className="text-xs text-gray-500">Used for the Sales by Channel report, to show what you keep from each order. New orders use the rate set at the time.</p>
+            <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+              {COMMISSION_CHANNELS.map((c) => (
+                <Input
+                  key={c}
+                  id={`commission-${c}`}
+                  type="number"
+                  min="0"
+                  max="60"
+                  step="0.1"
+                  placeholder="0"
+                  label={CHANNEL_LABELS[c]}
+                  value={formData.channelCommissions[c] ?? ''}
+                  onChange={e=>setFormData({...formData,channelCommissions:{...formData.channelCommissions,[c]:e.target.value}})}
+                />
+              ))}
+            </div>
           </fieldset>
 
           <Input

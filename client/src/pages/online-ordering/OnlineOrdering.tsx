@@ -24,6 +24,8 @@ import {
   Calendar,
   RefreshCw,
   MapPin,
+  MessageCircle,
+  Check,
 } from 'lucide-react';
 import { publicOrderingApi } from '../../services/api';
 import ReservationModal from '../website/components/ReservationModal';
@@ -51,6 +53,7 @@ type Restaurant = {
   address?: string;
   city?: string;
   currency?: string;
+  whatsappNumber?: string | null;
   branches: Branch[];
 };
 type Category = { id: string; name: string };
@@ -62,8 +65,22 @@ type MenuItem = {
   image?: string;
   sellingPrice: number;
   preparationTime?: number;
+  modifierGroups?: ModifierGroup[];
 };
-type CartLine = MenuItem & { quantity: number };
+type ModifierOption = { id: string; name: string; priceAdjustment: number };
+type ModifierGroup = { id: string; name: string; selectionType: string; isRequired: boolean; options: ModifierOption[] };
+/** One cart line per dish + chosen options, so "burger, extra cheese" and "burger" stay separate. */
+type CartLine = MenuItem & { quantity: number; key: string; options: ModifierOption[]; unitPrice: number };
+
+const lineKey = (itemId: string, optionIds: string[]) => [itemId, ...[...optionIds].sort()].join('|');
+const makeLine = (item: MenuItem, options: ModifierOption[], quantity: number): CartLine => ({
+  ...item,
+  quantity,
+  options,
+  key: lineKey(item.id, options.map((o) => o.id)),
+  unitPrice: item.sellingPrice + options.reduce((t, o) => t + Math.max(0, o.priceAdjustment), 0),
+});
+const optionText = (line: CartLine) => line.options.map((o) => o.name).join(', ');
 
 interface OrderQuote {
   subtotal: number;
@@ -74,10 +91,10 @@ interface OrderQuote {
   taxInclusive?: boolean;
 }
 
-// The cart survives a refresh: only ids and quantities are stored, and lines
-// are rebuilt from the freshly loaded menu so prices are always current.
+// The cart survives a refresh: only ids, options and quantities are stored, and
+// lines are rebuilt from the freshly loaded menu so prices are always current.
 const cartStorageKey = (branchId: string) => `melio-online-cart:${branchId}`;
-const readStoredCart = (branchId: string): Array<{ id: string; quantity: number }> => {
+const readStoredCart = (branchId: string): Array<{ id: string; quantity: number; options?: string[] }> => {
   try {
     const raw = localStorage.getItem(cartStorageKey(branchId));
     const parsed = raw ? JSON.parse(raw) : [];
@@ -234,7 +251,18 @@ export default function OnlineOrdering() {
             ? current
             : stored.flatMap((line) => {
                 const item = byId.get(line.id);
-                return item ? [{ ...item, quantity: Math.min(50, Math.floor(Number(line.quantity))) }] : [];
+                if (!item) return [];
+                // Drop a line whose options have since been removed from the menu...
+                const all = (item.modifierGroups || []).flatMap((g) => g.options);
+                const ids = Array.isArray(line.options) ? line.options.filter((o) => typeof o === 'string') : [];
+                const options = ids.map((id) => all.find((o) => o.id === id)).filter(Boolean) as ModifierOption[];
+                if (options.length !== ids.length) return [];
+                // ...or one saved before a required choice (size, spice level) existed.
+                if ((item.modifierGroups || []).some((g) => {
+                  const picked = g.options.filter((o) => ids.includes(o.id)).length;
+                  return (g.isRequired && !picked) || (g.selectionType === 'SINGLE' && picked > 1);
+                })) return [];
+                return [makeLine(item, options, Math.min(50, Math.floor(Number(line.quantity))))];
               })
         );
       }
@@ -277,24 +305,42 @@ export default function OnlineOrdering() {
     [items, activeCategory, search]
   );
 
-  const subtotal = cart.reduce((sum, item) => sum + item.sellingPrice * item.quantity, 0);
+  const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
   const currency = restaurant?.currency || 'KES';
 
-  const addItem = (item: MenuItem) =>
+  // Dishes with options open the picker first; the rest go straight in.
+  const [optionItem, setOptionItem] = useState<MenuItem | null>(null);
+  const addLine = (item: MenuItem, options: ModifierOption[]) =>
     setCart((current) => {
-      const existing = current.find((line) => line.id === item.id);
+      const key = lineKey(item.id, options.map((o) => o.id));
+      const existing = current.find((line) => line.key === key);
       return existing
-        ? current.map((line) => (line.id === item.id ? { ...line, quantity: line.quantity + 1 } : line))
-        : [...current, { ...item, quantity: 1 }];
+        ? current.map((line) => (line.key === key ? { ...line, quantity: Math.min(50, line.quantity + 1) } : line))
+        : [...current, makeLine(item, options, 1)];
     });
+  const addItem = (item: MenuItem) => {
+    if (item.modifierGroups?.length) setOptionItem(item);
+    else addLine(item, []);
+  };
 
-  const setQuantity = (id: string, quantity: number) =>
+  const setQuantity = (key: string, quantity: number) =>
     setCart((current) =>
       quantity <= 0
-        ? current.filter((line) => line.id !== id)
-        : current.map((line) => (line.id === id ? { ...line, quantity } : line))
+        ? current.filter((line) => line.key !== key)
+        : current.map((line) => (line.key === key ? { ...line, quantity: Math.min(50, quantity) } : line))
     );
+
+  // "Order on WhatsApp": opens a chat with the restaurant, with the cart typed in.
+  const whatsappHref = (() => {
+    const number = restaurant?.whatsappNumber;
+    if (!number) return '';
+    const lines = cart.map((l) => `${l.quantity} x ${l.name}${l.options.length ? ` (${optionText(l)})` : ''}`);
+    const text = lines.length
+      ? `Hi ${restaurant?.name || ''}, I'd like to order${branch ? ` from ${branch.name}` : ''}:\n${lines.join('\n')}`
+      : `Hi ${restaurant?.name || ''}, I'd like to place an order${branch ? ` from ${branch.name}` : ''}.`;
+    return `https://wa.me/${number}?text=${encodeURIComponent(text)}`;
+  })();
 
   // One idempotency key per checkout: kept across retries of the same cart so a
   // double tap or a dropped connection can't place (and charge) two orders.
@@ -306,7 +352,7 @@ export default function OnlineOrdering() {
     // empty cart on first render would erase it.
     if (!branchId || hydratedBranchRef.current !== branchId) return;
     try {
-      if (cart.length) localStorage.setItem(cartStorageKey(branchId), JSON.stringify(cart.map((l) => ({ id: l.id, quantity: l.quantity }))));
+      if (cart.length) localStorage.setItem(cartStorageKey(branchId), JSON.stringify(cart.map((l) => ({ id: l.id, quantity: l.quantity, options: l.options.map((o) => o.id) }))));
       else localStorage.removeItem(cartStorageKey(branchId));
     } catch {
       // Storage unavailable: the cart just won't survive a refresh.
@@ -318,7 +364,7 @@ export default function OnlineOrdering() {
   const [quote, setQuote] = useState<OrderQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState('');
-  const cartKey = cart.map((l) => `${l.id}:${l.quantity}`).join(',');
+  const cartKey = cart.map((l) => `${l.key}:${l.quantity}`).join(',');
   useEffect(() => {
     if (!checkoutOpen || !cart.length || !restaurantId || !branchId) {
       setQuote(null);
@@ -335,7 +381,7 @@ export default function OnlineOrdering() {
           restaurantId,
           branchId,
           promoCode: form.promoCode || undefined,
-          items: cart.map((item) => ({ menuItemId: item.id, quantity: item.quantity })),
+          items: cart.map((item) => ({ menuItemId: item.id, quantity: item.quantity, modifiers: item.options.map((o) => o.id) })),
         });
         if (!cancelled) {
           setQuote(res.data.data);
@@ -372,7 +418,7 @@ export default function OnlineOrdering() {
         restaurantId,
         branchId,
         ...form,
-        items: cart.map((item) => ({ menuItemId: item.id, quantity: item.quantity })),
+        items: cart.map((item) => ({ menuItemId: item.id, quantity: item.quantity, modifiers: item.options.map((o) => o.id) })),
       });
       const data = response.data.data;
       setCart([]);
@@ -655,7 +701,9 @@ export default function OnlineOrdering() {
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:gap-6 sm:grid-cols-2 xl:grid-cols-3 w-full min-w-0">
               {filteredItems.map((item) => {
-                const inCart = cart.find((line) => line.id === item.id);
+                const hasOptions = !!item.modifierGroups?.length;
+                const inCart = hasOptions ? undefined : cart.find((line) => line.key === item.id);
+                const optionCount = hasOptions ? cart.filter((line) => line.id === item.id).reduce((t, l) => t + l.quantity, 0) : 0;
                 const resolvedImage = menuImage(item);
                 return (
                   <SpotlightCard
@@ -700,7 +748,7 @@ export default function OnlineOrdering() {
                         <div className="flex items-center gap-1.5 sm:gap-2 rounded-xl bg-orange-500/10 border border-orange-500/30 p-1">
                           <button
                             type="button"
-                            onClick={() => setQuantity(item.id, inCart.quantity - 1)}
+                            onClick={() => setQuantity(inCart.key, inCart.quantity - 1)}
                             className="h-10 w-10 sm:h-8 sm:w-8 rounded-lg bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 active:scale-95 transition"
                             aria-label={`Remove one ${item.name}`}
                           >
@@ -711,7 +759,7 @@ export default function OnlineOrdering() {
                           </span>
                           <button
                             type="button"
-                            onClick={() => setQuantity(item.id, inCart.quantity + 1)}
+                            onClick={() => setQuantity(inCart.key, inCart.quantity + 1)}
                             className="h-10 w-10 sm:h-8 sm:w-8 rounded-lg bg-orange-500 text-white flex items-center justify-center hover:bg-orange-600 active:scale-95 transition"
                             aria-label={`Add one ${item.name}`}
                           >
@@ -725,7 +773,7 @@ export default function OnlineOrdering() {
                           aria-label={`Add ${item.name} to order`}
                           className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-orange-500 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-orange-500/25 active:scale-95 hover:bg-orange-600 transition"
                         >
-                          <Plus size={14} /> Add
+                          <Plus size={14} /> {hasOptions ? (optionCount ? `Add (${optionCount} in order)` : 'Choose') : 'Add'}
                         </button>
                       )}
                     </div>
@@ -776,25 +824,26 @@ export default function OnlineOrdering() {
               <div className="mt-4 space-y-3 max-h-[340px] overflow-y-auto pr-1">
                 {cart.map((line) => (
                   <div
-                    key={line.id}
+                    key={line.key}
                     className="flex items-center justify-between gap-3 rounded-2xl bg-white/5 border border-white/5 p-3"
                   >
                     <div className="min-w-0">
                       <div className="text-xs font-bold truncate">{line.name}</div>
+                      {line.options.length > 0 && <div className="text-[11px] text-gray-400 truncate">{optionText(line)}</div>}
                       <div className="text-[11px] text-orange-400 font-semibold">
-                        {money(line.sellingPrice, currency)}
+                        {money(line.unitPrice, currency)}
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <button
-                        onClick={() => setQuantity(line.id, line.quantity - 1)}
+                        onClick={() => setQuantity(line.key, line.quantity - 1)}
                         className="h-6 w-6 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-xs"
                       >
                         −
                       </button>
                       <span className="w-5 text-center text-xs font-bold">{line.quantity}</span>
                       <button
-                        onClick={() => setQuantity(line.id, line.quantity + 1)}
+                        onClick={() => setQuantity(line.key, line.quantity + 1)}
                         className="h-6 w-6 rounded-lg bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-xs"
                       >
                         +
@@ -826,6 +875,16 @@ export default function OnlineOrdering() {
                   Proceed to Checkout <ArrowRight size={15} />
                 </button>
               </Magnet>
+              {whatsappHref && (
+                <a
+                  href={whatsappHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 py-3 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition"
+                >
+                  <MessageCircle size={15} /> Order on WhatsApp instead
+                </a>
+              )}
             </div>
           </SpotlightCard>
         </aside>
@@ -905,9 +964,9 @@ export default function OnlineOrdering() {
               </div>
               <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
                 {cart.map((c) => (
-                  <div key={c.id} className="flex items-center justify-between text-xs text-gray-300">
-                    <span className="truncate pr-2">{c.quantity}x {c.name}</span>
-                    <span className="shrink-0 font-mono text-gray-400">{money(c.sellingPrice * c.quantity, currency)}</span>
+                  <div key={c.key} className="flex items-center justify-between text-xs text-gray-300">
+                    <span className="truncate pr-2">{c.quantity}x {c.name}{c.options.length > 0 && <span className="text-gray-500"> ({optionText(c)})</span>}</span>
+                    <span className="shrink-0 font-mono text-gray-400">{money(c.unitPrice * c.quantity, currency)}</span>
                   </div>
                 ))}
               </div>
@@ -1102,6 +1161,30 @@ export default function OnlineOrdering() {
         </DialogOverlay>
       )}
 
+      {optionItem && (
+        <OptionPicker
+          item={optionItem}
+          currency={currency}
+          onClose={() => setOptionItem(null)}
+          onAdd={(options) => {
+            addLine(optionItem, options);
+            setOptionItem(null);
+          }}
+        />
+      )}
+
+      {whatsappHref && !checkoutOpen && (
+        <a
+          href={whatsappHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Order on WhatsApp"
+          className={`lg:hidden fixed right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 active:scale-95 transition ${cart.length ? 'bottom-24' : 'bottom-5'}`}
+        >
+          <MessageCircle size={22} />
+        </a>
+      )}
+
       {/* Mobile Sticky Bottom Cart Bar */}
       {cart.length > 0 && !checkoutOpen && (
         <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-xl border-t border-orange-500/25 p-3 shadow-2xl safe-area-pb animate-in slide-in-from-bottom duration-200">
@@ -1126,5 +1209,80 @@ export default function OnlineOrdering() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Options for one dish (size, extras, spice level), checked before it goes in the cart. */
+function OptionPicker({ item, currency, onClose, onAdd }: { item: MenuItem; currency: string; onClose: () => void; onAdd: (options: ModifierOption[]) => void }) {
+  const groups = item.modifierGroups || [];
+  const [chosen, setChosen] = useState<Record<string, string[]>>({});
+  const toggle = (group: ModifierGroup, optionId: string) =>
+    setChosen((current) => {
+      const picked = current[group.id] || [];
+      if (group.selectionType === 'SINGLE') return { ...current, [group.id]: picked[0] === optionId && !group.isRequired ? [] : [optionId] };
+      return { ...current, [group.id]: picked.includes(optionId) ? picked.filter((id) => id !== optionId) : [...picked, optionId] };
+    });
+  const options = groups.flatMap((g) => g.options.filter((o) => (chosen[g.id] || []).includes(o.id)));
+  const missing = groups.filter((g) => g.isRequired && !(chosen[g.id] || []).length);
+  const price = item.sellingPrice + options.reduce((t, o) => t + Math.max(0, o.priceAdjustment), 0);
+
+  return (
+    <DialogOverlay onClose={onClose} label={`Choose options for ${item.name}`} className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl bg-zinc-950 border border-orange-500/20 p-5 sm:p-6 text-white shadow-2xl">
+        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white p-2 rounded-xl bg-white/5 hover:bg-white/10" aria-label="Close">
+          <X size={18} />
+        </button>
+        <h2 className="font-serif text-xl font-bold pr-10">{item.name}</h2>
+        <p className="text-xs text-gray-400 mt-0.5">{money(item.sellingPrice, currency)}</p>
+
+        <div className="mt-5 space-y-5">
+          {groups.map((group) => {
+            const picked = chosen[group.id] || [];
+            return (
+              <fieldset key={group.id}>
+                <legend className="flex w-full items-center justify-between text-sm font-bold">
+                  <span>{group.name}</span>
+                  <span className="text-[11px] font-semibold text-gray-400">
+                    {group.isRequired ? 'Required' : 'Optional'}{group.selectionType === 'SINGLE' ? ', pick one' : ''}
+                  </span>
+                </legend>
+                <div className="mt-2 space-y-2">
+                  {group.options.map((option) => {
+                    const on = picked.includes(option.id);
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        role={group.selectionType === 'SINGLE' ? 'radio' : 'checkbox'}
+                        aria-checked={on}
+                        onClick={() => toggle(group, option.id)}
+                        className={`w-full flex items-center justify-between gap-3 rounded-xl border px-3.5 py-3 text-left text-sm transition ${on ? 'border-orange-500 bg-orange-500/15' : 'border-white/10 bg-white/5 hover:border-white/25'}`}
+                      >
+                        <span className="flex items-center gap-2.5">
+                          <span className={`grid h-5 w-5 place-items-center border ${group.selectionType === 'SINGLE' ? 'rounded-full' : 'rounded-md'} ${on ? 'border-orange-500 bg-orange-500' : 'border-white/30'}`}>
+                            {on && <Check size={12} />}
+                          </span>
+                          {option.name}
+                        </span>
+                        {option.priceAdjustment > 0 && <span className="text-xs text-orange-300">+{money(option.priceAdjustment, currency)}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            );
+          })}
+        </div>
+
+        <button
+          type="button"
+          disabled={missing.length > 0}
+          onClick={() => onAdd(options)}
+          className="mt-6 w-full rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 py-3.5 text-sm font-bold text-white shadow-lg shadow-orange-500/25 transition hover:from-orange-600 hover:to-amber-600 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {missing.length ? `Choose ${missing[0].name.toLowerCase()}` : `Add to order, ${money(price, currency)}`}
+        </button>
+      </div>
+    </DialogOverlay>
   );
 }

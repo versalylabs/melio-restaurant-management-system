@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import prisma from '../config/database';
 import { calculateOrderTotals, taxFields, OrderCalculationInput } from './orderCalculationService';
+import { channelFields } from './channelService';
 import { validatePromotion } from './promotionService';
 import { createKitchenTicketForOrder } from './kitchenService';
 import { notifyRestaurantStaff } from './notificationService';
@@ -23,7 +24,7 @@ export const getPublicRestaurants = async (_req: Request, res: Response) => {
   const restaurants = await prisma.restaurant.findMany({
     where: { status: 'ACTIVE' },
     select: {
-      id: true, name: true, description: true, phone: true, email: true, address: true, city: true, currency: true, logo: true,
+      id: true, name: true, description: true, phone: true, email: true, address: true, city: true, currency: true, logo: true, whatsappNumber: true,
       branches: { where: { status: 'ACTIVE' }, select: { id: true, name: true, code: true, address: true, city: true, phone: true, callPhone: true, diningHours: true } },
     },
     orderBy: { name: 'asc' },
@@ -53,13 +54,28 @@ export const getPublicMenu = async (req: Request, res: Response) => {
   const categories = await prisma.menuCategory.findMany({ where: { restaurantId, status: 'ACTIVE' }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }] });
   const items = await prisma.menuItem.findMany({
     where: { restaurantId, status: 'ACTIVE', available: true, branchAvailabilities: { none: { branchId, available: false } } },
-    include: { category: { select: { id: true, name: true } }, branchAvailabilities: { where: { branchId }, select: { available: true } } },
+    include: {
+      category: { select: { id: true, name: true } },
+      branchAvailabilities: { where: { branchId }, select: { available: true } },
+      modifierGroups: { where: { modifierGroup: { status: 'ACTIVE' } }, include: { modifierGroup: { include: { options: { where: { status: 'ACTIVE' }, orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }] } } } } },
+    },
     orderBy: [{ displayOrder: 'asc' }, { name: 'asc' }],
   });
 
   return sendResponse(res, true, 'Public menu retrieved', {
     restaurant, branch, categories,
-    items: items.map(({ branchAvailabilities, ...item }) => ({ ...item, branchAvailable: branchAvailabilities[0]?.available ?? true })),
+    items: items.map(({ branchAvailabilities, modifierGroups, costPrice, ...item }) => ({
+      ...item,
+      branchAvailable: branchAvailabilities[0]?.available ?? true,
+      // Options the customer can choose (extra cheese, no onions, spice level).
+      modifierGroups: modifierGroups
+        .map(({ modifierGroup: g }) => ({
+          id: g.id, name: g.name, selectionType: g.selectionType, isRequired: g.isRequired, displayOrder: g.displayOrder,
+          options: g.options.map((o) => ({ id: o.id, name: o.name, priceAdjustment: o.priceAdjustment })),
+        }))
+        .filter((g) => g.options.length)
+        .sort((a, b) => a.displayOrder - b.displayOrder),
+    })),
   });
 };
 
@@ -73,7 +89,7 @@ type PricedCart =
   | { ok: false; message: string; status?: number }
   | {
       ok: true;
-      normalized: Array<{ menuItemId: string; quantity: number }>;
+      normalized: Array<{ menuItemId: string; quantity: number; modifiers: Array<{ modifierOptionId: string; optionNameSnapshot: string; priceAdjustment: number }> }>;
       menuMap: Map<string, { id: string; name: string; sellingPrice: number }>;
       promotion: any;
       promotionId?: string;
@@ -85,21 +101,50 @@ async function pricePublicCart(params: { restaurantId: string; branchId: string;
   const { restaurantId, branchId, items, customerId } = params;
   if (!items.length) return { ok: false, message: 'Your cart is empty' };
   if (items.length > 100) return { ok: false, message: 'Too many items in one order' };
-  const normalized: Array<{ menuItemId: string; quantity: number }> = items.map((item: any) => ({ menuItemId: String(item?.menuItemId || ''), quantity: Math.max(1, Math.min(50, Math.floor(Number(item?.quantity || 1)))) }));
-  if (normalized.some((item) => !item.menuItemId)) return { ok: false, message: 'Invalid menu item' };
+  const requested = items.map((item: any) => ({
+    menuItemId: String(item?.menuItemId || ''),
+    quantity: Math.max(1, Math.min(50, Math.floor(Number(item?.quantity || 1)))),
+    optionIds: Array.isArray(item?.modifiers) ? [...new Set(item.modifiers.map((m: any) => String(typeof m === 'string' ? m : m?.modifierOptionId || '')).filter(Boolean))].slice(0, 20) as string[] : [],
+  }));
+  if (requested.some((item) => !item.menuItemId)) return { ok: false, message: 'Invalid menu item' };
 
-  const menuItemIds: string[] = [...new Set(normalized.map((item) => item.menuItemId))];
+  const menuItemIds: string[] = [...new Set(requested.map((item) => item.menuItemId))];
   const menuItems = await prisma.menuItem.findMany({
     where: { id: { in: menuItemIds }, restaurantId, status: 'ACTIVE', available: true, branchAvailabilities: { none: { branchId, available: false } } },
-    select: { id: true, name: true, sellingPrice: true },
+    select: {
+      id: true, name: true, sellingPrice: true,
+      modifierGroups: { where: { modifierGroup: { status: 'ACTIVE' } }, select: { modifierGroup: { select: { id: true, name: true, selectionType: true, isRequired: true, options: { where: { status: 'ACTIVE' }, select: { id: true, name: true, priceAdjustment: true } } } } } },
+    },
   });
   if (menuItems.length !== menuItemIds.length) return { ok: false, message: 'One or more menu items are no longer available' };
   const menuMap = new Map(menuItems.map((item) => [item.id, item]));
 
+  // Options are checked against the dish's own groups: only real options, one
+  // per single-choice group, and every required group answered.
+  const normalized: Array<{ menuItemId: string; quantity: number; modifiers: Array<{ modifierOptionId: string; optionNameSnapshot: string; priceAdjustment: number }> }> = [];
+  for (const line of requested) {
+    const dish = menuMap.get(line.menuItemId)!;
+    const groups = dish.modifierGroups.map((g) => g.modifierGroup).filter((g) => g.options.length);
+    const chosen: Array<{ modifierOptionId: string; optionNameSnapshot: string; priceAdjustment: number }> = [];
+    for (const optionId of line.optionIds) {
+      const group = groups.find((g) => g.options.some((o) => o.id === optionId));
+      if (!group) return { ok: false, message: `An option for ${dish.name} is no longer available. Remove it and add it again.` };
+      const option = group.options.find((o) => o.id === optionId)!;
+      chosen.push({ modifierOptionId: option.id, optionNameSnapshot: option.name, priceAdjustment: option.priceAdjustment });
+    }
+    for (const g of groups) {
+      const picked = g.options.filter((o) => line.optionIds.includes(o.id)).length;
+      if (g.isRequired && picked === 0) return { ok: false, message: `Choose ${g.name.toLowerCase()} for ${dish.name}` };
+      if (g.selectionType === 'SINGLE' && picked > 1) return { ok: false, message: `Choose only one ${g.name.toLowerCase()} for ${dish.name}` };
+    }
+    normalized.push({ menuItemId: line.menuItemId, quantity: line.quantity, modifiers: chosen });
+  }
+  const linePrice = (line: (typeof normalized)[number]) => menuMap.get(line.menuItemId)!.sellingPrice + line.modifiers.reduce((t, m) => t + Math.max(0, m.priceAdjustment), 0);
+
   let promotion: any = undefined;
   let promotionId: string | undefined;
   const promoCode = String(params.promoCode || '').trim();
-  const baseSubtotal = normalized.reduce((sum, item) => sum + menuMap.get(item.menuItemId)!.sellingPrice * item.quantity, 0);
+  const baseSubtotal = normalized.reduce((sum, item) => sum + linePrice(item) * item.quantity, 0);
   if (promoCode) {
     const found = await prisma.promotion.findFirst({ where: { restaurantId, active: true, code: { equals: promoCode } } });
     if (!found) return { ok: false, message: 'Promotion code is invalid' };
@@ -113,7 +158,12 @@ async function pricePublicCart(params: { restaurantId: string; branchId: string;
     }
   }
 
-  const calcItems = normalized.map((item) => ({ menuItemId: item.menuItemId, unitPrice: menuMap.get(item.menuItemId)!.sellingPrice, quantity: item.quantity, modifiers: [] }));
+  const calcItems = normalized.map((item) => ({
+    menuItemId: item.menuItemId,
+    unitPrice: menuMap.get(item.menuItemId)!.sellingPrice,
+    quantity: item.quantity,
+    modifiers: item.modifiers.map((m) => ({ modifierOptionId: m.modifierOptionId, priceAdjustment: m.priceAdjustment })),
+  }));
   const totals = await calculateOrderTotals({ items: calcItems, discountAmount: 0, discountType: 'FIXED', restaurantId, branchId, promotion: promotion ? { discountType: promotion.discountType, value: promotion.value, scope: promotion.scope, menuItemId: promotion.menuItemId, maxDiscountAmount: promotion.maxDiscountAmount } : undefined } as OrderCalculationInput);
   return { ok: true, normalized, menuMap, promotion, promotionId, promoCode, totals };
 }
@@ -206,6 +256,7 @@ export const createPublicOrder = async (req: Request, res: Response) => {
   if (!systemUser) return sendError(res, 'Online ordering is not configured for this restaurant', undefined, 409);
 
   const trackingToken = token();
+  const websiteChannel = await channelFields(restaurantId, 'WEBSITE', totals.totalAmount);
   let result: any;
   try {
   result = await prisma.$transaction(async (tx) => {
@@ -221,9 +272,19 @@ export const createPublicOrder = async (req: Request, res: Response) => {
         restaurantId, branchId, orderNumber: `#${next}`, clientRequestId, orderType: fulfillmentType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP', customerId: customer!.id, customerName,
         status: 'SUBMITTED', paymentStatus: 'UNPAID', amountPaid: 0,
         subtotal: totals.subtotal, discountAmount: totals.discountAmount, discountReason: promotion ? `Promotion: ${promoCode}` : null,
-        promotionId: promotionId || null, taxAmount: totals.taxAmount, ...taxFields(totals), serviceChargeAmount: totals.serviceChargeAmount, totalAmount: totals.totalAmount,
+        promotionId: promotionId || null, taxAmount: totals.taxAmount, ...taxFields(totals), serviceChargeAmount: totals.serviceChargeAmount, totalAmount: totals.totalAmount, ...websiteChannel,
         notes: notes || null, createdBy: systemUser.id,
-        items: { create: normalized.map((item: { menuItemId: string; quantity: number }) => { const menu = menuMap.get(item.menuItemId)!; return { menuItemId: menu.id, itemNameSnapshot: menu.name, unitPrice: menu.sellingPrice, quantity: item.quantity, subtotal: menu.sellingPrice * item.quantity }; }) },
+        items: {
+          create: normalized.map((item) => {
+            const menu = menuMap.get(item.menuItemId)!;
+            const unit = menu.sellingPrice + item.modifiers.reduce((t, m) => t + Math.max(0, m.priceAdjustment), 0);
+            return {
+              menuItemId: menu.id, itemNameSnapshot: menu.name, unitPrice: menu.sellingPrice, quantity: item.quantity,
+              subtotal: Math.round(unit * item.quantity * 100) / 100,
+              ...(item.modifiers.length ? { modifiers: { create: item.modifiers } } : {}),
+            };
+          }),
+        },
       },
       include: { items: true },
     });

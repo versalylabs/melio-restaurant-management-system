@@ -15,6 +15,7 @@ import {
 } from '../controllers/orderController';
 import { authenticate, authorize } from '../middleware/auth';
 import { voidOrderItem } from '../services/orderVoidService';
+import { updateOrderChannel } from '../services/orderService';
 import prisma from '../config/database';
 import { sendResponse } from '../utils/response';
 import { AuthRequest } from '../middleware/auth';
@@ -50,6 +51,7 @@ router.patch('/:id', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER')
 router.post('/:id/hold', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), holdOrderController);
 router.post('/:id/resume', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), resumeOrderController);
 router.post('/:id/submit', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), submitOrderController);
+router.patch('/:id/channel', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), updateOrderChannel);
 router.post('/:id/items/:itemId/void', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), voidOrderItem);
 router.post('/:id/cancel', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), cancelOrderController);
 router.patch('/:id/status', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'DELIVERY'), updateOrderStatusController);

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Smartphone, XCircle } from 'lucide-react';
+import { CheckCircle2, Copy, Link2, MessageCircle, Smartphone, XCircle } from 'lucide-react';
 import { paymentApi } from '../../services/api';
 
-type Mode = 'prompt' | 'code';
+type Mode = 'prompt' | 'link' | 'code';
 type PromptState =
   | { phase: 'idle' }
   | { phase: 'waiting'; checkoutRequestId: string; phone: string; amount: number; simulated: boolean; startedAt: number }
@@ -46,6 +46,11 @@ export default function MpesaPayment({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [state, setState] = useState<PromptState>({ phase: 'idle' });
+  // Payment link for a customer who isn't here (WhatsApp or phone order).
+  const [link, setLink] = useState<{ url: string; whatsappUrl: string; message: string; expiresAt: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  // The message names the amount: make a fresh one when the balance changes.
+  useEffect(() => { setLink(null); }, [balance]);
   const onPaidRef = useRef(onPaid);
   onPaidRef.current = onPaid;
 
@@ -112,6 +117,31 @@ export default function MpesaPayment({
     }
   };
 
+  const createLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const res = await paymentApi.createPaymentLink(orderId, phone.trim() ? { phone: phone.trim() } : {});
+      setLink(res.data.data);
+      setCopied(false);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Could not create the payment link');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyLink = async () => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link.message);
+      setCopied(true);
+    } catch {
+      setError('Copy failed. Select the link and copy it by hand.');
+    }
+  };
+
   const simulate = async () => {
     if (state.phase !== 'waiting') return;
     try {
@@ -156,9 +186,8 @@ export default function MpesaPayment({
 
   return (
     <div className="space-y-4">
-      {canEnterCode && (
-        <div className="grid grid-cols-2 gap-2" role="group" aria-label="How is the customer paying by M-Pesa?">
-          {([['prompt', 'Send prompt to phone'], ['code', 'Already paid: enter code']] as const).map(([value, label]) => (
+      <div className={`grid gap-2 ${canEnterCode ? 'grid-cols-3' : 'grid-cols-2'}`} role="group" aria-label="How is the customer paying by M-Pesa?">
+          {([['prompt', 'Send prompt'], ['link', 'Send payment link'], ...(canEnterCode ? [['code', 'Enter code']] : [])] as Array<[Mode, string]>).map(([value, label]) => (
             <button
               key={value}
               type="button"
@@ -170,7 +199,6 @@ export default function MpesaPayment({
             </button>
           ))}
         </div>
-      )}
 
       {state.phase === 'failed' && (
         <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300" role="alert">
@@ -179,7 +207,36 @@ export default function MpesaPayment({
         </div>
       )}
 
-      {mode === 'prompt' ? (
+      {mode === 'link' ? (
+        link ? (
+          <div className="space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+            <p className="text-sm font-medium">Send this link to the customer. It opens their bill and an M-Pesa prompt for what is left to pay.</p>
+            <input readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} aria-label="Payment link" className={`${field} font-mono text-xs`} />
+            <div className="grid grid-cols-2 gap-2">
+              <a href={link.whatsappUrl} target="_blank" rel="noopener noreferrer" className="flex h-10 items-center justify-center gap-2 rounded-md bg-green-600 text-sm font-semibold text-white hover:bg-green-700">
+                <MessageCircle className="h-4 w-4" aria-hidden="true" /> Send on WhatsApp
+              </a>
+              <button type="button" onClick={copyLink} className="flex h-10 items-center justify-center gap-2 rounded-md border border-gray-300 text-sm font-semibold hover:bg-gray-50 dark:border-gray-600 dark:hover:bg-white/5">
+                <Copy className="h-4 w-4" aria-hidden="true" /> {copied ? 'Copied' : 'Copy message'}
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">Works until {new Date(link.expiresAt).toLocaleString()}. The payment shows on this bill once they pay.</p>
+            {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+          </div>
+        ) : (
+          <form onSubmit={createLink} className="space-y-3">
+            <label className="block text-sm font-medium">
+              Customer's WhatsApp number (optional)
+              <input type="tel" inputMode="tel" autoComplete="off" placeholder="0712 345 678" value={phone} onChange={(e) => setPhone(e.target.value)} className={field} />
+              <span className="mt-1 block text-xs font-normal text-gray-500">Leave it empty to pick the chat in WhatsApp yourself.</span>
+            </label>
+            {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+            <button type="submit" disabled={busy} className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-orange-600 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50">
+              <Link2 className="h-4 w-4" aria-hidden="true" /> {busy ? 'Creating…' : 'Create payment link'}
+            </button>
+          </form>
+        )
+      ) : mode === 'prompt' ? (
         <form onSubmit={sendPrompt} className="space-y-3">
           <label className="block text-sm font-medium">
             Customer's M-Pesa number

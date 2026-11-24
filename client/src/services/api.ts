@@ -254,6 +254,7 @@ export const orderApi = {
   getOrder: (id: string) => cachedGet(`/orders/${id}`),
   createOrder: (data: any) => api.post('/orders', data),
   updateOrder: (id: string, data: any) => api.patch(`/orders/${id}`, data),
+  updateChannel: (id: string, channel: string) => api.patch(`/orders/${id}/channel`, { channel }),
   holdOrder: (id: string) => api.post(`/orders/${id}/hold`),
   resumeOrder: (id: string) => api.post(`/orders/${id}/resume`),
   submitOrder: (id: string) => api.post(`/orders/${id}/submit`),
@@ -385,6 +386,7 @@ export const paymentApi = {
   refundPayment: (id: string, data: any) => api.post(`/payments/${id}/refund`, data),
   getReceipt: (orderId: string) => cachedGet(`/payments/orders/${orderId}/receipt`),
   sendMpesaPrompt: (orderId: string, data: { phoneNumber: string; amount?: number }) => api.post(`/payments/orders/${orderId}/mpesa-prompt`, data),
+  createPaymentLink: (orderId: string, data: { phone?: string } = {}) => api.post(`/payments/orders/${orderId}/payment-link`, data),
   getMpesaStatus: (checkoutRequestId: string) => api.get(`/payments/mpesa/${encodeURIComponent(checkoutRequestId)}`),
   simulateMpesa: (checkoutRequestId: string) => api.post(`/payments/mpesa/${encodeURIComponent(checkoutRequestId)}/simulate`),
 };
@@ -394,6 +396,7 @@ export const reportApi = {
   // Not cached: it should reflect voids and shift closes immediately.
   getLossReport: (params?: any) => api.get('/reports/loss-prevention', { params }),
   getTaxSummary: (params: { month: string; branchId?: string }) => api.get('/reports/tax-summary', { params }),
+  getChannelReport: (params: { startDate?: string; endDate?: string; branchId?: string }) => api.get('/reports/channels', { params }),
   exportTaxSummary: (params: { month: string; branchId?: string }) => api.get('/reports/tax-summary', { params: { ...params, format: 'csv' }, responseType: 'blob' }),
   exportSalesReport: (params?: any) => api.get('/reports/sales/export', { params, responseType: 'blob' }),
 };
@@ -405,6 +408,14 @@ export const reservationApi = {
   updateReservation: (id: string, data: any) => api.put(`/reservations/${id}`, data),
   updateStatus: (id: string, data: any) => api.patch(`/reservations/${id}/status`, data),
   cancel: (id: string) => api.delete(`/reservations/${id}`),
+};
+
+/** The customer's side of a payment link (no login). */
+export const publicPayApi = {
+  get: (token: string) => api.get(`/public/pay/${token}`),
+  pay: (token: string, phoneNumber: string) => api.post(`/public/pay/${token}/mpesa`, { phoneNumber }),
+  status: (token: string, checkoutRequestId: string) => api.get(`/public/pay/${token}/status/${checkoutRequestId}`),
+  simulate: (token: string, checkoutRequestId: string) => api.post(`/public/pay/${token}/simulate/${checkoutRequestId}`),
 };
 
 export const publicOrderingApi = {

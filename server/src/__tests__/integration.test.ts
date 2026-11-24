@@ -74,7 +74,8 @@ async function run() {
   await prisma.user.update({ where: { id: owner.id }, data: { pinHash: await require('bcryptjs').hash(TEST_PIN, 4) } });
   await prisma.user.update({ where: { id: owner.id }, data: { pinFailedCount: 0, pinLockedUntil: null } });
   const approval = { approverId: owner.id, pin: TEST_PIN };
-  const menuItem = await prisma.menuItem.findFirst({ where: { restaurantId, status: 'ACTIVE', available: true, sellingPrice: { gt: 0 } } });
+  // A dish with no required options, so website orders can be placed without choosing any.
+  const menuItem = await prisma.menuItem.findFirst({ where: { restaurantId, status: 'ACTIVE', available: true, sellingPrice: { gt: 0 }, modifierGroups: { none: { modifierGroup: { isRequired: true, status: 'ACTIVE' } } } } });
   assert.ok(menuItem, 'an active menu item is required');
 
   const newOrder = (extra: Record<string, unknown> = {}) => call('POST', '/orders', cashierToken, {
@@ -758,6 +759,208 @@ async function run() {
     });
     await prisma.shift.updateMany({ where: { userId: cashier.id, status: 'OPEN' }, data: { status: 'CLOSED', closedAt: new Date() } });
     await prisma.menuItem.update({ where: { id: dish.id }, data: { status: 'INACTIVE' } });
+  }
+
+  console.log('\n--- Selling direct: channels, commission, payment links, dish options ---');
+  {
+    const before = await prisma.restaurant.findUnique({ where: { id: restaurantId }, select: { channelCommissions: true, whatsappNumber: true } });
+    const near = (a: number, b: number) => Math.abs(a - b) < 0.011;
+    const completeOrder = (id: string) => require('../services/orderCompletionService').completeOrder(id, restaurantId, owner.id);
+    try {
+      await test('Settings: commission 0–60% per channel and a Kenyan WhatsApp number', async () => {
+        assert.strictEqual((await call('PUT', '/restaurant', ownerToken, { channelCommissions: { GLOVO: 75 } })).status, 400);
+        assert.strictEqual((await call('PUT', '/restaurant', ownerToken, { whatsappNumber: '12345' })).status, 400);
+        const ok = await call('PUT', '/restaurant', ownerToken, { channelCommissions: { GLOVO: 30, UBER_EATS: '25', BOLT: 0, NOT_A_CHANNEL: 10 }, whatsappNumber: '0712 345 678' });
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+        const got = (await call('GET', '/restaurant', ownerToken)).body.data;
+        assert.deepStrictEqual(got.channelCommissions, { GLOVO: 30, UBER_EATS: 25 });
+        assert.strictEqual(got.whatsappNumber, '254712345678');
+        const pub = (await call('GET', '/public/restaurants', null)).body.data.restaurants.find((r: any) => r.id === restaurantId);
+        assert.strictEqual(pub?.whatsappNumber, '254712345678');
+      });
+      await test('An order records its channel; an unknown or Website channel from staff is refused', async () => {
+        const pos = (await newOrder()).body.data;
+        assert.strictEqual((await prisma.sale.findUnique({ where: { id: pos.id } })).channel, 'POS');
+        assert.strictEqual((await newOrder({ channel: 'TELEGRAM' })).status, 400);
+        assert.strictEqual((await newOrder({ channel: 'WEBSITE' })).status, 400);
+      });
+      await test('A Glovo order freezes its 30% commission; edits follow the bill at that rate', async () => {
+        const held = await newOrder({ channel: 'GLOVO', status: 'HELD' });
+        assert.strictEqual(held.status, 201, JSON.stringify(held.body));
+        const sale = await prisma.sale.findUnique({ where: { id: held.body.data.id } });
+        assert.strictEqual(sale.channel, 'GLOVO');
+        assert.ok(near(sale.commissionRate, 0.3) && near(sale.commissionAmount, sale.totalAmount * 0.3), JSON.stringify(sale));
+        // The rate changes later: this order keeps 30%.
+        await call('PUT', '/restaurant', ownerToken, { channelCommissions: { GLOVO: 20, UBER_EATS: 25 } });
+        const edit = await call('PATCH', `/orders/${sale.id}`, cashierToken, { items: [{ menuItemId: menuItem.id, quantity: 1, modifiers: [] }] });
+        assert.strictEqual(edit.status, 200, JSON.stringify(edit.body));
+        const after = await prisma.sale.findUnique({ where: { id: sale.id } });
+        assert.ok(after.totalAmount < sale.totalAmount && near(after.commissionAmount, after.totalAmount * 0.3), JSON.stringify(after));
+        await call('PUT', '/restaurant', ownerToken, { channelCommissions: { GLOVO: 30, UBER_EATS: 25 } });
+      });
+      await test('Voiding an item lowers the commission with the bill', async () => {
+        const order = (await newOrder({ channel: 'UBER_EATS' })).body.data;
+        const res = await call('POST', `/orders/${order.id}/items/${order.items[0].id}/void`, cashierToken, { quantity: 1, reason: 'test', approval });
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+        assert.ok(near(sale.commissionAmount, sale.totalAmount * 0.25), JSON.stringify(sale));
+      });
+      await test('Staff can correct the channel of an open order, not a closed one', async () => {
+        const order = (await newOrder()).body.data;
+        const res = await call('PATCH', `/orders/${order.id}/channel`, cashierToken, { channel: 'GLOVO' });
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.strictEqual(res.body.data.commissionAmount, undefined, 'cashiers are not shown commission');
+        assert.ok(near((await prisma.sale.findUnique({ where: { id: order.id } })).commissionAmount, order.totalAmount * 0.3));
+        const asCashier = (await call('GET', `/orders/${order.id}`, cashierToken)).body.data;
+        assert.ok(asCashier.channel === 'GLOVO' && asCashier.commissionAmount === undefined && asCashier.commissionRate === undefined);
+        assert.ok(near((await call('GET', `/orders/${order.id}`, ownerToken)).body.data.commissionAmount, order.totalAmount * 0.3));
+        assert.strictEqual((await call('PATCH', `/orders/${order.id}/channel`, cashierToken, { channel: 'WEBSITE' })).status, 400);
+        await call('POST', `/payments/orders/${order.id}`, cashierToken, { method: 'CASH', amount: order.totalAmount });
+        await completeOrder(order.id);
+        assert.strictEqual((await call('PATCH', `/orders/${order.id}/channel`, cashierToken, { channel: 'POS' })).status, 400);
+      });
+      await test('Website orders are marked Website and keep that channel', async () => {
+        const placed = await call('POST', '/public/orders', null, {
+          restaurantId, branchId, customerName: 'IT Web', contactPhone: '0712345678', fulfillmentType: 'PICKUP', paymentMethod: 'CASH', items: [{ menuItemId: menuItem.id, quantity: 1 }], clientRequestId: uid(),
+        });
+        assert.strictEqual(placed.status, 201, JSON.stringify(placed.body));
+        const online = await prisma.onlineOrder.findFirst({ where: { trackingToken: placed.body.data.trackingToken } });
+        const sale = await prisma.sale.findUnique({ where: { id: online.saleId } });
+        assert.strictEqual(sale.channel, 'WEBSITE');
+        assert.strictEqual((await call('PATCH', `/orders/${sale.id}/channel`, cashierToken, { channel: 'POS' })).status, 400);
+      });
+      await test('Offline orders keep the channel picked at the till', async () => {
+        const id = uid();
+        const offline = { id, offlineOrderNumber: 'OFF-2', branchId, orderType: 'TAKEAWAY', status: 'SUBMITTED', channel: 'PHONE', items: [{ menuItemId: menuItem.id, quantity: 1, modifiers: [] }], discountAmount: 0, createdAt: new Date().toISOString() };
+        const res = await call('POST', '/orders/sync-offline', cashierToken, { orders: [offline] });
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        assert.strictEqual((await prisma.sale.findFirst({ where: { restaurantId, clientRequestId: id } })).channel, 'PHONE');
+      });
+      await test('Sales by channel: what each channel sold, its commission and what was kept', async () => {
+        const order = (await newOrder({ channel: 'BOLT' })).body.data;
+        await call('PUT', '/restaurant', ownerToken, { channelCommissions: { GLOVO: 30, UBER_EATS: 25, BOLT: 10 } });
+        const glovo = (await newOrder({ channel: 'GLOVO' })).body.data;
+        for (const o of [order, glovo]) {
+          await call('POST', `/payments/orders/${o.id}`, cashierToken, { method: 'CASH', amount: o.totalAmount });
+          await completeOrder(o.id);
+        }
+        const res = await call('GET', '/reports/channels', ownerToken);
+        assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+        const rows = res.body.data.channels;
+        const g = rows.find((r: any) => r.channel === 'GLOVO');
+        const b = rows.find((r: any) => r.channel === 'BOLT');
+        assert.ok(g && g.commission > 0 && near(g.kept, g.sales - g.commission), JSON.stringify(g));
+        assert.ok(b && b.commission === 0, 'the Bolt order was placed before Bolt had a rate');
+        const t = res.body.data.totals;
+        assert.ok(near(t.kept, t.sales - t.commission));
+        assert.strictEqual((await call('GET', '/reports/channels', cashierToken)).status, 403);
+      });
+
+      // Payment links (test-mode M-Pesa for this block).
+      process.env.PAYMENT_SIMULATION = 'true';
+      await test('A payment link is reused while valid and shows the bill without private details', async () => {
+        const order = (await newOrder({ channel: 'WHATSAPP' })).body.data;
+        const first = await call('POST', `/payments/orders/${order.id}/payment-link`, cashierToken, { phone: '0712345678' });
+        assert.strictEqual(first.status, 200, JSON.stringify(first.body));
+        assert.ok(first.body.data.phoneKnown && first.body.data.whatsappUrl.startsWith('https://wa.me/254712345678?text='));
+        const again = await call('POST', `/payments/orders/${order.id}/payment-link`, cashierToken, {});
+        assert.strictEqual(again.body.data.url, first.body.data.url);
+        assert.ok(/^https?:\/\/[^/]+\/pay\/[A-Za-z0-9_-]+$/.test(first.body.data.url), first.body.data.url);
+        const token = first.body.data.url.split('/pay/')[1];
+        const bill = await call('GET', `/public/pay/${token}`, null);
+        assert.strictEqual(bill.status, 200, JSON.stringify(bill.body));
+        assert.ok(near(bill.body.data.balance, order.totalAmount));
+        const text = JSON.stringify(bill.body.data);
+        assert.ok(!text.includes(cashier.id) && !text.includes('0712345678'), 'no staff ids or phones on the public page');
+      });
+      await test('Paying through the link records the payment on the bill', async () => {
+        const order = (await newOrder()).body.data;
+        const link = (await call('POST', `/payments/orders/${order.id}/payment-link`, cashierToken, {})).body.data;
+        const token = link.url.split('/pay/')[1];
+        const sent = await call('POST', `/public/pay/${token}/mpesa`, null, { phoneNumber: '0712345678' });
+        assert.strictEqual(sent.status, 201, JSON.stringify(sent.body));
+        const id = sent.body.data.checkoutRequestId;
+        assert.strictEqual((await call('GET', `/public/pay/${token}/status/${id}`, null)).body.data.status, 'PENDING');
+        assert.strictEqual((await call('POST', `/public/pay/${token}/simulate/${id}`, null)).status, 200);
+        assert.strictEqual((await call('GET', `/public/pay/${token}/status/${id}`, null)).body.data.status, 'SUCCESS');
+        const sale = await prisma.sale.findUnique({ where: { id: order.id } });
+        assert.strictEqual(sale.paymentStatus, 'PAID');
+        const payment = await prisma.payment.findFirst({ where: { saleId: order.id, status: 'COMPLETED' } });
+        assert.strictEqual(payment.createdBy, cashier.id, 'counts for the staff member who sent the link');
+        assert.strictEqual((await call('POST', `/payments/orders/${order.id}/payment-link`, cashierToken, {})).status, 400, 'a paid bill gets no link');
+      });
+      await test("A link can't see another bill's prompt, and an expired link is gone", async () => {
+        const a = (await newOrder()).body.data;
+        const b = (await newOrder()).body.data;
+        const tokenA = (await call('POST', `/payments/orders/${a.id}/payment-link`, cashierToken, {})).body.data.url.split('/pay/')[1];
+        const sentB = await call('POST', `/payments/orders/${b.id}/mpesa-prompt`, cashierToken, { phoneNumber: '0712345678' });
+        const idB = sentB.body.data.checkoutRequestId;
+        assert.strictEqual((await call('GET', `/public/pay/${tokenA}/status/${idB}`, null)).status, 404);
+        assert.strictEqual((await call('POST', `/public/pay/${tokenA}/simulate/${idB}`, null)).status, 404);
+        await prisma.paymentLink.updateMany({ where: { token: tokenA }, data: { expiresAt: new Date(Date.now() - 1000) } });
+        assert.strictEqual((await call('GET', `/public/pay/${tokenA}`, null)).status, 404);
+        assert.strictEqual((await call('GET', '/public/pay/not-a-real-token-value', null)).status, 404);
+      });
+      delete process.env.PAYMENT_SIMULATION;
+
+      // Dish options on the website.
+      const group = await prisma.modifierGroup.create({
+        data: {
+          restaurantId, name: `IT Size ${uid()}`, selectionType: 'SINGLE', isRequired: true,
+          options: { create: [{ name: 'Regular', priceAdjustment: 0 }, { name: 'Large', priceAdjustment: 150 }] },
+        },
+        include: { options: true },
+      });
+      const extras = await prisma.modifierGroup.create({
+        data: { restaurantId, name: `IT Extras ${uid()}`, selectionType: 'MULTIPLE', isRequired: false, options: { create: [{ name: 'Cheese', priceAdjustment: 50 }, { name: 'Gone', priceAdjustment: 10, status: 'INACTIVE' }] } },
+        include: { options: true },
+      });
+      const otherGroup = await prisma.modifierGroup.create({ data: { restaurantId, name: `IT Other ${uid()}`, options: { create: [{ name: 'Elsewhere', priceAdjustment: 5 }] } }, include: { options: true } });
+      const optDish = await prisma.menuItem.create({ data: { restaurantId, categoryId: menuItem.categoryId, name: `IT Burger ${uid()}`, sellingPrice: 500 } });
+      await prisma.menuItemModifierGroup.createMany({ data: [{ menuItemId: optDish.id, modifierGroupId: group.id }, { menuItemId: optDish.id, modifierGroupId: extras.id }] });
+      const large = group.options.find((o: any) => o.name === 'Large');
+      const cheese = extras.options.find((o: any) => o.name === 'Cheese');
+      const gone = extras.options.find((o: any) => o.name === 'Gone');
+      const quote = (modifiers: unknown) => call('POST', '/public/orders/quote', null, { restaurantId, branchId, items: [{ menuItemId: optDish.id, quantity: 2, modifiers }] });
+      try {
+        await test('The public menu lists active options and no cost price', async () => {
+          const res = await call('GET', `/public/menu?restaurantId=${restaurantId}&branchId=${branchId}`, null);
+          const dish = res.body.data.items.find((i: any) => i.id === optDish.id);
+          assert.ok(dish, 'dish listed');
+          assert.strictEqual(dish.costPrice, undefined);
+          assert.strictEqual(dish.modifierGroups.length, 2);
+          const ex = dish.modifierGroups.find((g: any) => g.id === extras.id);
+          assert.deepStrictEqual(ex.options.map((o: any) => o.name), ['Cheese']);
+        });
+        await test('Options are checked: required, one-only, inactive and other dishes', async () => {
+          assert.strictEqual((await quote([])).status, 400, 'size is required');
+          assert.strictEqual((await quote([large.id, group.options.find((o: any) => o.name === 'Regular').id])).status, 400, 'one size only');
+          assert.strictEqual((await quote([large.id, gone.id])).status, 400, 'inactive option');
+          assert.strictEqual((await quote([large.id, otherGroup.options[0].id])).status, 400, "another dish's option");
+        });
+        await test('Option prices are charged and saved with the order', async () => {
+          const q = await quote([large.id, cheese.id]);
+          assert.strictEqual(q.status, 200, JSON.stringify(q.body));
+          assert.ok(near(q.body.data.subtotal, (500 + 150 + 50) * 2), JSON.stringify(q.body.data));
+          const placed = await call('POST', '/public/orders', null, {
+            restaurantId, branchId, customerName: 'IT Options', contactPhone: '0712345678', fulfillmentType: 'PICKUP', paymentMethod: 'CASH', clientRequestId: uid(),
+            items: [{ menuItemId: optDish.id, quantity: 2, modifiers: [{ modifierOptionId: large.id }, cheese.id] }],
+          });
+          assert.strictEqual(placed.status, 201, JSON.stringify(placed.body));
+          assert.ok(near(placed.body.data.totalAmount, q.body.data.totalAmount));
+          const online = await prisma.onlineOrder.findFirst({ where: { trackingToken: placed.body.data.trackingToken } });
+          const line = await prisma.saleItem.findFirst({ where: { saleId: online.saleId }, include: { modifiers: true } });
+          assert.ok(near(line.subtotal, 1400), String(line.subtotal));
+          assert.deepStrictEqual(line.modifiers.map((m: any) => m.optionNameSnapshot).sort(), ['Cheese', 'Large']);
+        });
+      } finally {
+        await prisma.menuItem.update({ where: { id: optDish.id }, data: { status: 'INACTIVE' } });
+        await prisma.modifierGroup.updateMany({ where: { id: { in: [group.id, extras.id, otherGroup.id] } }, data: { status: 'INACTIVE' } });
+      }
+    } finally {
+      delete process.env.PAYMENT_SIMULATION;
+      await prisma.restaurant.update({ where: { id: restaurantId }, data: { channelCommissions: before!.channelCommissions, whatsappNumber: before!.whatsappNumber } });
+    }
   }
 
   server.close();

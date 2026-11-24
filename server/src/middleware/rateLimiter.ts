@@ -169,6 +169,21 @@ export const paymentRateLimiter = createRateLimiter({
   message: 'Too many payment requests initiated. Please wait 2 minutes before retrying.',
 });
 
+// Payment links: prompts per link (any IP) and per IP, apart from website checkout.
+export const payLinkTokenRateLimiter = createRateLimiter({
+  name: 'pay-link',
+  windowMs: 10 * 60 * 1000,
+  maxRequests: 5,
+  message: 'Too many payment attempts for this bill. Wait a few minutes, or ask the restaurant for help.',
+  keyGenerator: (req) => (req.params?.token ? `t:${req.params.token}` : null),
+});
+export const payLinkIpRateLimiter = createRateLimiter({
+  name: 'pay-link-ip',
+  windowMs: 2 * 60 * 1000,
+  maxRequests: 15,
+  message: 'Too many payment requests. Please wait 2 minutes before retrying.',
+});
+
 // 3. Public reservations: 10 / 15 minutes
 export const reservationRateLimiter = createRateLimiter({
   name: 'reservation',

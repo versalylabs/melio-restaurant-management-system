@@ -28,6 +28,10 @@ model Restaurant {
   pricesIncludeTax Boolean  @default(false)
   /// Tourism Levy on gross sales (fraction, e.g. 0.02). Paid by the business; not added to bills.
   tourismLevyRate  Float    @default(0)
+  /// Commission each sales channel takes, as percentages: {"GLOVO": 30, "UBER_EATS": 25}.
+  channelCommissions String  @default("{}")
+  /// Shown as "Order on WhatsApp" on the website when set (2547XXXXXXXX).
+  whatsappNumber   String?
   logo        String?
   timezone    String   @default("Africa/Nairobi")
   status      String   @default("ACTIVE")
@@ -588,6 +592,11 @@ model Sale {
   createdBy           String
   /// Staff member who served the table (waiter); defaults to the creator when they are a waiter.
   servedBy            String?
+  /// Where the order came from: POS, PHONE, WHATSAPP, WEBSITE, GLOVO, UBER_EATS, BOLT.
+  channel             String   @default("POS")
+  /// The channel's commission (fraction) frozen when the order was placed, and its amount on the total.
+  commissionRate      Float    @default(0)
+  commissionAmount    Float    @default(0)
   /// Idempotency key sent by the client (POS, offline sync, online checkout) so retries never duplicate an order.
   clientRequestId     String?
   /// Set once stock has been deducted for this order (claimed atomically; prevents double deduction).
@@ -610,6 +619,7 @@ model Sale {
   payments       Payment[]
   receipt        Receipt?
   creditNotes    CreditNote[]
+  paymentLinks   PaymentLink[]
   onlineOrder    OnlineOrder?
 
   @@unique([branchId, orderNumber])
@@ -1495,4 +1505,21 @@ model IngredientPriceHistory {
   @@index([ingredientId, createdAt])
   @@index([restaurantId, createdAt])
   @@map("ingredient_price_history")
+}
+
+/// A link a customer opens to pay a bill by M-Pesa (sent on WhatsApp or SMS).
+model PaymentLink {
+  id           String   @id @default(uuid())
+  token        String   @unique
+  restaurantId String
+  branchId     String
+  saleId       String
+  createdBy    String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@map("payment_links")
 }

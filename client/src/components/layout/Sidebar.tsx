@@ -62,7 +62,7 @@ const navigation: NavItem[] = [
   ]},
   { title: 'Finance', icon: Wallet, children: [
     { title: 'Payments', href: '/payments' }, { title: 'Expenses', href: '/expenses' },
-    { title: 'Reports', href: '/reports' }, { title: 'Loss Prevention', href: '/loss-prevention' }, { title: 'Tax Summary', href: '/tax-summary' }, { title: 'Analytics', href: '/analytics' },
+    { title: 'Reports', href: '/reports' }, { title: 'Loss Prevention', href: '/loss-prevention' }, { title: 'Tax Summary', href: '/tax-summary' }, { title: 'Sales by Channel', href: '/channel-report' }, { title: 'Analytics', href: '/analytics' },
     { title: 'Discounts & Promotions', href: '/promotions' },
   ]},
   { title: 'Notifications', href: '/notifications', icon: Bell },

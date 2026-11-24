@@ -77,7 +77,7 @@ export const createModifierGroup = async (req: AuthRequest, res: ExpressResponse
       options: {
         create: (options || []).map((opt: any) => ({
           name: opt.name,
-          priceAdjustment: opt.priceAdjustment ?? 0,
+          priceAdjustment: Math.max(0, Number(opt.priceAdjustment) || 0),
           displayOrder: opt.displayOrder ?? 0,
           status: opt.status || 'ACTIVE',
         })),
@@ -121,7 +121,7 @@ export const updateModifierGroup = async (req: AuthRequest, res: ExpressResponse
         deleteMany: {},
         create: (options || []).map((opt: any) => ({
           name: opt.name,
-          priceAdjustment: opt.priceAdjustment ?? 0,
+          priceAdjustment: Math.max(0, Number(opt.priceAdjustment) || 0),
           displayOrder: opt.displayOrder ?? 0,
           status: opt.status || 'ACTIVE',
         })),
