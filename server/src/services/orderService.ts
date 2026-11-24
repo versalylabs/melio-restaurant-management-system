@@ -19,6 +19,7 @@ import { completeOrder } from './orderCompletionService';
 import { validatePromotion } from './promotionService';
 import { deductInventoryForOrderSafely } from './inventoryService';
 import { realtimeService } from './realtimeService';
+import { customersByPhone, isOptedOut, kenyanPhone, localPhone } from './smsService';
 import { lockTables, SEATED_ORDER_STATUSES, syncTableStatus } from './tableFloorService';
 import { notifyCustomerOrderUpdate } from './customerNotificationService';
 
@@ -280,7 +281,7 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     orderType,
     tableId,
     customerName,
-    customerId,
+    customerId: requestedCustomerId,
     items,
     notes,
     discountAmount,
@@ -288,6 +289,11 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
     promotionId,
     status,
   } = req.body;
+  let customerId: string | undefined = requestedCustomerId || undefined;
+  // "Receipt and points by SMS?" at the till: the customer's number and consent.
+  const smsOptIn = req.body.smsReceipt && typeof req.body.smsReceipt === 'object' ? req.body.smsReceipt : null;
+  const smsPhone = smsOptIn ? kenyanPhone(smsOptIn.phone) : null;
+  if (smsOptIn && !smsPhone) return sendError(res, "Enter the customer's number like 0712 345 678");
 
   // Retries of the same checkout (e.g. after a network timeout) return the
   // order that was already created instead of creating a duplicate.
@@ -446,6 +452,14 @@ export const createOrder = async (req: AuthRequest, res: ExpressResponse) => {
   const totals = await calculateOrderTotals(calculationInput);
   // Read before the transaction: it must not need a second connection.
   const channelData = await channelFields(restaurantId, channel, totals.totalAmount);
+  if (smsPhone) {
+    try {
+      customerId = await customerForSms(restaurantId, userId, smsPhone, customerId, smsOptIn, customerName);
+    } catch (err) {
+      if (err instanceof SmsOptedOutError) return sendError(res, 'This number asked for no SMS. Untick SMS for this order; the customer can text START to turn it back on.', undefined, 409);
+      throw err;
+    }
+  }
 
   let order: any;
   try {
@@ -980,6 +994,9 @@ export const updateOrderStatus = async (req: AuthRequest, res: ExpressResponse) 
         customerEmail: online.contactEmail,
         restaurantName: online.restaurant?.name || 'Melio',
         totalAmount: order.totalAmount,
+        restaurantId: online.restaurantId,
+        saleId: order.id,
+        customerId: (order as any).customerId ?? null,
       }).catch((err) => console.error('Order status customer notification failed:', err));
     }
   }
@@ -1470,3 +1487,49 @@ export const updateOrderChannel = async (req: AuthRequest, res: ExpressResponse)
   await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'Order', sale.id, `Order ${sale.orderNumber} channel: ${sale.channel} → ${channel}`);
   return sendResponse(res, true, 'Channel updated', seesCommission(req) ? updated : { id: updated.id, channel: updated.channel });
 };
+
+/**
+ * The customer who asked for receipts and points by SMS at the till: the
+ * chosen customer, else the one with this number, else a new one. Records
+ * their language and, separately, whether they agreed to offers. A number
+ * that asked for no SMS stays that way: only the customer can undo a STOP.
+ * Two tills entering the same new number at once still make one customer.
+ */
+class SmsOptedOutError extends Error {}
+async function customerForSms(restaurantId: string, userId: string, phone: string, chosenId: string | undefined, opt: any, typedName?: string) {
+  const language = opt.language === 'sw' ? 'sw' : 'en';
+  const marketing = opt.marketing === true;
+  const consent = marketing ? { marketingConsent: true, marketingConsentAt: new Date(), marketingConsentSource: 'POS', marketingConsentBy: userId } : {};
+  if (await isOptedOut(restaurantId, phone, chosenId)) throw new SmsOptedOutError();
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`customer-phone:${restaurantId}:${phone.slice(-9)}`}))`;
+    let id = chosenId;
+    if (!id) id = (await customersByPhone(restaurantId, phone, tx))[0];
+    if (id) {
+      const current = await tx.customer.findFirst({ where: { id, restaurantId }, select: { phone: true, marketingConsent: true, name: true } });
+      if (current) {
+        const changedPhone = kenyanPhone(current.phone) !== phone;
+        await tx.customer.update({
+          where: { id },
+          data: {
+            smsReceipts: true, language,
+            ...(changedPhone ? { phone: localPhone(phone) } : {}),
+            ...(marketing && !current.marketingConsent ? consent : {}),
+          },
+        });
+        return { id, created: false, changedPhone, previous: current.phone, name: current.name };
+      }
+    }
+    const created = await tx.customer.create({
+      data: { restaurantId, name: (typeof typedName === 'string' && typedName.trim()) || `Customer ${localPhone(phone)}`, phone: localPhone(phone), smsReceipts: true, language, ...consent },
+      select: { id: true },
+    });
+    return { id: created.id, created: true, changedPhone: false, previous: null, name: '' };
+  });
+  if (result.created) {
+    await createAuditLog(restaurantId, userId, 'CREATE', 'Customer', result.id, `Added customer ${localPhone(phone)} from the till (SMS receipts${marketing ? ' and offers' : ''})`);
+  } else {
+    await createAuditLog(restaurantId, userId, 'UPDATE', 'Customer', result.id, `Till: SMS receipts on (${language})${marketing ? ', agreed to offers' : ''}${result.changedPhone ? `, phone changed from ${result.previous || 'none'} to ${localPhone(phone)}` : ''}`);
+  }
+  return result.id;
+}

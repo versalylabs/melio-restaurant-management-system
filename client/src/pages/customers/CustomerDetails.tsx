@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Coins, Edit3, Mail, MapPin, Phone, Search, ShoppingBag, UserRound } from 'lucide-react';
+import { ArrowLeft, Coins, Edit3, Mail, MapPin, MessageSquare, Phone, Search, ShoppingBag, UserRound } from 'lucide-react';
 import { customerApi } from '../../services/api';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -108,6 +108,8 @@ export default function CustomerDetails() {
         </div>
       </Card>
 
+      <SmsCard customer={customer} onSaved={load} onError={setError} />
+
       <Card title="Order History" description="Sales linked to this customer.">
         <div className="flex flex-col md:flex-row gap-3 mb-5">
           <div className="relative flex-1">
@@ -135,5 +137,92 @@ export default function CustomerDetails() {
       {showEdit && <DialogOverlay onClose={() => setShowEdit(false)} label="Edit customer" className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"><form onSubmit={saveCustomer} className="bg-white dark:bg-[#111116] rounded-xl border border-orange-100 dark:border-gray-700 shadow-xl p-6 w-full max-w-lg space-y-4"><h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Edit Customer</h2>{(['name','phone','email','address','notes'] as const).map(k => <Input key={k} label={k[0].toUpperCase()+k.slice(1)} value={form[k]} onChange={e => setForm({...form,[k]:e.target.value})} required={k==='name'} />)}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setShowEdit(false)}>Cancel</Button><Button type="submit" loading={saving}>Save Changes</Button></div></form></DialogOverlay>}
       {showPoints && <DialogOverlay onClose={() => setShowPoints(false)} label="Loyalty points" className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"><form onSubmit={changePoints} className="bg-white dark:bg-[#111116] rounded-xl border border-orange-100 dark:border-gray-700 shadow-xl p-6 w-full max-w-md space-y-4"><h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">{pointsMode === 'redeem' ? 'Redeem Loyalty Points' : 'Add Loyalty Points'}</h2><p className="text-sm text-gray-500 dark:text-gray-400">Current balance: <strong>{customer.loyaltyBalance || 0} points</strong></p><Input label="Points" type="number" min="1" step="1" value={points} onChange={e => setPoints(e.target.value)} required /><Input label="Note" placeholder="Reason for this transaction" value={note} onChange={e => setNote(e.target.value)} /><div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setShowPoints(false)}>Cancel</Button>{pointsMode === 'adjust' && <select value={adjustDirection} onChange={e => setAdjustDirection(e.target.value as 'credit' | 'debit')} className="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-[#111116] text-gray-900 dark:text-gray-100 px-3 py-2 text-sm"><option value="credit">Add points</option><option value="debit">Remove points</option></select>}<Button type="submit" loading={saving}>{pointsMode === 'redeem' ? 'Redeem' : adjustDirection === 'credit' ? 'Add Points' : 'Remove Points'}</Button></div></form></DialogOverlay>}
     </div>
+  );
+}
+
+const SMS_KIND: Record<string, string> = { RECEIPT: 'Receipt', RESERVATION: 'Booking', TEST: 'Test' };
+const SMS_STATUS: Record<string, { label: string; tone: string }> = {
+  SENT: { label: 'Sent', tone: 'text-green-700 dark:text-green-400' },
+  SIMULATED: { label: 'Test mode, not sent', tone: 'text-gray-500 dark:text-gray-400' },
+  FAILED: { label: 'Failed', tone: 'text-red-600 dark:text-red-400' },
+  SKIPPED: { label: 'Not sent: opted out', tone: 'text-amber-700 dark:text-amber-400' },
+  QUEUED: { label: 'Sending', tone: 'text-gray-500' },
+};
+
+/** SMS preferences (with consent recorded separately for offers) and the messages this customer got. */
+function SmsCard({ customer, onSaved, onError }: { customer: any; onSaved: () => Promise<void> | void; onError: (m: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const optedOut = !!customer.smsOptOutAt;
+  const save = async (data: Record<string, unknown>) => {
+    setBusy(true);
+    try {
+      await customerApi.updateCustomer(customer.id, data);
+      await onSaved();
+    } catch (err: any) {
+      onError(err.response?.data?.message || 'Could not save the SMS settings');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const consentWhen = customer.marketingConsentAt ? new Date(customer.marketingConsentAt).toLocaleDateString() : null;
+  const consentHow: Record<string, string> = { POS: 'at the till', WEBSITE: 'on the website', STAFF: 'recorded by staff' };
+  return (
+    <Card title="SMS" description="Receipts and points by SMS, and whether this customer agreed to offers.">
+      {optedOut && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          <span>
+            {customer.smsOptOutSource === 'STAFF'
+              ? `Marked "no SMS" by staff on ${new Date(customer.smsOptOutAt).toLocaleDateString()}.`
+              : customer.smsOptOutSource === 'BLACKLIST'
+                ? 'The mobile network refuses SMS to this number.'
+                : `Texted STOP on ${new Date(customer.smsOptOutAt).toLocaleDateString()}. Only the customer can turn SMS back on, by texting START.`}
+            {' '}No SMS of any kind goes to this number.
+          </span>
+          {customer.smsOptOutSource === 'STAFF' && <Button size="sm" variant="secondary" disabled={busy} onClick={() => save({ smsOptOut: false })}>They asked to get SMS again</Button>}
+        </div>
+      )}
+      {!customer.phone && <p className="mb-4 text-sm text-gray-500">Add a phone number to send SMS.</p>}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <label className="flex items-start gap-3 text-sm">
+          <input type="checkbox" className="mt-1 h-4 w-4" disabled={busy || optedOut} checked={!!customer.smsReceipts} onChange={(e) => save({ smsReceipts: e.target.checked })} />
+          <span><strong className="text-gray-900 dark:text-gray-100">Receipts and points</strong><br /><span className="text-gray-500 dark:text-gray-400">A text after each paid visit.</span></span>
+        </label>
+        <label className="flex items-start gap-3 text-sm">
+          <input type="checkbox" className="mt-1 h-4 w-4" disabled={busy || optedOut} checked={!!customer.marketingConsent} onChange={(e) => save({ marketingConsent: e.target.checked })} />
+          <span><strong className="text-gray-900 dark:text-gray-100">Offers</strong><br /><span className="text-gray-500 dark:text-gray-400">{customer.marketingConsent && consentWhen ? `Agreed ${consentWhen}${customer.marketingConsentSource ? `, ${consentHow[customer.marketingConsentSource] || ''}` : ''}` : 'Only tick if the customer said yes.'}</span></span>
+        </label>
+        <label className="text-sm">
+          <span className="font-semibold text-gray-900 dark:text-gray-100">Language</span>
+          <select disabled={busy} value={customer.language || 'en'} onChange={(e) => save({ language: e.target.value })} className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-[#111116]">
+            <option value="en">English</option>
+            <option value="sw">Kiswahili</option>
+          </select>
+        </label>
+      </div>
+      {!optedOut && customer.phone && (
+        <button type="button" disabled={busy} onClick={() => save({ smsOptOut: true })} className="mt-3 text-xs font-semibold text-gray-500 underline hover:text-gray-700 dark:hover:text-gray-300">Customer asked for no SMS at all</button>
+      )}
+      <div className="mt-5">
+        <p className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-gray-100"><MessageSquare className="h-4 w-4" aria-hidden="true" />Messages</p>
+        {!customer.smsMessages?.length ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400">No SMS yet.</p>
+        ) : (
+          <ul className="divide-y divide-gray-100 rounded-lg border border-gray-100 dark:divide-gray-800 dark:border-gray-800">
+            {customer.smsMessages.map((m: any) => {
+              const st = SMS_STATUS[m.status] || { label: m.status, tone: 'text-gray-500' };
+              return (
+                <li key={m.id} className="p-3 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-gray-700 dark:text-gray-300">{SMS_KIND[m.kind] || (m.kind.startsWith('ORDER_') ? 'Order update' : m.kind)} · {new Date(m.createdAt).toLocaleString()}</span>
+                    <span className={st.tone} title={m.error || undefined}>{st.label}</span>
+                  </div>
+                  <p className="mt-1 text-gray-700 dark:text-gray-300">{m.body}</p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </Card>
   );
 }

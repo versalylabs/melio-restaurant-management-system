@@ -48,7 +48,7 @@ export default function CustomerAccount() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
 
   // Profile Form state
-  const [profileForm, setProfileForm] = useState({ name: '', phone: '', email: '', address: '' });
+  const [profileForm, setProfileForm] = useState({ name: '', phone: '', email: '', address: '', language: 'en' as 'en' | 'sw', smsReceipts: false, marketingConsent: false });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState(false);
   const [profileError, setProfileError] = useState('');
@@ -60,6 +60,9 @@ export default function CustomerAccount() {
         phone: customer.phone || '',
         email: customer.email || '',
         address: customer.address || '',
+        language: customer.language === 'sw' ? 'sw' : 'en',
+        smsReceipts: !!customer.smsReceipts && !customer.smsOptOutAt,
+        marketingConsent: !!customer.marketingConsent && !customer.smsOptOutAt,
       });
     }
   }, [customer]);
@@ -111,7 +114,15 @@ export default function CustomerAccount() {
     setProfileError('');
 
     try {
-      await updateProfile(profileForm);
+      // Only send SMS choices the customer actually changed.
+      const { language, smsReceipts, marketingConsent, ...contact } = profileForm;
+      const was = { language: customer?.language === 'sw' ? 'sw' : 'en', smsReceipts: !!customer?.smsReceipts && !customer?.smsOptOutAt, marketingConsent: !!customer?.marketingConsent && !customer?.smsOptOutAt };
+      await updateProfile({
+        ...contact,
+        ...(language !== was.language ? { language } : {}),
+        ...(smsReceipts !== was.smsReceipts ? { smsReceipts } : {}),
+        ...(marketingConsent !== was.marketingConsent ? { marketingConsent } : {}),
+      });
       setProfileSuccess(true);
       setTimeout(() => setProfileSuccess(false), 3000);
     } catch (err: any) {
@@ -685,6 +696,30 @@ export default function CustomerAccount() {
                   />
                 </div>
               </div>
+
+              <fieldset className="rounded-xl border border-slate-200 p-4 dark:border-zinc-800">
+                <legend className="px-1 text-xs font-semibold text-slate-700 dark:text-gray-300">Text messages</legend>
+                {customer?.smsOptOutAt && (
+                  <p className="mb-3 text-xs text-amber-700 dark:text-amber-400">You replied STOP, so we send you no SMS. Tick a box below to start again.</p>
+                )}
+                <label className="flex items-start gap-3 text-sm text-slate-700 dark:text-gray-300">
+                  <input type="checkbox" className="mt-0.5 h-4 w-4" checked={profileForm.smsReceipts} onChange={(e) => setProfileForm({ ...profileForm, smsReceipts: e.target.checked })} />
+                  <span>Send my receipt and points balance by SMS after each visit</span>
+                </label>
+                <label className="mt-3 flex items-start gap-3 text-sm text-slate-700 dark:text-gray-300">
+                  <input type="checkbox" className="mt-0.5 h-4 w-4" checked={profileForm.marketingConsent} onChange={(e) => setProfileForm({ ...profileForm, marketingConsent: e.target.checked })} />
+                  <span>Send me offers by SMS. You can reply STOP at any time.</span>
+                </label>
+                <div className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-gray-300" role="group" aria-label="SMS language">
+                  <span>Language:</span>
+                  {([['en', 'English'], ['sw', 'Kiswahili']] as const).map(([v, label]) => (
+                    <button key={v} type="button" aria-pressed={profileForm.language === v} onClick={() => setProfileForm({ ...profileForm, language: v })}
+                      className={`rounded-lg border px-3 py-1 text-xs font-semibold ${profileForm.language === v ? 'border-orange-500 bg-orange-500 text-white' : 'border-slate-200 dark:border-zinc-700'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
 
               <button
                 type="submit"

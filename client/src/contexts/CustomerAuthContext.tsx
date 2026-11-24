@@ -10,6 +10,10 @@ export type CustomerProfile = {
   loyaltyBalance: number;
   loyaltyPoints?: number;
   favoriteItemIds?: string[];
+  language?: 'en' | 'sw';
+  smsReceipts?: boolean;
+  marketingConsent?: boolean;
+  smsOptOutAt?: string | null;
 };
 
 interface CustomerAuthContextType {

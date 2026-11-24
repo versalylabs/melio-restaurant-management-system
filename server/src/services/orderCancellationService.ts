@@ -134,6 +134,9 @@ export async function cancelOrderSafely(params: {
       customerEmail: online.contactEmail,
       restaurantName: online.restaurant?.name || 'Melio',
       totalAmount: sale.totalAmount,
+      restaurantId: online.restaurantId,
+      saleId: sale.id,
+      customerId: (sale as any).customerId ?? null,
     }).catch((err) => console.error('Cancellation customer notification failed:', err));
   }
   return sale;

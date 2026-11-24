@@ -164,6 +164,9 @@ export async function settleOnlinePayment(input: SettleOnlinePaymentInput) {
         customerEmail: online.contactEmail,
         restaurantName: online.restaurant.name,
         totalAmount: input.amount,
+        restaurantId: online.restaurantId,
+        saleId: online.saleId,
+        customerId: (online.sale as any).customerId ?? null,
       });
     } catch (err) {
       console.error('[Payments] Customer notification failed after successful payment:', err);

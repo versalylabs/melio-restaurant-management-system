@@ -344,6 +344,9 @@ export const createPublicOrder = async (req: Request, res: Response) => {
     customerEmail: contactEmail || null,
     restaurantName: restaurantRecord?.name || 'Melio',
     totalAmount: result.totalAmount,
+    restaurantId,
+    saleId: result.id,
+    customerId: (result as any).customerId ?? null,
   }).catch((err) => console.error('Online order customer notification failed:', err));
 
   return sendResponse(res, true, 'Online order placed successfully', { orderId: result.id, orderNumber: result.orderNumber, trackingToken, totalAmount: result.totalAmount, paymentState: paymentMethod === 'CASH' ? 'PAY_AT_PICKUP' : 'PENDING', trackingUrl: `/online-order/${trackingToken}` }, 201);
@@ -554,6 +557,8 @@ export const createPublicReservation = async (req: Request, res: Response) => {
     reservationTime: timeStr,
     guestCount: partySize,
     status: 'REQUESTED',
+    restaurantId: effectiveRestaurantId,
+    customerId: (reservation as any).customerId ?? null,
   });
 
   return sendResponse(

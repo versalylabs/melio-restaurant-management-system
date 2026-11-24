@@ -416,6 +416,9 @@ async function syncSaleStatusFromKitchen(orderId: string, restaurantId: string, 
       customerPhone: online.contactPhone,
       customerEmail: online.contactEmail,
       restaurantName: online.restaurant?.name || 'Melio',
+      restaurantId: online.restaurantId,
+      saleId: sale.id,
+      customerId: (sale as any).customerId ?? null,
     });
   }
 
@@ -485,6 +488,9 @@ export const updateKitchenTicketStatus = async (req: AuthRequest, res: ExpressRe
             customerPhone: online.contactPhone,
             customerEmail: online.contactEmail,
             restaurantName: online.restaurant?.name || 'Melio',
+            restaurantId: online.restaurantId,
+            saleId: online.saleId,
+            customerId: (sale as any).customerId ?? null,
           });
         }
       } catch (err) {

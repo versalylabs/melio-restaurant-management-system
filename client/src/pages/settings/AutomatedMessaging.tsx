@@ -11,7 +11,7 @@ import {
   X,
   Info,
 } from 'lucide-react';
-import { automatedMessagingApi } from '../../services/api';
+import { automatedMessagingApi, customerApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 import DialogOverlay from '../../components/ui/DialogOverlay';
 
@@ -186,6 +186,8 @@ export default function AutomatedMessaging() {
           <span>Reload Templates</span>
         </button>
       </div>
+
+      <SmsStatusPanel />
 
       {/* Status banner */}
       {statusMessage && (
@@ -516,5 +518,63 @@ export default function AutomatedMessaging() {
         </DialogOverlay>
       )}
     </div>
+  );
+}
+
+type SmsStatus = {
+  mode: 'LIVE' | 'SANDBOX' | 'TEST';
+  senderId: string | null;
+  last30Days: Record<string, number>;
+  customersWithReceipts: number;
+  customersAgreedToOffers: number;
+  recent: Array<{ id: string; phone: string; kind: string; body: string; status: string; error: string | null; createdAt: string; customer: { id: string; name: string } | null }>;
+};
+
+/** Whether SMS really reaches customers, and the latest messages. */
+function SmsStatusPanel() {
+  const [status, setStatus] = useState<SmsStatus | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    customerApi.getSmsStatus().then((r) => setStatus(r.data.data)).catch(() => setStatus(null));
+  }, []);
+  if (!status) return null;
+  const live = status.mode === 'LIVE';
+  const sent = status.last30Days.SENT || 0;
+  const failed = status.last30Days.FAILED || 0;
+  const simulated = status.last30Days.SIMULATED || 0;
+  return (
+    <section className={`rounded-2xl border p-4 text-sm ${live ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="font-semibold text-gray-900 dark:text-gray-100">
+            {live ? `SMS is on: sending through Africa's Talking${status.senderId ? ` as ${status.senderId}` : ''}` : status.mode === 'SANDBOX' ? "SMS is in Africa's Talking sandbox: messages go to the simulator, not to phones" : 'SMS is in test mode: messages are logged here, not sent'}
+          </p>
+          <p className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+            {live
+              ? `Last 30 days: ${sent} sent${failed ? `, ${failed} failed` : ''}.`
+              : "To send real SMS, add your Africa's Talking username, API key and sender name (AT_USERNAME, AT_API_KEY, AT_SENDER_ID) to the server settings."}
+            {' '}{status.customersWithReceipts} customers get receipts by SMS; {status.customersAgreedToOffers} agreed to offers.
+            {!live && simulated ? ` ${simulated} messages would have gone out in the last 30 days.` : ''}
+          </p>
+        </div>
+        <button type="button" onClick={() => setOpen(!open)} className="shrink-0 text-xs font-semibold text-orange-600 underline dark:text-orange-400">{open ? 'Hide messages' : 'Latest messages'}</button>
+      </div>
+      {open && (
+        <ul className="mt-3 max-h-80 divide-y divide-gray-200 overflow-y-auto rounded-xl border border-gray-200 bg-white dark:divide-gray-800 dark:border-gray-800 dark:bg-[#111116]">
+          {status.recent.length === 0 && <li className="p-3 text-xs text-gray-500">No SMS yet.</li>}
+          {status.recent.map((m) => (
+            <li key={m.id} className="p-3">
+              <div className="flex flex-wrap justify-between gap-2 text-xs text-gray-500">
+                <span>{m.customer?.name || m.phone} · {new Date(m.createdAt).toLocaleString()}</span>
+                <span className={m.status === 'SENT' ? 'text-emerald-600' : m.status === 'FAILED' ? 'text-red-600' : ''} title={m.error || undefined}>
+                  {{ SENT: 'Sent', SIMULATED: 'Test mode', FAILED: 'Failed', SKIPPED: 'Opted out', QUEUED: 'Sending' }[m.status] || m.status}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-gray-800 dark:text-gray-200">{m.body}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
