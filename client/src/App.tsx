@@ -8,6 +8,7 @@ import { getDefaultRoute, hasPermission, permissionForPath } from './lib/access'
 const Login = lazy(() => import('./pages/auth/Login'));
 const Dashboard = lazy(() => import('./pages/dashboard/Dashboard'));
 const Settings = lazy(() => import('./pages/settings/Settings'));
+const Licences = lazy(() => import('./pages/licences/Licences'));
 const Users = lazy(() => import('./pages/users/Users'));
 const Roles = lazy(() => import('./pages/roles/Roles'));
 const AuditLog = lazy(() => import('./pages/audit-log/AuditLog'));
@@ -143,6 +144,7 @@ const ROUTE_TITLES: Record<string, string> = {
   '/users': 'Staff & Users — Melio',
   '/roles': 'Roles & Permissions — Melio',
   '/settings': 'Restaurant Settings — Melio',
+  '/licences': 'Licences & Permits — Melio',
   '/website-management': 'Website Management — Melio',
   '/website_management': 'Website Management — Melio',
   '/notifications': 'Notifications — Melio',
@@ -220,6 +222,7 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/licences" element={<ProtectedRoute allowedRoles={['OWNER', 'ADMIN', 'MANAGER']}><Licences /></ProtectedRoute>} />
         <Route
           path="/settings"
           element={

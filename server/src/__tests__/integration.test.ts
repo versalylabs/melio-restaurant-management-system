@@ -1279,6 +1279,104 @@ async function run() {
     delete process.env.PAYMENT_SIMULATION;
   }
 
+  console.log('\n--- Licences and payroll hours ---');
+  {
+    const form = (fields: Record<string, string>, file?: { type: string; name: string; body: string }) => {
+      const f = new FormData();
+      for (const [k, v] of Object.entries(fields)) f.append(k, v);
+      if (file) f.append('document', new Blob([file.body], { type: file.type }), file.name);
+      return f;
+    };
+    const send = (method: string, path: string, body: FormData, token = ownerToken) =>
+      fetch(`${base}/api${path}`, { method, headers: { Authorization: `Bearer ${token}` }, body }).then(async (r) => ({ status: r.status, body: (await r.json().catch(() => null)) as any }));
+    const inDays = (d: number) => new Date(Date.now() + d * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Africa/Nairobi' });
+    const { sendLicenceReminders, resetLicenceReminderThrottle } = require('../services/licenceService');
+    let licenceId = '';
+    await test('Licences are for owners and managers; the form is checked', async () => {
+      assert.strictEqual((await call('GET', '/licences', cashierToken)).status, 403);
+      assert.strictEqual((await send('POST', '/licences', form({ expiresAt: inDays(5) }))).status, 400, 'needs a name');
+      assert.strictEqual((await send('POST', '/licences', form({ name: 'Fire', expiresAt: 'soon' }))).status, 400, 'needs a date');
+      const bad = await send('POST', '/licences', form({ name: 'Fire', expiresAt: inDays(5) }, { type: 'application/x-msdownload', name: 'x.exe', body: 'MZ' }));
+      assert.strictEqual(bad.status, 400, 'only PDFs and photos');
+    });
+    await test('A licence with its scan is listed with days left, and the scan opens for staff only', async () => {
+      const res = await send('POST', '/licences', form({ name: `IT Fire Certificate ${uid()}`, authority: 'Nairobi County', expiresAt: inDays(5) }, { type: 'application/pdf', name: 'fire.pdf', body: '%PDF-1.4 test' }));
+      assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+      licenceId = res.body.data.id;
+      const list = (await call('GET', '/licences', ownerToken)).body.data.licences;
+      const row = list.find((l: any) => l.id === licenceId);
+      assert.ok(row && row.hasDocument && row.daysLeft === 5 && row.documentData === undefined, JSON.stringify(row));
+      const doc = await fetch(`${base}/api/licences/${licenceId}/document`, { headers: { Authorization: `Bearer ${ownerToken}` } });
+      assert.strictEqual(doc.status, 200);
+      assert.strictEqual(doc.headers.get('content-type'), 'application/pdf');
+      assert.strictEqual(await doc.text(), '%PDF-1.4 test');
+      assert.strictEqual((await fetch(`${base}/api/licences/${licenceId}/document`)).status, 401);
+    });
+    await test('An owner viewing one branch can still add a licence for every branch', async () => {
+      const r = await fetch(`${base}/api/licences`, { method: 'POST', headers: { Authorization: `Bearer ${ownerToken}`, 'x-branch-id': branchId }, body: form({ name: `IT All branches ${uid()}`, expiresAt: inDays(200) }) });
+      const body: any = await r.json();
+      assert.strictEqual(r.status, 201, JSON.stringify(body));
+      assert.strictEqual((await prisma.licence.findUnique({ where: { id: body.data.id } })).branchId, null);
+      await prisma.licence.delete({ where: { id: body.data.id } });
+    });
+    await test('A branch manager cannot change or remove a licence that covers every branch', async () => {
+      const mgr = await prisma.user.findFirst({ where: { email: 'manager@example.com' } });
+      const mgrToken = generateToken(mgr.id, restaurantId, mgr.tokenVersion);
+      const all = await send('POST', '/licences', form({ name: `IT County permit ${uid()}`, expiresAt: inDays(90) }));
+      assert.strictEqual(all.status, 201, JSON.stringify(all.body));
+      assert.ok((await call('GET', '/licences', mgrToken)).body.data.licences.some((l: any) => l.id === all.body.data.id), 'they still see it');
+      assert.strictEqual((await send('PUT', `/licences/${all.body.data.id}`, form({ name: 'x', expiresAt: inDays(90) }), mgrToken)).status, 403);
+      assert.strictEqual((await call('DELETE', `/licences/${all.body.data.id}`, mgrToken)).status, 403);
+      assert.strictEqual((await prisma.licence.findUnique({ where: { id: all.body.data.id } })).branchId, null);
+      await prisma.licence.delete({ where: { id: all.body.data.id } });
+    });
+    await test('Managers are reminded once when a licence is within 7 days', async () => {
+      // Opening the list already ran the check in the background: start from "not reminded".
+      await new Promise((r) => setTimeout(r, 300));
+      await prisma.licence.update({ where: { id: licenceId }, data: { reminded7At: null, reminded30At: null } });
+      resetLicenceReminderThrottle();
+      const before = await prisma.notification.count({ where: { userId: owner.id, type: 'LICENCE_EXPIRY', referenceId: licenceId } });
+      await sendLicenceReminders(restaurantId);
+      resetLicenceReminderThrottle();
+      await sendLicenceReminders(restaurantId);
+      const after = await prisma.notification.count({ where: { userId: owner.id, type: 'LICENCE_EXPIRY', referenceId: licenceId } });
+      assert.strictEqual(after - before, 1, 'one reminder, not one per check');
+      const l = await prisma.licence.findUnique({ where: { id: licenceId } });
+      assert.ok(l.reminded7At && l.reminded30At);
+      const waiterNote = await prisma.notification.findFirst({ where: { type: 'LICENCE_EXPIRY', referenceId: licenceId, user: { role: { name: 'WAITER' } } } });
+      assert.strictEqual(waiterNote, null, 'only owners and managers');
+    });
+    await test('Renewing (a new expiry date) starts the reminders again; removing deletes it', async () => {
+      const res = await send('PUT', `/licences/${licenceId}`, form({ name: 'IT Fire Certificate renewed', expiresAt: inDays(365), removeDocument: 'true' }));
+      assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+      const l = await prisma.licence.findUnique({ where: { id: licenceId } });
+      assert.ok(!l.reminded7At && !l.reminded30At && !l.documentData, JSON.stringify({ ...l, documentData: !!l.documentData }));
+      assert.strictEqual((await call('DELETE', `/licences/${licenceId}`, ownerToken)).status, 200);
+      assert.strictEqual(await prisma.licence.count({ where: { id: licenceId } }), 0);
+    });
+    await test('Payroll hours: closed till shifts per person, with a CSV', async () => {
+      await prisma.shift.updateMany({ where: { userId: cashier.id, status: 'OPEN' }, data: { status: 'CLOSED', closedAt: new Date() } });
+      const opened = await call('POST', '/shifts', cashierToken, { openingCash: 0 });
+      const shiftId = opened.body.data?.shift?.id || opened.body.data?.id;
+      await call('POST', `/shifts/${shiftId}/close`, cashierToken, { closingCash: 0, declaredMobileMoney: 0, declaredCard: 0 });
+      // Make it a 2.5-hour shift that started three hours ago.
+      const openedAt = new Date(Date.now() - 3 * 3_600_000);
+      await prisma.shift.update({ where: { id: shiftId }, data: { openedAt, closedAt: new Date(openedAt.getTime() + 2.5 * 3_600_000) } });
+      const res = await call('GET', '/shifts/hours', ownerToken);
+      assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+      const row = res.body.data.staff.find((r: any) => r.userId === cashier.id);
+      assert.ok(row && row.hours >= 2.5 && row.days >= 1, JSON.stringify(row));
+      const csv = await fetch(`${base}/api/shifts/hours?format=csv`, { headers: { Authorization: `Bearer ${ownerToken}` } });
+      assert.ok((csv.headers.get('content-type') || '').includes('text/csv'));
+      const text = await csv.text();
+      assert.ok(text.includes('Staff member') && text.includes(row.name), text.slice(0, 200));
+      assert.strictEqual((await call('GET', '/shifts/hours', cashierToken)).status, 403);
+      const { toCsv } = require('../services/reportService');
+      assert.ok(toCsv([{ n: '=HYPERLINK("x")', v: -5 }], [{ key: 'n', label: 'N' }, { key: 'v', label: 'V' }]).includes(`"'=HYPERLINK`), 'formulas from names are made plain text');
+      assert.ok(toCsv([{ v: -5 }], [{ key: 'v', label: 'V' }]).endsWith('"-5"'), 'negative numbers stay numbers');
+    });
+  }
+
   server.close();
   await prisma.$disconnect();
   console.log(`\n========================================\nIntegration Results: ${passed} Passed, ${failed} Failed\n========================================`);

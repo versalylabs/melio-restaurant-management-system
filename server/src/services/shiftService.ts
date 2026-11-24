@@ -4,6 +4,8 @@ import { sendResponse, sendError } from '../utils/response';
 import { Response } from 'express';
 import { createAuditLog } from './auditLogService';
 import { boundedLimit } from '../utils/pagination';
+import { getRestaurantTimeZone } from '../utils/timezone';
+import { rangeDates, toCsv } from './reportService';
 
 const scope = (req: AuthRequest) => req.user!.branchId
   ? { restaurantId: req.user!.restaurantId, branchId: req.user!.branchId }
@@ -202,4 +204,53 @@ export const closeShift = async (req: AuthRequest, res: Response) => {
   );
   // Now that the count is in, the cashier sees how it compared.
   return sendResponse(res, true, 'Shift closed', { shift: { ...updated, ...summary } });
+};
+
+/**
+ * GET /shifts/hours?startDate&endDate[&format=csv]: hours each person worked
+ * on the till, for whoever runs payroll. Counts closed shifts that started in
+ * the range; open shifts are listed apart because their hours aren't final.
+ */
+export const shiftHours = async (req: AuthRequest, res: Response) => {
+  const restaurantId = req.user!.restaurantId;
+  const branchId = req.user!.branchId || (typeof req.query.branchId === 'string' && req.query.branchId ? req.query.branchId : undefined);
+  const timeZone = await getRestaurantTimeZone(restaurantId);
+  const { start, end } = rangeDates(typeof req.query.startDate === 'string' ? req.query.startDate : undefined, typeof req.query.endDate === 'string' ? req.query.endDate : undefined, timeZone);
+  const shifts = await prisma.shift.findMany({
+    where: { restaurantId, ...(branchId ? { branchId } : {}), openedAt: { gte: start, lte: end } },
+    select: { userId: true, status: true, openedAt: true, closedAt: true },
+  });
+  const users = await prisma.user.findMany({
+    where: { restaurantId, id: { in: [...new Set(shifts.map((s) => s.userId))] } },
+    select: { id: true, firstName: true, lastName: true, role: { select: { name: true } } },
+  });
+  const rows = new Map<string, { name: string; role: string; shifts: number; days: Set<string>; hours: number; openShifts: number }>();
+  for (const s of shifts) {
+    const u = users.find((x) => x.id === s.userId);
+    const r = rows.get(s.userId) || { name: u ? `${u.firstName} ${u.lastName}`.trim() : 'Former staff member', role: u?.role?.name || '', shifts: 0, days: new Set<string>(), hours: 0, openShifts: 0 };
+    if (s.status === 'OPEN' || !s.closedAt) r.openShifts += 1;
+    else {
+      r.shifts += 1;
+      r.hours += (s.closedAt.getTime() - s.openedAt.getTime()) / 3_600_000;
+      r.days.add(s.openedAt.toLocaleDateString('en-CA', { timeZone }));
+    }
+    rows.set(s.userId, r);
+  }
+  const staff = [...rows.entries()]
+    .map(([userId, r]) => ({ userId, name: r.name, role: r.role, shifts: r.shifts, days: r.days.size, hours: Math.round(r.hours * 100) / 100, openShifts: r.openShifts }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  if (req.query.format === 'csv') {
+    const csv = toCsv(staff, [
+      { key: 'name', label: 'Staff member' }, { key: 'role', label: 'Role' }, { key: 'days', label: 'Days worked' },
+      { key: 'shifts', label: 'Shifts closed' }, { key: 'hours', label: 'Hours' }, { key: 'openShifts', label: 'Shifts still open (not counted)' },
+    ]);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="shift-hours-${start.toLocaleDateString('en-CA', { timeZone })}-to-${end.toLocaleDateString('en-CA', { timeZone })}.csv"`);
+    return res.send(`﻿${csv}`);
+  }
+  return sendResponse(res, true, 'Shift hours', {
+    range: { start, end, timeZone },
+    staff,
+    totals: { hours: Math.round(staff.reduce((t, s) => t + s.hours, 0) * 100) / 100, shifts: staff.reduce((t, s) => t + s.shifts, 0) },
+  });
 };

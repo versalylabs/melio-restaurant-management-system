@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth';
 import { authorize } from '../middleware/auth';
-import { getShifts, getCurrentShift, openShift, closeShift } from '../services/shiftService';
+import { getShifts, getCurrentShift, openShift, closeShift, shiftHours } from '../services/shiftService';
 import { safeRouter } from '../utils/safeRouter';
 const router=safeRouter(); router.use(authenticate);
 router.get('/', authorize('OWNER','ADMIN','MANAGER','CASHIER'), getShifts);
+router.get('/hours', authorize('OWNER','ADMIN','MANAGER'), shiftHours);
 router.get('/current', authorize('OWNER','ADMIN','MANAGER','CASHIER'), getCurrentShift);
 router.post('/', authorize('OWNER','ADMIN','MANAGER','CASHIER'), openShift);
 router.post('/:id/close', authorize('OWNER','ADMIN','MANAGER','CASHIER'), closeShift);

@@ -505,6 +505,16 @@ export const shiftApi = {
   getCurrent: () => cachedGet('/shifts/current'),
   open: (data: any) => api.post('/shifts', data),
   close: (id: string, data: any) => api.post(`/shifts/${id}/close`, data),
+  getHours: (params: { startDate: string; endDate: string }) => api.get('/shifts/hours', { params }),
+  exportHours: (params: { startDate: string; endDate: string }) => api.get('/shifts/hours', { params: { ...params, format: 'csv' }, responseType: 'blob' }),
+};
+
+export const licenceApi = {
+  list: () => api.get('/licences'),
+  create: (data: FormData) => api.post('/licences', data, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  update: (id: string, data: FormData) => api.put(`/licences/${id}`, data, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  remove: (id: string) => api.delete(`/licences/${id}`),
+  document: (id: string) => api.get(`/licences/${id}/document`, { responseType: 'blob' }),
 };
 
 export const expenseApi = {

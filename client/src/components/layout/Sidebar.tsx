@@ -71,6 +71,7 @@ const navigation: NavItem[] = [
     { title: 'Roles', href: '/roles' },
     { title: 'Automated Messaging', href: '/automated-messaging' },
     { title: 'Settings', href: '/settings' },
+    { title: 'Licences & Permits', href: '/licences' },
     { title: 'Website Management', href: '/website-management' },
     { title: 'Audit Log', href: '/audit-log' },
   ]},

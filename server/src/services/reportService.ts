@@ -157,6 +157,7 @@ export async function buildSalesReport(restaurantId: string, options: { startDat
 }
 
 export function toCsv(rows: any[], columns: Array<{ key: string; label: string }>) {
-  const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  // Text starting with = + - @ would run as a formula in Excel: make it plain text.
+  const esc = (v: any) => `"${(typeof v === 'string' && /^[=+\-@\t\r]/.test(v) ? `'${v}` : String(v ?? '')).replace(/"/g, '""')}"`;
   return [columns.map(c => esc(c.label)).join(','), ...rows.map(row => columns.map(c => esc(row[c.key])).join(','))].join('\n');
 }

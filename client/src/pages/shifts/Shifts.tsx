@@ -6,6 +6,8 @@ import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import { shiftApi } from '../../services/api';
+import ShiftHours from './ShiftHours';
+import { useAuth } from '../../contexts/AuthContext';
 
 const money = (n: number | null | undefined) =>
   `KES ${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -18,6 +20,7 @@ function Difference({ value }: { value: number | null | undefined }) {
 }
 
 export default function Shifts() {
+  const { user: me } = useAuth();
   const [shifts, setShifts] = useState<any[]>([]);
   const [current, setCurrent] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -229,6 +232,7 @@ export default function Shifts() {
           </div>
         </Modal>
       )}
+      {['OWNER', 'ADMIN', 'MANAGER'].includes(me?.roleName || '') && <ShiftHours />}
     </div>
   );
 }
