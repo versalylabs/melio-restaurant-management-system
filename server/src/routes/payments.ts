@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import multer from 'multer';
+import { checkStatement, parseStatement } from '../services/mpesaStatementService';
 import prisma from '../config/database';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
@@ -93,6 +95,32 @@ router.post('/mpesa/:checkoutRequestId/simulate', authorize(...ORDER_PAYMENT_VIE
  * M-Pesa to check: payments taken while M-Pesa was down, and prompts whose
  * answer never came (asked again here first).
  */
+/**
+ * POST /payments/mpesa-statement (managers): upload the till's M-Pesa statement
+ * (CSV) to check it against the payments in Melio. Confirms "M-Pesa to check"
+ * payments it proves; lists money with nothing recorded, and codes recorded in
+ * Melio that the statement doesn't have.
+ */
+const statementUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024, files: 1 } }).single('statement');
+router.post('/mpesa-statement', authorize('OWNER', 'ADMIN', 'MANAGER'), (req, res, next) => statementUpload(req, res, (err: any) => (err ? sendError(res, 'Upload the statement as a CSV file under 4 MB') : next())), async (req: AuthRequest, res) => {
+  if (!req.file) return sendError(res, 'Choose the statement file');
+  // A statement is one till's: compare it with that branch only.
+  let branchId = req.user!.branchId;
+  if (!branchId) {
+    const branches = await prisma.branch.findMany({ where: { restaurantId: req.user!.restaurantId, status: 'ACTIVE' }, select: { id: true }, take: 2 });
+    if (branches.length === 1) branchId = branches[0].id;
+  }
+  if (!branchId) return sendError(res, 'Choose the branch whose till statement this is (top bar), then upload it again');
+  const buf = req.file.buffer;
+  // Excel's "Unicode text" saves as UTF-16.
+  const text = (buf[0] === 0xff && buf[1] === 0xfe) || buf.subarray(0, 200).includes(0) ? buf.toString('utf16le') : buf.toString('utf8');
+  const parsed = parseStatement(text);
+  if ('error' in parsed) return sendError(res, parsed.error);
+  const result = await checkStatement(req.user!.restaurantId, branchId, parsed, req.user!.id);
+  await createAuditLog(req.user!.restaurantId, req.user!.id, 'UPDATE', 'Payment', 'mpesa-statement', `Checked an M-Pesa statement: ${result.summary.lines} payments received, ${result.summary.matched} matched, ${result.summary.confirmedNow} confirmed, ${result.summary.notInMelio} not in Melio, ${result.summary.missingFromStatement} codes not on the statement`);
+  return sendResponse(res, true, 'Statement checked', result);
+});
+
 router.get('/mpesa-checks', authorize(...PAYMENT_ROLES), async (req: AuthRequest, res) => {
   const restaurantId = req.user!.restaurantId;
   const branchId = req.user!.branchId || (typeof req.query.branchId === 'string' && req.query.branchId) || null;
