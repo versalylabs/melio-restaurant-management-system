@@ -3,6 +3,7 @@ import multer from 'multer';
 import { checkStatement, parseStatement } from '../services/mpesaStatementService';
 import { incomingTillPayments, registerTill, simulateTillPayment, SIMULATED_BILL_REF } from '../services/tillService';
 import prisma from '../config/database';
+import { etimsReceiptInfo, queueEtimsCredit, signPendingEtims, signSaleNow } from '../services/etimsService';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { createAuditLog } from '../services/auditLogService';
@@ -456,6 +457,8 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
       notifyRestaurantStaff(req.user!.restaurantId, result.branchId, 'MPESA_TO_CHECK', 'M-Pesa to check', `KES ${requested.toLocaleString()} for order ${result.orderNumber} was recorded while M-Pesa was down. Check it against the till once M-Pesa is back.`, 'Payment', result.payment.id).catch(() => undefined);
     }
     await createAuditLog(req.user!.restaurantId, req.user!.id, 'CREATE', 'Payment', result.payment.id, `Recorded ${method} payment of KES ${requested.toFixed(2)} for ${result.orderNumber}`);
+    // A bill just paid in full has a receipt waiting for KRA (when eTIMS is set up).
+    if (result.receipt) afterResponse(signPendingEtims(req.user!.restaurantId, result.branchId, 3));
     return sendResponse(res, true, 'Payment recorded', result, 201);
   } catch (e: any) {
     if (e instanceof PaymentInputError) return sendError(res, e.message, undefined, e.statusCode);
@@ -504,10 +507,15 @@ router.post('/:id/refund', authorize(...REFUND_ROLES), async (req: AuthRequest, 
       const creditNote = payment.status === 'COMPLETED' && sale?.status === 'COMPLETED'
         ? await issueCreditNote(tx, { restaurantId: payment.restaurantId, branchId: payment.branchId, saleId: payment.saleId, paymentId: payment.id, amount: payment.amount, reason, createdBy: req.user!.id })
         : null;
+      // Refunded before the bill was closed, but the bill already went to KRA: KRA still needs a credit note.
+      if (!creditNote && payment.status === 'COMPLETED') {
+        await queueEtimsCredit(tx, { restaurantId: payment.restaurantId, branchId: payment.branchId, saleId: payment.saleId, amount: payment.amount, key: `P:${payment.id}` });
+      }
       const state = await syncPaymentState(tx, payment.saleId);
       return { paymentId: payment.id, creditNote: creditNote ? { number: creditNote.number, amount: creditNote.amount, vatAmount: creditNote.vatAmount } : null, ...state };
     });
     await createAuditLog(req.user!.restaurantId, req.user!.id, 'REFUND', 'Payment', req.params.id, `Refunded payment, approved by ${approver.name}: ${reason}`);
+    afterResponse(signPendingEtims(req.user!.restaurantId, null, 3));
     return sendResponse(res, true, 'Payment refunded', result);
   } catch (e: any) {
     if (e?.message === 'PAYMENT_NOT_FOUND') return sendError(res, 'Payment not found', undefined, 404);
@@ -532,7 +540,7 @@ router.get('/orders/:orderId/receipt', authorize(...ORDER_PAYMENT_VIEW_ROLES), a
         select: { name: true, legalName: true, kraPin: true, vatRegistered: true, taxRate: true },
       });
       const creditNotes = await tx.creditNote.findMany({ where: { saleId: sale.id }, select: { number: true, amount: true, createdAt: true }, orderBy: { createdAt: 'asc' } });
-      // What a receipt may say about tax. Never "tax invoice" or eTIMS: Melio is not KRA-certified.
+      // What a receipt may say about tax. KRA eTIMS details are added separately once KRA has signed it.
       const tax = {
         businessName: business?.legalName || business?.name,
         kraPin: business?.kraPin || null,
@@ -544,7 +552,9 @@ router.get('/orders/:orderId/receipt', authorize(...ORDER_PAYMENT_VIEW_ROLES), a
       };
       return { sale, receipt: updatedReceipt, tax, creditNotes };
     });
-    return sendResponse(res, true, 'Receipt retrieved', result);
+    // A receipt being printed gets KRA's signature first, if it is still waiting (short wait).
+    await signSaleNow(result.sale.id);
+    return sendResponse(res, true, 'Receipt retrieved', { ...result, etims: await etimsReceiptInfo(result.sale.id) });
   } catch (e: any) {
     if (e?.message === 'ORDER_NOT_FOUND') return sendError(res, 'Order not found', undefined, 404);
     if (e?.message === 'ORDER_NOT_PAID') return sendError(res, 'A receipt is available only after the order is fully paid');

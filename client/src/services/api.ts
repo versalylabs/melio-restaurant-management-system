@@ -516,6 +516,13 @@ export const shiftApi = {
   exportHours: (params: { startDate: string; endDate: string }) => api.get('/shifts/hours', { params: { ...params, format: 'csv' }, responseType: 'blob' }),
 };
 
+/** KRA eTIMS: branch devices and receipts KRA hasn't signed yet. */
+export const etimsApi = {
+  status: () => api.get('/etims'),
+  setUpDevice: (data: { branchId: string; bhfId: string; serialNumber: string; itemClassCode: string }) => api.post('/etims/devices', data),
+  retry: (id?: string) => api.post('/etims/retry', id ? { id } : {}),
+};
+
 export const licenceApi = {
   list: () => api.get('/licences'),
   create: (data: FormData) => api.post('/licences', data, { headers: { 'Content-Type': 'multipart/form-data' } }),

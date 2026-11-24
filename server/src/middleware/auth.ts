@@ -38,7 +38,7 @@ export const permissionForPath = (rawPath: string, rawMethod: string): string | 
   if (is('/payments')) return viewOrManage(method, 'payments.view', 'payments.manage');
   if (is('/shifts/hours')) return 'reports.view';
   if (is('/shifts')) return viewOrManage(method, 'shifts.view', 'shifts.manage');
-  if (is('/licences')) return 'settings.manage';
+  if (is('/licences') || is('/etims')) return 'settings.manage';
   if (is('/expenses')) return viewOrManage(method, 'expenses.view', 'expenses.manage');
   if (is('/inventory/purchase-orders') || is('/purchases')) return method === 'GET' ? 'inventory.view' : 'purchases.manage';
   if (is('/inventory')) return viewOrManage(method, 'inventory.view', 'inventory.manage');

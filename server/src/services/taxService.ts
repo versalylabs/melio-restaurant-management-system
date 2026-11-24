@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { queueEtimsCredit } from './etimsService';
 import prisma from '../config/database';
 import { getRestaurantTimeZone, localDayRange, zonedParts } from '../utils/timezone';
 
@@ -22,7 +23,7 @@ export async function issueCreditNote(
     INSERT INTO "credit_note_counters" ("restaurantId", "lastNumber") VALUES (${input.restaurantId}, 1)
     ON CONFLICT ("restaurantId") DO UPDATE SET "lastNumber" = "credit_note_counters"."lastNumber" + 1
     RETURNING "lastNumber"`;
-  return tx.creditNote.create({
+  const note = await tx.creditNote.create({
     data: {
       restaurantId: input.restaurantId,
       branchId: input.branchId,
@@ -35,6 +36,8 @@ export async function issueCreditNote(
       createdBy: input.createdBy,
     },
   });
+  await queueEtimsCredit(tx, { restaurantId: note.restaurantId, branchId: note.branchId, saleId: note.saleId, amount: note.amount, key: `C:${note.id}`, reference: note.number, creditNoteId: note.id });
+  return note;
 }
 
 /** "2026-11" → first and last day of that month in the restaurant's time zone. */
