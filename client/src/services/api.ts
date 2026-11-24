@@ -243,6 +243,9 @@ export const tableApi = {
   updateTableStatus: (id: string, data: any) => api.put(`/tables/${id}/status`, data),
   deleteTable: (id: string) => api.delete(`/tables/${id}`),
   getFloorLayout: (params?: any) => cachedGet('/tables/floor', { params }),
+  /** The service board: tables with their live orders, bills and bookings. Never cached. */
+  getLiveFloor: (branchId: string) => api.get('/tables/live', { params: { branchId } }),
+  serviceAction: (id: string, action: 'MARK_CLEAN' | 'SEAT' | 'CLEAR') => api.post(`/tables/${id}/service`, { action }),
   createTableCombination: (data: any) => api.post('/table-combinations', data),
   getTableCombinations: (params?: any) => cachedGet('/table-combinations', { params }),
   updateTableCombination: (id: string, data: any) => api.put(`/table-combinations/${id}`, data),
@@ -255,6 +258,7 @@ export const orderApi = {
   createOrder: (data: any) => api.post('/orders', data),
   updateOrder: (id: string, data: any) => api.patch(`/orders/${id}`, data),
   updateChannel: (id: string, channel: string) => api.patch(`/orders/${id}/channel`, { channel }),
+  moveTable: (id: string, toTableId: string, wholeTable = true) => api.post(`/orders/${id}/move-table`, { toTableId, wholeTable }),
   holdOrder: (id: string) => api.post(`/orders/${id}/hold`),
   resumeOrder: (id: string) => api.post(`/orders/${id}/resume`),
   submitOrder: (id: string) => api.post(`/orders/${id}/submit`),
@@ -264,7 +268,7 @@ export const orderApi = {
   getPosStaff: () => api.get('/orders/pos/staff'),
   updateOrderStatus: (id: string, status: string) => api.patch(`/orders/${id}/status`, { status }),
   getPosMenu: () => cachedGet('/orders/pos/menu'),
-  getPosTables: () => cachedGet('/orders/pos/tables'),
+  getPosTables: (params?: { branchId?: string }) => cachedGet('/orders/pos/tables', { params }),
   syncOfflineOrders: (data: any) => api.post('/orders/sync-offline', data),
 };
 

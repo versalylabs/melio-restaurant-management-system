@@ -3,6 +3,8 @@ import { AuthRequest } from '../middleware/auth';
 import { sendResponse, sendError } from '../utils/response';
 import { Response as ExpressResponse } from 'express';
 import { createAuditLog } from './auditLogService';
+import { lockTables, SEATED_ORDER_STATUSES, syncTableStatus } from './tableFloorService';
+import { realtimeService } from './realtimeService';
 
 export const getTables = async (req: AuthRequest, res: ExpressResponse) => {
   const restaurantId = req.user!.restaurantId;
@@ -220,14 +222,13 @@ export const updateTable = async (req: AuthRequest, res: ExpressResponse) => {
       capacity,
       shape,
       branchId: branchId || existing.branchId,
-      sectionId: sectionId || null,
+      sectionId: sectionId === undefined ? undefined : sectionId || null,
       positionX,
       positionY,
       width,
       height,
       rotation,
       displayOrder,
-      status,
     },
     include: {
       branch: { select: { id: true, name: true } },
@@ -259,7 +260,8 @@ export const updateTablePosition = async (req: AuthRequest, res: ExpressResponse
 
   const table = await prisma.table.update({
     where: { id },
-    data: { positionX, positionY, width, height, rotation },
+    // Keep updatedAt: the board times "seated" and "needs cleaning" from it.
+    data: { positionX, positionY, width, height, rotation, updatedAt: existing.updatedAt },
   });
 
   await createAuditLog(
@@ -279,15 +281,29 @@ export const updateTableStatus = async (req: AuthRequest, res: ExpressResponse) 
   const { status } = req.body;
   const restaurantId = req.user!.restaurantId;
 
-  const existing = await prisma.table.findFirst({ where: { id, restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) } });
+  const existing = await prisma.table.findFirst({ where: { id, restaurantId, status: { not: 'INACTIVE' }, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) } });
   if (!existing) {
     return sendError(res, 'Table not found', undefined, 404);
   }
-
-  const table = await prisma.table.update({
-    where: { id },
-    data: { status },
+  if (!['AVAILABLE', 'RESERVED', 'CLEANING', 'OUT_OF_SERVICE'].includes(status)) {
+    return sendError(res, 'Choose available, reserved, cleaning or out of service');
+  }
+  const result = await prisma.$transaction(async (tx) => {
+    await lockTables(tx, [id]);
+    const current = await tx.table.findUnique({ where: { id }, select: { status: true } });
+    const openOrders = await tx.sale.count({ where: { tableId: id, status: { in: SEATED_ORDER_STATUSES } } });
+    // Back in service with guests still on the bill: it becomes occupied again.
+    const leavingOutOfService = current?.status === 'OUT_OF_SERVICE' && status === 'AVAILABLE';
+    if (openOrders > 0 && status !== 'OUT_OF_SERVICE' && !leavingOutOfService) return null;
+    await tx.table.update({ where: { id }, data: { status } });
+    if (leavingOutOfService) await syncTableStatus(tx, id);
+    return tx.table.findUnique({ where: { id } });
   });
+  if (!result) {
+    return sendError(res, `Table ${existing.tableNumber} has an open order. Close or move it first.`, undefined, 409);
+  }
+  const table = result;
+  realtimeService.broadcast(`orders:${existing.branchId}`, 'table_updated', { tableId: id });
 
   await createAuditLog(
     restaurantId,
@@ -308,10 +324,6 @@ export const deleteTable = async (req: AuthRequest, res: ExpressResponse) => {
   const existing = await prisma.table.findFirst({ where: { id, restaurantId, ...(req.user!.branchId ? { branchId: req.user!.branchId } : {}) } });
   if (!existing) {
     return sendError(res, 'Table not found', undefined, 404);
-  }
-
-  if (existing.status === 'OCCUPIED') {
-    return sendError(res, 'Cannot deactivate an occupied table', undefined, 400);
   }
 
   const activeOrdersCount = await prisma.sale.count({
@@ -347,8 +359,9 @@ export const getFloorLayout = async (req: AuthRequest, res: ExpressResponse) => 
   const { branchId } = req.query;
 
   const where: any = { restaurantId, status: { not: 'INACTIVE' } };
-  if (branchId) {
-    where.branchId = branchId as string;
+  const scopedBranch = req.user!.branchId || (typeof branchId === 'string' ? branchId : '');
+  if (scopedBranch) {
+    where.branchId = scopedBranch;
   }
 
   const tables = await prisma.table.findMany({
@@ -361,7 +374,7 @@ export const getFloorLayout = async (req: AuthRequest, res: ExpressResponse) => 
   });
 
   const sections = await prisma.section.findMany({
-    where: { restaurantId, status: 'ACTIVE', ...(branchId ? { branchId: branchId as string } : {}) },
+    where: { restaurantId, status: 'ACTIVE', ...(scopedBranch ? { branchId: scopedBranch } : {}) },
     include: {
       _count: { select: { tables: true } },
     },

@@ -19,6 +19,7 @@ import { updateOrderChannel } from '../services/orderService';
 import prisma from '../config/database';
 import { sendResponse } from '../utils/response';
 import { AuthRequest } from '../middleware/auth';
+import { moveOrderTable } from '../services/tableFloorService';
 
 const router = safeRouter();
 
@@ -52,6 +53,7 @@ router.post('/:id/hold', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAIT
 router.post('/:id/resume', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), resumeOrderController);
 router.post('/:id/submit', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), submitOrderController);
 router.patch('/:id/channel', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), updateOrderChannel);
+router.post('/:id/move-table', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), moveOrderTable);
 router.post('/:id/items/:itemId/void', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), voidOrderItem);
 router.post('/:id/cancel', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER'), cancelOrderController);
 router.patch('/:id/status', authorize('OWNER', 'ADMIN', 'MANAGER', 'CASHIER', 'WAITER', 'DELIVERY'), updateOrderStatusController);

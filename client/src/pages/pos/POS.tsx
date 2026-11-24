@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { confirmDialog } from '../../lib/dialogs';
 import { newRequestId } from '../../lib/utils';
 import { Plus, Search, Minus, X, ShoppingCart, Table as TableIcon, ArrowLeft, Clock, CheckCircle, AlertCircle, UtensilsCrossed, WifiOff, UploadCloud, RefreshCw, Trash2 } from 'lucide-react';
 import { orderApi, customerApi, promotionApi, restaurantApi, branchApi } from '../../services/api';
@@ -82,6 +84,8 @@ export default function POS() {
   const [cart, setCart] = useState<CartItem[]>(() => draft?.cart ?? []);
   const [orderType, setOrderType] = useState<string>(() => draft?.orderType ?? 'DINE_IN');
   const [selectedTable, setSelectedTable] = useState<PosTable | null>(() => draft?.selectedTable ?? null);
+  // Opened from the Tables page ("Start an order" on table 7): pick that table.
+  const [searchParams, setSearchParams] = useSearchParams();
   const [customerName, setCustomerName] = useState(() => draft?.customerName ?? '');
   const [customers, setCustomers] = useState<any[]>([]);
   const [promotions, setPromotions] = useState<any[]>([]);
@@ -182,12 +186,34 @@ export default function POS() {
     return listenForBranchChanges(fetchData);
   }, [user?.id]);
 
+  useEffect(() => {
+    const wanted = searchParams.get('tableId');
+    if (!wanted || !tables.length) return;
+    const table = tables.find((t) => t.id === wanted);
+    setSearchParams((p) => { p.delete('tableId'); return p; }, { replace: true });
+    if (!table) return;
+    void (async () => {
+      // Unsent items rung up for another table must not quietly move to this one.
+      if (cart.length && selectedTable?.id !== table.id) {
+        const fresh = await confirmDialog(
+          `The cart has ${cart.length} item${cart.length === 1 ? '' : 's'}${selectedTable ? ` for table ${selectedTable.tableNumber}` : ''}. Clear it and start an order for table ${table.tableNumber}?`,
+          { confirmLabel: 'Clear and start', cancelLabel: 'Keep the cart' }
+        );
+        if (!fresh) return;
+        setCart([]);
+      }
+      setOrderType('DINE_IN');
+      setSelectedTable(table);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tables, searchParams]);
+
   const fetchData = async () => {
     const activeBranchId = getActiveBranchId(user);
     try {
       const [menuRes, tablesRes, customersRes, promotionsRes, restaurantRes, branchesRes] = await Promise.all([
         orderApi.getPosMenu(),
-        orderApi.getPosTables(),
+        orderApi.getPosTables(activeBranchId ? { branchId: activeBranchId } : undefined),
         customerApi.getCustomers({ status: 'ACTIVE', limit: 200 }),
         promotionApi.getActive(),
         restaurantApi.get(),

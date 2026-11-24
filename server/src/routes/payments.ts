@@ -221,6 +221,7 @@ router.post('/orders/:orderId', authorize(...PAYMENT_ROLES), async (req: AuthReq
       }
     }
 
+    realtimeService.broadcast(`orders:${result.branchId}`, 'order_paid', { orderId: result.saleId, paymentStatus: result.paymentStatus });
     await createAuditLog(req.user!.restaurantId, req.user!.id, 'CREATE', 'Payment', result.payment.id, `Recorded ${method} payment of KES ${requested.toFixed(2)} for ${result.orderNumber}`);
     return sendResponse(res, true, 'Payment recorded', result, 201);
   } catch (e: any) {

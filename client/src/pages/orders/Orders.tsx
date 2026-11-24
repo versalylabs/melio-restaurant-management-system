@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search, Eye, Trash2, CreditCard, Printer, RefreshCw } from 'lucide-react';
 import { orderApi, paymentApi } from '../../services/api';
 import type { Sale } from '../../types';
@@ -82,6 +83,24 @@ export default function Orders() {
       if (isManualRefresh) setRefreshing(false);
     }
   };
+
+  // Opened from the Tables page ("Take payment"): open that bill's payment.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const id = searchParams.get('pay');
+    if (!id) return;
+    setSearchParams((p) => { p.delete('pay'); return p; }, { replace: true });
+    orderApi.getOrder(id).then((res) => {
+      const order = res.data?.data;
+      if (!order) return;
+      if (['COMPLETED', 'CANCELLED'].includes(order.status) || (order.amountPaid || 0) >= order.totalAmount) {
+        setError(`Order ${order.orderNumber} is already ${order.status === 'CANCELLED' ? 'cancelled' : 'paid'}.`);
+        return;
+      }
+      openPayment(order);
+    }).catch(() => setError('Could not open that bill'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const openPayment = (order: Sale) => {
     setError('');
