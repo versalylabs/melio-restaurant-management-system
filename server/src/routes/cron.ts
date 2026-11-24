@@ -6,7 +6,8 @@ import { signPendingEtims } from '../services/etimsService';
 import { sendLicenceReminders } from '../services/licenceService';
 
 /**
- * Background work on a schedule (Vercel Cron, see vercel.json), so it also
+ * Background work on a schedule (Vercel Cron, see vercel.json: daily at
+ * 06:00 Kenya time, the most the Hobby plan allows), so it also
  * happens when nobody has Melio open: KRA invoices waiting to be sent, and
  * licence reminders. Vercel sends `Authorization: Bearer <CRON_SECRET>`.
  */
