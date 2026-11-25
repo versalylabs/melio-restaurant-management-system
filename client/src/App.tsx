@@ -104,7 +104,7 @@ class ReportsErrorBoundary extends React.Component<React.PropsWithChildren, { ha
 }
 
 const ROUTE_TITLES: Record<string, string> = {
-  '/': 'Melio — Fine Dining & Restaurant Management',
+  '/': 'Melio — Proper Kenyan food, order online',
   '/order-online': 'Order Online — Melio',
   '/account': 'Customer Account — Melio',
   '/login': 'Staff Login — Melio',

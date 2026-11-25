@@ -570,13 +570,13 @@ export default function OnlineOrdering() {
             <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center relative z-10 w-full min-w-0">
               <div className="min-w-0">
                 <div className="inline-flex items-center gap-1.5 text-[11px] sm:text-xs font-bold uppercase tracking-widest text-orange-400 mb-1">
-                  <Sparkles size={13} /> Fresh Kitchen Selection
+                  <Sparkles size={13} /> Order online
                 </div>
                 <h1 className="font-serif text-2xl sm:text-4xl font-bold tracking-tight break-words">
                   What are you craving today?
                 </h1>
                 <p className="mt-1 text-xs text-gray-400 max-w-md hidden sm:block">
-                  Handcrafted artisanal courses prepared fresh to order. Available for express pickup or direct delivery.
+                  Order ahead for pickup, or have it delivered. Pay by M-Pesa.
                 </p>
               </div>
 
@@ -627,8 +627,8 @@ export default function OnlineOrdering() {
                 />
                 <GlassIcon
                   icon={<Truck size={18} />}
-                  label="Fast Delivery"
-                  sublabel="Fresh & Hot"
+                  label="Delivery"
+                  sublabel="To your door"
                   color="orange"
                   size="sm"
                 />
@@ -732,7 +732,7 @@ export default function OnlineOrdering() {
                         </h2>
                         <p className="sm:hidden mt-0.5 text-sm font-extrabold text-orange-500">{money(item.sellingPrice, currency)}</p>
                         <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-500 dark:text-gray-400 break-words">
-                          {item.description || 'Artisanal recipe prepared fresh using premium local ingredients.'}
+                          {item.description || ''}
                         </p>
                       </div>
                     </div>
@@ -741,7 +741,7 @@ export default function OnlineOrdering() {
                     <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2 sm:p-4 sm:pt-3 dark:border-white/5 w-full min-w-0">
                       <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 dark:text-gray-400">
                         <Clock3 size={13} className="text-orange-500 shrink-0" />
-                        <span>{item.preparationTime ? `${item.preparationTime} mins` : 'Freshly made'}</span>
+                        <span>{item.preparationTime ? `${item.preparationTime} mins` : ''}</span>
                       </span>
 
                       {inCart ? (

@@ -304,6 +304,19 @@ async function run() {
     const r = await prisma.reservation.findUnique({ where: { id: res.body.data.reservationId } });
     assert.strictEqual(r.startAt.toISOString(), `${date}T16:00:00.000Z`);
   });
+  await test('website enquiries reach owners and managers, not cashiers', async () => {
+    const note = `Lunch for 25 people, ${uid()}`;
+    const res = await call('POST', '/public/enquiries', null, { restaurantId, name: 'Office Buyer', phone: '0712 345 678', subject: 'Office Lunch & Catering', message: note });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    const sent = await prisma.notification.findMany({ where: { restaurantId, type: 'WEBSITE_ENQUIRY', message: { contains: note } }, select: { userId: true, title: true } });
+    assert.ok(sent.some((n: any) => n.userId === owner.id), 'owner notified');
+    assert.ok(!sent.some((n: any) => n.userId === cashier.id), 'cashier not notified');
+    assert.strictEqual(sent[0].title, 'Website enquiry: Office Lunch & Catering');
+    assert.strictEqual((await call('POST', '/public/enquiries', null, { restaurantId, name: 'X', phone: 'call me', message: 'hi' })).status, 400);
+    assert.strictEqual((await call('POST', '/public/enquiries', null, { restaurantId, name: 'X', phone: '- - - - - - - - -', message: 'hi' })).status, 400, 'needs real digits');
+    assert.strictEqual((await call('POST', '/public/enquiries', null, { restaurantId, name: 'X', phone: '(0712) 345 678', message: `brackets ${uid()}` })).status, 200, 'common phone formats accepted');
+    assert.strictEqual((await call('POST', '/public/enquiries', null, { restaurantId: 'nope', name: 'X', phone: '0712345678', message: 'hi' })).status, 404);
+  });
   await test('re-confirming a cancelled booking whose table was taken is refused', async () => {
     // Any moment in ~10 years: earlier runs' bookings on this table never collide.
     const startAt = new Date(Date.now() + (800 + Math.random() * 3600) * 86_400_000).toISOString();
@@ -1667,9 +1680,14 @@ async function run() {
           for (let i = 0; i < 30 && !(await failedOnce()); i++) await new Promise((r) => setTimeout(r, 200));
           delete process.env.ETIMS_SIMULATE_DOWN;
           await prisma.etimsInvoice.updateMany({ where: { saleId: order.id }, data: { nextTryAt: new Date(), lockedUntil: null } });
+          // Website enquiries (customer contact details) are kept 90 days.
+          const oldEnquiry = await prisma.notification.create({ data: { restaurantId, userId: owner.id, type: 'WEBSITE_ENQUIRY', title: 'old', message: 'old', createdAt: new Date(Date.now() - 91 * 86_400_000) } });
+          const newEnquiry = await prisma.notification.create({ data: { restaurantId, userId: owner.id, type: 'WEBSITE_ENQUIRY', title: 'new', message: 'new' } });
           const run = await call('GET', '/cron/sweep', 'it-cron-secret-0123456789');
           assert.strictEqual(run.status, 200, JSON.stringify(run.body));
           assert.strictEqual((await prisma.etimsInvoice.findUnique({ where: { key: `S:${order.id}` } }))?.status, 'SIGNED');
+          assert.strictEqual(await prisma.notification.count({ where: { id: oldEnquiry.id } }), 0, 'enquiry older than 90 days deleted');
+          assert.strictEqual(await prisma.notification.count({ where: { id: newEnquiry.id } }), 1, 'recent enquiry kept');
         } finally {
           delete process.env.CRON_SECRET;
         }

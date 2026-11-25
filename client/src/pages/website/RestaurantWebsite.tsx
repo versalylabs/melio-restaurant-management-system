@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -13,7 +13,7 @@ import {
   UtensilsCrossed,
   Calendar,
   Sparkles,
-  Award,
+  Smartphone,
   Mail,
   Send,
   CheckCircle2,
@@ -28,8 +28,6 @@ import {
   Utensils,
   BookOpen,
   Image as ImageIcon,
-  Wine,
-  Leaf,
   Home as HomeIcon,
   MessageCircle,
 } from 'lucide-react';
@@ -55,6 +53,9 @@ type Restaurant = {
   currency?: string;
   logo?: string;
   whatsappNumber?: string | null;
+  pricesIncludeTax?: boolean;
+  taxRate?: number;
+  serviceChargeRate?: number;
   branches: Branch[];
 };
 type Category = { id: string; name: string };
@@ -94,15 +95,17 @@ export default function RestaurantWebsite() {
   const [search, setSearch] = useState('');
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('rms-theme') !== 'light');
   const [loading, setLoading] = useState(true);
+  const [menuLoading, setMenuLoading] = useState(true);
   const [error, setError] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [websiteConfig, setWebsiteConfig] = useState<any>(null);
   const [websiteGallery, setWebsiteGallery] = useState<any[]>([]);
   const [websiteTestimonials, setWebsiteTestimonials] = useState<any[]>([]);
   const hasReviews = websiteTestimonials.length > 0;
-  const averageRating = hasReviews
-    ? websiteTestimonials.reduce((sum: number, t: any) => sum + Math.min(5, Math.max(1, Number(t.rating) || 5)), 0) / websiteTestimonials.length
-    : 0;
+  // Only ratings that were actually given count; a review without one is never shown as 5 stars.
+  const starsOf = (t: any) => Math.min(5, Math.max(0, Math.round(Number(t.rating) || 0)));
+  const ratedReviews = websiteTestimonials.filter((t: any) => starsOf(t) > 0);
+  const averageRating = ratedReviews.length ? ratedReviews.reduce((sum: number, t: any) => sum + starsOf(t), 0) / ratedReviews.length : 0;
 
 
   // Search engines and link previews: the restaurant's own name, a real
@@ -157,6 +160,9 @@ export default function RestaurantWebsite() {
   const [contactForm, setContactForm] = useState({ name: '', email: '', phone: '', subject: 'General Enquiry', message: '' });
   const [contactSubmitted, setContactSubmitted] = useState(false);
   const [contactLoading, setContactLoading] = useState(false);
+  const [contactError, setContactError] = useState('');
+  const contactSuccessRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (contactSubmitted) contactSuccessRef.current?.focus(); }, [contactSubmitted]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode);
@@ -172,6 +178,7 @@ export default function RestaurantWebsite() {
         if (data[0]) {
           setRestaurant(data[0]);
           setBranchId(data[0].branches?.[0]?.id || '');
+          if (!data[0].branches?.length) setMenuLoading(false);
           websiteApi.getPublic(data[0].id).then((r:any)=>{
             const w=r.data.data;
             setWebsiteConfig(w);
@@ -182,17 +189,24 @@ export default function RestaurantWebsite() {
           }).catch(()=>{});
         } else {
           setError('No restaurant is currently configured.');
+          setMenuLoading(false);
         }
       })
-      .catch((err) => setError(err.response?.data?.message || 'Unable to load restaurant.'))
+      .catch((err) => {
+        setError(err.response?.data?.message || 'Unable to load restaurant.');
+        setMenuLoading(false);
+      })
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     if (!restaurant || !branchId) return;
+    let stale = false; // a quicker branch switch must not show the previous branch's menu
+    setMenuLoading(true);
     publicOrderingApi
       .getMenu({ restaurantId: restaurant.id, branchId })
       .then((res) => {
+        if (stale) return;
         setCategories(res.data.data?.categories || []);
         const menuItems = res.data.data?.items || [];
         setItems(menuItems);
@@ -201,18 +215,59 @@ export default function RestaurantWebsite() {
           setRestaurant((current) => (current ? { ...current, ...res.data.data.restaurant } : current));
         }
       })
-      .catch((err) => setError(err.response?.data?.message || 'Unable to load menu.'));
+      .catch((err) => { if (!stale) setError(err.response?.data?.message || 'Unable to load menu.'); })
+      .finally(() => { if (!stale) setMenuLoading(false); });
+    return () => { stale = true; };
   }, [restaurant?.id, branchId]);
 
-  const filteredItems = useMemo(
-    () =>
-      items.filter(
+  const mealCategories = useMemo(
+    () => new Set(categories.filter((c) => /main|rice|lunch|plate|combo|grill/i.test(c.name)).map((c) => c.id)),
+    [categories]
+  );
+  // Lunch plates first, everyday-priced ones leading: most visitors come for a meal, not a drink or a side.
+  const filteredItems = useMemo(() => {
+    const price = (i: MenuItem) => (Number(i.sellingPrice) > 0 ? Number(i.sellingPrice) : Infinity);
+    return items
+      .filter(
         (item) =>
           (activeCategory === 'ALL' || item.categoryId === activeCategory) &&
           `${item.name} ${item.description || ''}`.toLowerCase().includes(search.toLowerCase())
-      ),
-    [items, activeCategory, search]
-  );
+      )
+      .sort((a, b) => {
+        const am = mealCategories.has(a.categoryId);
+        const bm = mealCategories.has(b.categoryId);
+        if (am !== bm) return am ? -1 : 1;
+        if (!am) return 0;
+        const diff = price(a) - price(b);
+        return Number.isNaN(diff) ? 0 : diff;
+      });
+  }, [items, mealCategories, activeCategory, search]);
+
+  // Real meal prices from the live menu for the hero line, only when the menu price is what the customer pays
+  // (nothing added at checkout). A dish missing from the menu is left out.
+  const pricesAreFinal = !!restaurant && (restaurant.pricesIncludeTax || (!Number(restaurant.taxRate) && !Number(restaurant.serviceChargeRate)));
+  const lowestPrice = (pattern: RegExp) => {
+    const prices = items
+      .filter((i) => mealCategories.has(i.categoryId) && pattern.test(i.name))
+      .map((i) => Number(i.sellingPrice))
+      .filter((p) => p > 0);
+    return prices.length ? Math.min(...prices) : null;
+  };
+  const priceLine = !pricesAreFinal
+    ? ''
+    : ([
+        ['pilau', lowestPrice(/pilau/i)],
+        ['beef stew', lowestPrice(/^beef stew$/i)],
+        ['nyama choma', lowestPrice(/^nyama choma$/i)],
+      ] as const)
+        .filter(([, price]) => price !== null)
+        .map(([label, price]) => `${label} from ${money(price as number, restaurant?.currency)}`)
+        .join(', ')
+        .replace(/^./, (c) => c.toUpperCase());
+
+  const socialLinks: Record<string, string> = (() => {
+    try { return JSON.parse(websiteConfig?.settings?.socialLinks || '{}') || {}; } catch { return {}; }
+  })();
 
   const featuredId =
     websiteConfig?.settings?.featuredMenuItemId ||
@@ -251,14 +306,20 @@ export default function RestaurantWebsite() {
     return source.filter((g) => g.category === galleryFilter);
   }, [galleryFilter, websiteGallery]);
 
-  const handleContactSubmit = (e: React.FormEvent) => {
+  const handleContactSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!restaurant) return;
     setContactLoading(true);
-    setTimeout(() => {
-      setContactLoading(false);
+    setContactError('');
+    try {
+      await publicOrderingApi.sendEnquiry({ restaurantId: restaurant.id, ...contactForm });
       setContactSubmitted(true);
       setContactForm({ name: '', email: '', phone: '', subject: 'General Enquiry', message: '' });
-    }, 600);
+    } catch (err: any) {
+      setContactError(err.response?.data?.message || 'Your message did not send. Please call us instead.');
+    } finally {
+      setContactLoading(false);
+    }
   };
 
   const openLightbox = (index: number) => {
@@ -292,7 +353,7 @@ export default function RestaurantWebsite() {
       <div className="min-h-screen grid place-items-center bg-[#0d0d11] text-orange-400">
         <div className="flex flex-col items-center gap-3">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-orange-500 border-t-transparent" />
-          <span className="text-sm font-serif tracking-widest uppercase text-gray-300">Curating Experience...</span>
+          <span className="text-sm font-serif tracking-widest uppercase text-gray-300">Loading...</span>
         </div>
       </div>
     );
@@ -321,7 +382,7 @@ export default function RestaurantWebsite() {
                 {restaurant?.name || 'Melio'}
               </div>
               <div className="hidden text-[10px] uppercase tracking-[0.2em] text-orange-400 sm:block">
-                Fine Dining & Craft
+                Proper Kenyan food
               </div>
             </div>
           </a>
@@ -331,7 +392,7 @@ export default function RestaurantWebsite() {
             {[
               { label: 'Home', href: '#home' },
               { label: 'Menu', href: '#menu' },
-              { label: 'Our Story', href: '#about' },
+              { label: 'Why Melio', href: '#about' },
               { label: 'Gallery', href: '#gallery' },
               { label: 'Locations', href: '#locations' },
               ...(hasReviews ? [{ label: 'Reviews', href: '#testimonials' }] : []),
@@ -433,8 +494,8 @@ export default function RestaurantWebsite() {
                 {[
                   { label: 'Home', href: '#home' },
                   { label: 'Full Menu', href: '#menu' },
-                  { label: 'Our Story & Philosophy', href: '#about' },
-                  { label: 'Culinary Gallery', href: '#gallery' },
+                  { label: 'Why Melio', href: '#about' },
+                  { label: 'Gallery', href: '#gallery' },
                   { label: 'Locations & Hours', href: '#locations' },
                   ...(hasReviews ? [{ label: 'Guest Reviews', href: '#testimonials' }] : []),
                   { label: 'Contact & Enquiries', href: '#contact' },
@@ -556,17 +617,17 @@ export default function RestaurantWebsite() {
             <div className="max-w-4xl flex flex-col items-center text-center text-white">
               <div className="mb-6 inline-flex items-center gap-2.5 rounded-full border border-orange-500/30 bg-black/40 px-4 py-1.5 text-xs font-bold uppercase tracking-[0.25em] text-orange-300 backdrop-blur-md shadow-lg shadow-orange-500/10">
                 <span className="h-2 w-2 rounded-full bg-orange-500 animate-ping" />
-                {restaurant?.name || 'Fine Dining & Craft'}
+                {restaurant?.name || 'Melio'}
               </div>
 
               <h1 className="font-serif text-4xl font-bold leading-[1.1] tracking-tight sm:text-6xl md:text-7xl lg:text-8xl text-center">
-                An experience worth{' '}
-                <ShinyText text="savouring." className="font-serif italic font-bold" />
+                Proper Kenyan lunch.{' '}
+                <ShinyText text="Ready when you walk in." className="font-serif italic font-bold" />
               </h1>
 
               <p className="mt-5 max-w-2xl text-sm leading-relaxed text-gray-300 sm:text-base md:text-lg text-center mx-auto px-2">
-                {restaurant?.description ||
-                  'Thoughtfully prepared artisanal dishes, warm hospitality, and an unforgettable table experience — crafted fresh with passionate precision.'}
+                {priceLine ? `${priceLine}. ` : ''}Order ahead, pay by M-Pesa, skip the queue.
+                {restaurant?.branches?.length ? ` ${restaurant.branches.map((b) => b.name.replace(/^.*?\s[-–]\s+/, '')).join(' · ')}.` : ''}
               </p>
 
               {/* Action Buttons */}
@@ -597,23 +658,23 @@ export default function RestaurantWebsite() {
               {/* Luxury React Bits Glass Icons Emblems (Consistent Orange Glow) */}
               <div className="mt-12 pt-8 border-t border-white/10 grid grid-cols-3 gap-3 sm:gap-6 max-w-2xl w-full mx-auto">
                 <GlassIcon
-                  icon={<Award size={22} />}
-                  label="Chef Crafted"
-                  sublabel="Made to Order"
+                  icon={<Clock3 size={22} />}
+                  label="Order ahead"
+                  sublabel="Skip the queue"
                   color="orange"
                   size="md"
                 />
                 <GlassIcon
-                  icon={<Leaf size={22} />}
-                  label="100% Organic"
-                  sublabel="Local Harvest"
+                  icon={<Smartphone size={22} />}
+                  label="Pay by M-Pesa"
+                  sublabel="No cash needed"
                   color="orange"
                   size="md"
                 />
                 <GlassIcon
-                  icon={<Wine size={22} />}
-                  label="Sommelier Cellar"
-                  sublabel="Curated Pairings"
+                  icon={<MapPin size={22} />}
+                  label={`${restaurant?.branches?.length || 1} ${(restaurant?.branches?.length || 1) === 1 ? 'branch' : 'branches'}`}
+                  sublabel={restaurant?.city || 'Nairobi'}
                   color="orange"
                   size="md"
                 />
@@ -626,7 +687,7 @@ export default function RestaurantWebsite() {
             <div className="absolute bottom-10 right-8 hidden w-80 lg:block">
               <SpotlightCard className="p-5 text-white border-white/15 bg-black/50 shadow-2xl">
                 <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.2em] text-orange-400">
-                  <span>Featured Signature</span>
+                  <span>Featured dish</span>
                   <Sparkles size={14} />
                 </div>
                 <div className="mt-2 text-lg font-serif font-bold truncate">{heroItem.name}</div>
@@ -650,13 +711,13 @@ export default function RestaurantWebsite() {
             <div className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
               <div>
                 <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
-                  <Sparkles size={14} /> Master Culinary Selection
+                  <Sparkles size={14} /> The menu
                 </div>
                 <h2 className="mt-2 font-serif text-4xl font-bold text-slate-950 dark:text-white sm:text-5xl">
-                  Made Fresh. Worth The Craving.
+                  Kenyan favourites, fairly priced.
                 </h2>
                 <p className="mt-2 text-sm text-slate-600 dark:text-gray-400 max-w-xl">
-                  Explore our seasonal courses prepared from fine local ingredients and traditional artisanal recipes.
+                  Breakfast, lunch plates, grills and drinks. Order ahead for pickup, or have it delivered.
                 </p>
               </div>
 
@@ -698,7 +759,7 @@ export default function RestaurantWebsite() {
                     : 'bg-white text-slate-600 hover:bg-orange-50 dark:bg-zinc-900 dark:text-gray-300 dark:hover:bg-zinc-800'
                 }`}
               >
-                All Courses ({items.length})
+                {menuLoading ? 'All' : `All (${items.length})`}
               </button>
               {categories.map((c) => (
                 <button
@@ -716,8 +777,16 @@ export default function RestaurantWebsite() {
             </div>
 
             {/* Menu Cards Grid with React Bits SpotlightCard */}
+            {menuLoading && (
+              <div role="status" aria-label="Loading the menu" className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="h-96 animate-pulse motion-reduce:animate-none rounded-3xl bg-slate-200/70 dark:bg-zinc-900/80" />
+                ))}
+              </div>
+            )}
+
             <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {filteredItems.slice(0, 9).map((item) => (
+              {!menuLoading && filteredItems.slice(0, 9).map((item) => (
                 <SpotlightCard
                   key={item.id}
                   className="group flex flex-col justify-between overflow-hidden rounded-3xl border border-orange-500/10 bg-white shadow-sm transition duration-300 hover:-translate-y-1 hover:shadow-xl dark:bg-zinc-900/80 dark:border-white/5"
@@ -742,16 +811,18 @@ export default function RestaurantWebsite() {
                       <h3 className="font-serif text-xl font-bold text-slate-950 dark:text-white group-hover:text-orange-500 transition">
                         {item.name}
                       </h3>
-                      <p className="mt-2.5 line-clamp-2 text-sm leading-relaxed text-slate-500 dark:text-gray-400">
-                        {item.description || 'Prepared fresh to order using premium artisanal ingredients.'}
-                      </p>
+                      {item.description && (
+                        <p className="mt-2.5 line-clamp-2 text-sm leading-relaxed text-slate-500 dark:text-gray-400">
+                          {item.description}
+                        </p>
+                      )}
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between border-t border-slate-100 p-6 pt-4 dark:border-white/5">
                     <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 dark:text-gray-400">
                       <Clock3 size={14} className="text-orange-500" />
-                      {item.preparationTime ? `${item.preparationTime} mins` : 'Freshly made'}
+                      {item.preparationTime ? `${item.preparationTime} mins` : ''}
                     </span>
                     <Link
                       to={`/order-online?addItem=${item.id}`}
@@ -764,24 +835,19 @@ export default function RestaurantWebsite() {
               ))}
             </div>
 
-            {!filteredItems.length && (
+            {!menuLoading && !filteredItems.length && (
               <div className="py-16 text-center text-slate-500 dark:text-gray-400">
-                No dishes found matching your search or category selection.
+                {items.length ? 'No dishes match your search.' : 'The menu is not available right now. Please call the branch.'}
               </div>
             )}
 
-            {filteredItems.length > 9 && (
+            {!menuLoading && items.length > 0 && (
               <div className="mt-12 text-center">
                 <Link to="/order-online" className="inline-flex items-center rounded-2xl bg-orange-500 px-8 py-4 text-sm font-bold text-white shadow-xl shadow-orange-500/25 transition hover:bg-orange-600 hover:scale-105">
-                  Explore Complete Full Menu ({items.length} dishes) <ArrowRight size={17} className="ml-2" />
+                  See the full menu and order ({items.length} dishes) <ArrowRight size={17} className="ml-2" />
                 </Link>
               </div>
             )}
-            <div className="mt-8 text-center">
-              <Link to="/order-online" className="inline-flex items-center rounded-2xl border border-orange-500/30 bg-orange-500/10 px-8 py-3.5 text-sm font-bold text-orange-600 transition hover:bg-orange-500 hover:text-white dark:text-orange-400">
-                Explore More <ArrowRight size={17} className="ml-2" />
-              </Link>
-            </div>
           </div>
         </section>
 
@@ -794,21 +860,21 @@ export default function RestaurantWebsite() {
                 <div className="absolute -right-10 -bottom-10 h-64 w-64 rounded-full bg-orange-500/10 blur-3xl pointer-events-none" />
                 <div className="relative">
                   <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-orange-400">
-                    <Award size={16} /> Heritage & Culinary Craft
+                    <UtensilsCrossed size={16} /> Why Melio
                   </div>
                   <h3 className="mt-3 font-serif text-3xl font-bold sm:text-4xl text-white">
-                    Rooted in tradition. Refined for modern palates.
+                    The food you grew up on, at a fair price.
                   </h3>
                   <p className="mt-5 text-sm leading-relaxed text-gray-300">
-                    Every dish is born from respect for natural ingredients, time-honoured techniques, and relentless culinary curiosity. We partner with local farmers and purveyors to bring pure flavor straight to your table.
+                    Pilau, stews, nyama choma, mukimo, chapati and a proper breakfast, plus grills and burgers when you want a treat. Every price is on the menu, so you know what lunch costs before you order.
                   </p>
 
                   <div className="mt-8 grid grid-cols-2 gap-4">
                     {[
-                      { value: String(items.length), label: 'Dishes on the menu' },
-                      { value: String(categories.length), label: 'Menu categories' },
+                      { value: menuLoading ? '…' : String(items.length), label: 'Dishes on the menu' },
+                      { value: menuLoading ? '…' : String(categories.length), label: 'Menu categories' },
                       { value: String(restaurant?.branches?.length || 1), label: (restaurant?.branches?.length || 1) === 1 ? 'Location' : 'Locations' },
-                      { value: 'Daily', label: 'Freshly prepared' },
+                      { value: 'M-Pesa', label: 'Pay on your phone' },
                     ].map((stat) => (
                       <div key={stat.label} className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-sm">
                         <div className="font-serif text-3xl font-bold text-orange-400">{stat.value}</div>
@@ -822,46 +888,48 @@ export default function RestaurantWebsite() {
               {/* Right Column: Narrative & Philosophy */}
               <div className="space-y-6">
                 <div className="text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
-                  Our Philosophy
+                  How it works
                 </div>
                 <h2 className="font-serif text-4xl font-bold text-slate-950 dark:text-white sm:text-5xl">
-                  Where Passion Meets The Plate.
+                  Lunch without the wait.
                 </h2>
                 <p className="text-base leading-relaxed text-slate-600 dark:text-gray-300">
-                  Whether you are joining us for an intimate anniversary dinner, entertaining executive guests, or savoring your favorite comfort meal at home, our dedicated kitchen and floor team ensure every detail exceeds expectation.
+                  Order online, pick your branch and pickup time, and pay by M-Pesa, then collect when you arrive. Rather sit down? Book a table at any branch.
                 </p>
                 <div className="space-y-3 pt-2">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-orange-500/10 text-orange-500 mt-0.5">
-                      ✓
+                  {[
+                    ['Order ahead', 'Choose pickup at your branch, or have it delivered.'],
+                    ['Pay by M-Pesa', 'Pay on your phone when you order. No cash, no change.'],
+                    ['Feeding the office?', 'Tell us how many people and when, and a manager will call you with a quote.'],
+                  ].map(([title, text]) => (
+                    <div key={title} className="flex items-start gap-3">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-orange-500/10 text-orange-500 mt-0.5">
+                        ✓
+                      </div>
+                      <p className="text-sm text-slate-600 dark:text-gray-300">
+                        <strong className="text-slate-900 dark:text-white">{title}:</strong> {text}
+                      </p>
                     </div>
-                    <p className="text-sm text-slate-600 dark:text-gray-300">
-                      <strong className="text-slate-900 dark:text-white">Artisanal Precision:</strong> Sauces simmered for hours, doughs fermented slowly, and meats aged in-house.
-                    </p>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-orange-500/10 text-orange-500 mt-0.5">
-                      ✓
-                    </div>
-                    <p className="text-sm text-slate-600 dark:text-gray-300">
-                      <strong className="text-slate-900 dark:text-white">Sustainable Sourcing:</strong> Ingredients ethically harvested from local producers and green markets.
-                    </p>
-                  </div>
+                  ))}
                 </div>
 
                 <div className="pt-4 flex flex-wrap gap-4">
-                  <button
-                    onClick={() => setReservationOpen(true)}
-                    className="inline-flex items-center rounded-2xl bg-slate-950 px-6 py-3.5 text-sm font-bold text-white transition duration-300 hover:-translate-y-0.5 hover:bg-orange-500 hover:shadow-lg hover:shadow-orange-500/25 dark:bg-white dark:text-slate-950 dark:hover:bg-orange-500 dark:hover:text-white"
-                  >
-                    Reserve an Experience <ArrowRight size={16} className="ml-2" />
-                  </button>
                   <Link
                     to="/order-online"
+                    className="inline-flex items-center rounded-2xl bg-slate-950 px-6 py-3.5 text-sm font-bold text-white transition duration-300 hover:-translate-y-0.5 hover:bg-orange-500 hover:shadow-lg hover:shadow-orange-500/25 dark:bg-white dark:text-slate-950 dark:hover:bg-orange-500 dark:hover:text-white"
+                  >
+                    Order for pickup <ArrowRight size={16} className="ml-2" />
+                  </Link>
+                  <a
+                    href="#contact"
+                    onClick={(e) => {
+                      scrollToSection(e, '#contact');
+                      setContactForm((f) => ({ ...f, subject: 'Office Lunch & Catering' }));
+                    }}
                     className="inline-flex items-center rounded-2xl border border-orange-500/30 bg-orange-500/10 px-6 py-3.5 text-sm font-bold text-orange-500 hover:bg-orange-500 hover:text-white transition"
                   >
-                    Order Takeout
-                  </Link>
+                    Get an office lunch quote
+                  </a>
                 </div>
               </div>
             </div>
@@ -874,13 +942,13 @@ export default function RestaurantWebsite() {
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
               <div>
                 <div className="text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
-                  Visual Feast
+                  Gallery
                 </div>
                 <h2 className="mt-2 font-serif text-4xl font-bold text-slate-950 dark:text-white sm:text-5xl">
-                  Ambience & Culinary Gallery
+                  From our kitchen
                 </h2>
                 <p className="mt-2 text-sm text-slate-600 dark:text-gray-400">
-                  Catch a glimpse of our artisanal dishes, master bar mixology, and dining atmospheres.
+                  Dishes and dining rooms at {restaurant?.name || 'Melio'}.
                 </p>
               </div>
 
@@ -937,18 +1005,18 @@ export default function RestaurantWebsite() {
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="text-center max-w-2xl mx-auto">
               <div className="text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
-                Our Establishments
+                Branches
               </div>
               <h2 className="mt-2 font-serif text-4xl font-bold text-slate-950 dark:text-white sm:text-5xl">
-                Locations & Dining Hours
+                Find your nearest Melio
               </h2>
               <p className="mt-3 text-sm text-slate-600 dark:text-gray-400">
-                Visit our branches for dine-in elegance or order direct for express pickup and delivery.
+                Eat in, pick up, or have it delivered from the branch closest to you.
               </p>
             </div>
 
             <div className="mt-12 grid gap-8 md:grid-cols-2 lg:grid-cols-3">
-              {(restaurant?.branches || [{ id: 'b1', name: 'Main Flagship', city: 'Nairobi', address: 'Riverside Drive, Westlands', phone: '+254 700 123456', code: 'NBO-1' }]).map((b) => (
+              {(restaurant?.branches || []).map((b) => (
                 <div
                   key={b.id}
                   className="rounded-3xl border border-orange-500/10 bg-[#faf9f7] p-8 dark:bg-zinc-900/90 dark:border-white/5 shadow-sm transition hover:shadow-xl flex flex-col justify-between"
@@ -967,8 +1035,16 @@ export default function RestaurantWebsite() {
                       {b.name}
                     </h3>
                     <p className="mt-2 text-sm text-slate-600 dark:text-gray-400">
-                      {b.address || 'Flagship Culinary Venue'}{b.city ? `, ${b.city}` : ''}
+                      {b.address || ''}{b.address && b.city ? `, ${b.city}` : b.city || ''}
                     </p>
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([b.name, b.address, b.city].filter(Boolean).join(', '))}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-orange-600 hover:underline dark:text-orange-400"
+                    >
+                      <MapPin size={13} /> Directions and Google reviews
+                    </a>
 
                     <div className="mt-6 space-y-3 border-t border-slate-200/80 dark:border-white/10 pt-5 text-xs text-slate-600 dark:text-gray-300">
                       {(() => {
@@ -984,7 +1060,7 @@ export default function RestaurantWebsite() {
                               <span>{h.fridaySaturday}</span>
                             </div>
                             <div className="flex items-center justify-between">
-                              <span className="font-semibold text-slate-900 dark:text-white">Sunday Brunch:</span>
+                              <span className="font-semibold text-slate-900 dark:text-white">Sunday:</span>
                               <span>{h.sunday}</span>
                             </div>
                           </>
@@ -1021,23 +1097,26 @@ export default function RestaurantWebsite() {
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="text-center max-w-2xl mx-auto">
               <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
-                <Star size={14} className="fill-orange-500 text-orange-500" /> Guest Accolades
+                <Star size={14} className="fill-orange-500 text-orange-500" /> Reviews
               </div>
               <h2 className="mt-2 font-serif text-4xl font-bold text-slate-950 dark:text-white sm:text-5xl">
-                Cherished By Discerning Diners
+                What guests say
               </h2>
-              <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-orange-500/10 px-4 py-1 text-xs font-bold text-orange-500">
-                <span>★</span> {averageRating.toFixed(1)} / 5 from {websiteTestimonials.length} {websiteTestimonials.length === 1 ? 'review' : 'reviews'}
-              </div>
+              {ratedReviews.length > 0 && (
+                <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-orange-500/10 px-4 py-1 text-xs font-bold text-orange-500">
+                  <span>★</span> {averageRating.toFixed(1)} / 5 from {ratedReviews.length} {ratedReviews.length === 1 ? 'review' : 'reviews'}
+                </div>
+              )}
             </div>
 
             <div className="mt-12 grid gap-6 md:grid-cols-3">
               {websiteTestimonials.map((t: any) => ({
                 name: t.name,
-                role: t.role || 'Verified Guest',
-                rating: t.rating || 5,
+                // Reviews are typed in by staff, so none can honestly be called "verified".
+                role: !t.role || /verified/i.test(t.role) ? 'Guest review' : t.role,
+                rating: starsOf(t),
                 text: t.text,
-                date: t.dateLabel || 'Recent Visit'
+                date: t.dateLabel || ''
               })).map((review: { name: string; role: string; rating: number; text: string; date: string }, i: number) => (
                 <div
                   key={i}
@@ -1077,13 +1156,13 @@ export default function RestaurantWebsite() {
               {/* Left Details */}
               <div>
                 <div className="text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
-                  Get In Touch
+                  Get in touch
                 </div>
                 <h2 className="mt-2 font-serif text-4xl font-bold text-slate-950 dark:text-white sm:text-5xl">
-                  We'd Love To Hear From You
+                  Office lunch, an event, or a question?
                 </h2>
                 <p className="mt-3 text-sm leading-relaxed text-slate-600 dark:text-gray-300">
-                  For private dining rooms, corporate catering, celebration events, or general inquiries, our concierge desk is ready to assist.
+                  Feeding the office, planning a team outing or a celebration? Tell us how many people and when, and a manager will call you back.
                 </p>
 
                 <div className="mt-8 space-y-6">
@@ -1094,7 +1173,7 @@ export default function RestaurantWebsite() {
                     <div>
                       <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Main Office</div>
                       <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
-                        {restaurant?.address || 'Fine Dining Boulevard'}{restaurant?.city ? `, ${restaurant.city}` : ''}
+                        {restaurant?.address || ''}{restaurant?.city ? `, ${restaurant.city}` : ''}
                       </div>
                     </div>
                   </div>
@@ -1116,9 +1195,9 @@ export default function RestaurantWebsite() {
                       <Mail size={22} />
                     </div>
                     <div>
-                      <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Private Events Email</div>
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Email</div>
                       <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
-                        {restaurant?.email || 'events@restaurant.com'}
+                        {restaurant?.email || '—'}
                       </div>
                     </div>
                   </div>
@@ -1128,15 +1207,15 @@ export default function RestaurantWebsite() {
               {/* Right: Contact / Enquiry Form */}
               <div className="rounded-3xl border border-orange-500/10 bg-[#faf9f7] p-8 dark:bg-zinc-900/90 dark:border-white/5 shadow-xl">
                 {contactSubmitted ? (
-                  <div className="text-center py-12">
+                  <div role="status" tabIndex={-1} ref={contactSuccessRef} className="text-center py-12 outline-none">
                     <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-500/20 text-orange-500">
                       <CheckCircle2 size={36} />
                     </div>
                     <h3 className="mt-4 font-serif text-2xl font-bold text-slate-950 dark:text-white">
-                      Message Received
+                      Message sent
                     </h3>
                     <p className="mt-2 text-sm text-slate-600 dark:text-gray-300">
-                      Thank you for reaching out. Our events concierge will review your message and reply within 2 hours.
+                      Thanks. A manager has your message and will call you back.
                     </p>
                     <button
                       onClick={() => setContactSubmitted(false)}
@@ -1148,29 +1227,31 @@ export default function RestaurantWebsite() {
                 ) : (
                   <form onSubmit={handleContactSubmit} className="space-y-4">
                     <h3 className="font-serif text-2xl font-bold text-slate-950 dark:text-white">
-                      Send Us An Enquiry
+                      Send us a message
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                        <label htmlFor="enquiry-name" className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
                           Your Name
                         </label>
                         <input
                           type="text"
                           required
+                          id="enquiry-name"
                           value={contactForm.name}
                           onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
-                          placeholder="e.g. Lady Sarah"
+                          placeholder="e.g. Wanjiku Kamau"
                           className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                        <label htmlFor="enquiry-phone" className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
                           Phone Number
                         </label>
                         <input
                           type="tel"
                           required
+                          id="enquiry-phone"
                           value={contactForm.phone}
                           onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })}
                           placeholder="+254 700 000 000"
@@ -1181,48 +1262,56 @@ export default function RestaurantWebsite() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
-                          Email Address
+                        <label htmlFor="enquiry-email" className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                          Email (optional)
                         </label>
                         <input
                           type="email"
-                          required
+                          id="enquiry-email"
                           value={contactForm.email}
                           onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
-                          placeholder="sarah@example.com"
+                          placeholder="you@company.co.ke"
                           className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                        <label htmlFor="enquiry-subject" className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
                           Enquiry Type
                         </label>
                         <select
+                          id="enquiry-subject"
                           value={contactForm.subject}
                           onChange={(e) => setContactForm({ ...contactForm, subject: e.target.value })}
                           className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
                         >
-                          <option value="General Enquiry">General Enquiry</option>
-                          <option value="Private Dining & Events">Private Dining & Events</option>
-                          <option value="Corporate Catering">Corporate Catering</option>
-                          <option value="Press & Media">Press & Media</option>
+                          <option value="General Enquiry">General enquiry</option>
+                          <option value="Office Lunch & Catering">Office lunch & catering</option>
+                          <option value="Private Dining & Events">Events & celebrations</option>
+                          <option value="Press & Media">Press & media</option>
                         </select>
                       </div>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
+                      <label htmlFor="enquiry-message" className="block text-xs font-semibold text-slate-700 dark:text-gray-300 mb-1">
                         Message Details
                       </label>
                       <textarea
                         required
                         rows={4}
-                        value={contactForm.message}
+                        id="enquiry-message"
+                          value={contactForm.message}
                         onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
-                        placeholder="Tell us about your event, preferred dates, or questions..."
+                        placeholder="How many people, which day and time, and which branch or office?"
                         className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
                       />
                     </div>
+
+                    {contactError && (
+                      <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300">
+                        {contactError}
+                      </p>
+                    )}
 
                     <button
                       type="submit"
@@ -1230,13 +1319,16 @@ export default function RestaurantWebsite() {
                       className="w-full flex items-center justify-center gap-2 rounded-xl bg-orange-500 py-3.5 text-sm font-bold text-white hover:bg-orange-600 transition shadow-lg shadow-orange-500/25 disabled:opacity-50"
                     >
                       {contactLoading ? (
-                        'Sending Enquiry...'
+                        'Sending...'
                       ) : (
                         <>
-                          <Send size={16} /> Submit Message
+                          <Send size={16} /> Send message
                         </>
                       )}
                     </button>
+                    <p className="text-xs text-slate-500 dark:text-gray-400">
+                      We use your name, phone and email only to reply to this message, and delete them after 90 days.
+                    </p>
                   </form>
                 )}
               </div>
@@ -1260,18 +1352,21 @@ export default function RestaurantWebsite() {
                 </span>
               </div>
               <p className="text-xs leading-relaxed text-gray-400">
-                Experience unparalleled gastronomic craft, warm hospitality, and unforgettable fine dining.
+                Proper Kenyan food at fair prices, across {restaurant?.city || 'Nairobi'}. Order ahead, pay by M-Pesa.
               </p>
+              {/* Only the social accounts the restaurant has set in Website Management. */}
               <div className="flex items-center gap-3 pt-2 text-gray-400">
-                <a href="#home" className="h-8 w-8 rounded-full bg-white/5 flex items-center justify-center hover:text-orange-400 hover:bg-white/10 transition">
-                  <Instagram size={15} />
-                </a>
-                <a href="#home" className="h-8 w-8 rounded-full bg-white/5 flex items-center justify-center hover:text-orange-400 hover:bg-white/10 transition">
-                  <Facebook size={15} />
-                </a>
-                <a href="#home" className="h-8 w-8 rounded-full bg-white/5 flex items-center justify-center hover:text-orange-400 hover:bg-white/10 transition">
-                  <span className="text-sm font-black leading-none">𝕏</span>
-                </a>
+                {([
+                  ['instagram', 'Instagram', <Instagram key="i" size={15} />],
+                  ['facebook', 'Facebook', <Facebook key="f" size={15} />],
+                  ['twitter', 'X', <span key="x" className="text-sm font-black leading-none">𝕏</span>],
+                ] as const)
+                  .filter(([key]) => /^https:\/\//.test(socialLinks[key] || ''))
+                  .map(([key, label, icon]) => (
+                    <a key={key} href={socialLinks[key]} target="_blank" rel="noopener noreferrer" aria-label={label} className="h-8 w-8 rounded-full bg-white/5 flex items-center justify-center hover:text-orange-400 hover:bg-white/10 transition">
+                      {icon}
+                    </a>
+                  ))}
               </div>
             </div>
 
@@ -1283,9 +1378,9 @@ export default function RestaurantWebsite() {
               <ul className="space-y-2 text-xs">
                 <li><a href="#home" onClick={(e) => scrollToSection(e, '#home')} className="hover:text-white transition cursor-pointer">Home</a></li>
                 <li><a href="#menu" onClick={(e) => scrollToSection(e, '#menu')} className="hover:text-white transition cursor-pointer">Full Menu & Ordering</a></li>
-                <li><a href="#about" onClick={(e) => scrollToSection(e, '#about')} className="hover:text-white transition cursor-pointer">Story & Philosophy</a></li>
-                <li><a href="#gallery" onClick={(e) => scrollToSection(e, '#gallery')} className="hover:text-white transition cursor-pointer">Culinary Gallery</a></li>
-                <li><a href="#locations" onClick={(e) => scrollToSection(e, '#locations')} className="hover:text-white transition cursor-pointer">Locations & Hours</a></li>
+                <li><a href="#about" onClick={(e) => scrollToSection(e, '#about')} className="hover:text-white transition cursor-pointer">Why Melio</a></li>
+                <li><a href="#gallery" onClick={(e) => scrollToSection(e, '#gallery')} className="hover:text-white transition cursor-pointer">Gallery</a></li>
+                <li><a href="#locations" onClick={(e) => scrollToSection(e, '#locations')} className="hover:text-white transition cursor-pointer">Branches & hours</a></li>
                 {hasReviews && <li><a href="#testimonials" onClick={(e) => scrollToSection(e, '#testimonials')} className="hover:text-white transition cursor-pointer">Guest Reviews</a></li>}
               </ul>
             </div>
@@ -1311,8 +1406,8 @@ export default function RestaurantWebsite() {
                     Customer Account & Loyalty
                   </Link>
                 </li>
-                <li><a href="#contact" onClick={(e) => scrollToSection(e, '#contact')} className="hover:text-white transition cursor-pointer">Private Event Inquiries</a></li>
-                <li><a href="#contact" onClick={(e) => scrollToSection(e, '#contact')} className="hover:text-white transition cursor-pointer">Executive Corporate Catering</a></li>
+                <li><a href="#contact" onClick={(e) => { scrollToSection(e, '#contact'); setContactForm((f) => ({ ...f, subject: 'Office Lunch & Catering' })); }} className="hover:text-white transition cursor-pointer">Office lunch & catering</a></li>
+                <li><a href="#contact" onClick={(e) => { scrollToSection(e, '#contact'); setContactForm((f) => ({ ...f, subject: 'Private Dining & Events' })); }} className="hover:text-white transition cursor-pointer">Events & celebrations</a></li>
               </ul>
             </div>
 
@@ -1387,7 +1482,7 @@ export default function RestaurantWebsite() {
           },
           {
             icon: <BookOpen size={20} />,
-            label: 'Our Story',
+            label: 'Why Melio',
             onClick: () => document.getElementById('about')?.scrollIntoView({ behavior: 'smooth' }),
           },
           {

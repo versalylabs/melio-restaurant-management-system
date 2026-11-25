@@ -147,7 +147,7 @@ export default function ReservationModal({
                 <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
                   <span className="text-[10px] text-gray-400 uppercase font-semibold">Venue / Branch</span>
                   <p className="font-bold text-white text-xs mt-0.5 truncate">
-                    {submittedData.branch?.name || 'Melio Fine Dining'}
+                    {submittedData.branch?.name || 'Melio'}
                   </p>
                 </div>
                 <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
@@ -237,7 +237,7 @@ export default function ReservationModal({
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="flex items-center gap-2 text-orange-400 text-xs font-bold uppercase tracking-widest">
-              <Sparkles size={14} /> Fine Dining Table Booking
+              <Sparkles size={14} /> Book a table
             </div>
             <h2 className="font-serif text-2xl font-bold text-white">Reserve Your Table</h2>
             <p className="text-xs text-gray-400">

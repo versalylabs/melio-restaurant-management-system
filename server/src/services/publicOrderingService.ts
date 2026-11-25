@@ -25,6 +25,8 @@ export const getPublicRestaurants = async (_req: Request, res: Response) => {
     where: { status: 'ACTIVE' },
     select: {
       id: true, name: true, description: true, phone: true, email: true, address: true, city: true, currency: true, logo: true, whatsappNumber: true,
+      // So the website only quotes a menu price as "what you pay" when nothing is added at checkout.
+      pricesIncludeTax: true, taxRate: true, serviceChargeRate: true,
       branches: { where: { status: 'ACTIVE' }, select: { id: true, name: true, code: true, address: true, city: true, phone: true, callPhone: true, diningHours: true } },
     },
     orderBy: { name: 'asc' },

@@ -39,7 +39,7 @@ const STATUS_DETAILS: Record<
   },
   PREPARING: {
     label: 'Culinary Preparation',
-    desc: 'Executive chefs are freshly preparing and plating your gourmet selections.',
+    desc: 'The kitchen is preparing your order.',
     icon: UtensilsCrossed,
     color: 'text-orange-400',
   },
