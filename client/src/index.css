@@ -68,26 +68,90 @@
   :where(input[type='checkbox']) { @apply h-4 w-4 rounded border-orange-200 text-orange-500 focus:ring-orange-300; }
 }
 
+/* ===================== Liquid glass (staff app) =====================
+   Warm smoky backdrop with soft ember glows, translucent panels with a
+   light rim and top highlight, orange glow for the active and primary
+   things. Panels are translucent only; real background blur is kept for
+   what floats over content (sidebar, header, menus, dialogs). */
+@layer base {
+  :root {
+    --glass-base: #fbf5ef;
+    --glass-glow-1: rgba(249, 115, 22, 0.22);
+    --glass-glow-2: rgba(245, 158, 11, 0.16);
+    --glass-glow-3: rgba(234, 88, 12, 0.12);
+    --glass-panel: rgba(255, 255, 255, 0.58);
+    --glass-raised: rgba(255, 253, 251, 0.94);
+    --glass-solid: rgba(255, 253, 251, 0.98);
+    --glass-edge: rgba(234, 88, 12, 0.13);
+    --glass-highlight: rgba(255, 255, 255, 0.95);
+    --glass-shadow: 0 12px 36px -14px rgba(124, 45, 18, 0.22);
+    --glass-hover: rgba(249, 115, 22, 0.08);
+    --glass-well: rgba(255, 255, 255, 0.7);
+  }
+  .dark {
+    --glass-base: #0c0907;
+    --glass-glow-1: rgba(249, 115, 22, 0.3);
+    --glass-glow-2: rgba(217, 119, 6, 0.17);
+    --glass-glow-3: rgba(194, 65, 12, 0.24);
+    --glass-panel: rgba(32, 25, 21, 0.55);
+    --glass-raised: rgba(26, 20, 17, 0.82);
+    --glass-solid: rgba(24, 19, 16, 0.96);
+    --glass-edge: rgba(255, 255, 255, 0.09);
+    --glass-highlight: rgba(255, 255, 255, 0.11);
+    --glass-shadow: 0 14px 40px -14px rgba(0, 0, 0, 0.7);
+    --glass-hover: rgba(255, 255, 255, 0.06);
+    --glass-well: rgba(255, 255, 255, 0.045);
+  }
+}
+
 @layer components {
-  /* Shared warm restaurant-system surface language with Liquid Glass enhancement. */
-  .rms-page {
-    @apply min-h-full bg-[#faf9f7] px-5 py-5 md:px-7 md:py-6 dark:bg-[#0b0b0f];
+  .glass-backdrop {
+    background-color: var(--glass-base);
+    background-image:
+      radial-gradient(60rem 42rem at 88% -12%, var(--glass-glow-1), transparent 62%),
+      radial-gradient(48rem 40rem at -12% 55%, var(--glass-glow-2), transparent 60%),
+      radial-gradient(52rem 34rem at 58% 118%, var(--glass-glow-3), transparent 62%);
+  }
+  .glass-panel {
+    background-color: var(--glass-panel);
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 45%);
+    border: 1px solid var(--glass-edge);
+    box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+  }
+  .glass-raised {
+    background-color: var(--glass-raised);
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 40%);
+    border: 1px solid var(--glass-edge);
+    box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+    -webkit-backdrop-filter: blur(22px) saturate(160%);
+    backdrop-filter: blur(22px) saturate(160%);
+  }
+  /* The active page, selected chip: orange-tinted glass with a soft glow. */
+  .glass-active {
+    background-color: rgba(249, 115, 22, 0.14);
+    border: 1px solid rgba(249, 115, 22, 0.42);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 22px -6px rgba(249, 115, 22, 0.55);
+  }
+  .glass-btn-primary {
+    background-image: linear-gradient(135deg, #f97316 0%, #ea580c 55%, #c2410c 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 8px 22px -8px rgba(249, 115, 22, 0.7);
   }
 
-  .rms-surface {
-    @apply relative overflow-hidden rounded-2xl border border-orange-500/15 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl dark:border-white/10 dark:bg-[#121218]/85 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)];
+  /* Shared warm restaurant-system surface language. */
+  .rms-page {
+    @apply min-h-full px-5 py-5 md:px-7 md:py-6;
+  }
+
+  .rms-surface,
+  .liquid-glass-panel {
+    @apply relative overflow-hidden rounded-2xl md:rounded-3xl;
+    background-color: var(--glass-panel);
+    border: 1px solid var(--glass-edge);
+    box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
   }
 
   .liquid-glass-card {
-    box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.45), 0 8px 32px 0 rgba(249, 115, 22, 0.04);
-  }
-
-  .dark .liquid-glass-card {
-    box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.12), 0 8px 32px 0 rgba(0, 0, 0, 0.4);
-  }
-
-  .liquid-glass-panel {
-    @apply relative overflow-hidden rounded-2xl md:rounded-3xl border border-orange-500/20 bg-white/75 shadow-[0_8px_32px_0_rgba(0,0,0,0.06)] backdrop-blur-2xl dark:border-white/10 dark:bg-[#121218]/80 dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.4)];
+    box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
   }
 
   .rms-section-title {
@@ -95,10 +159,60 @@
   }
 
   .rms-btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition; }
-  .rms-btn-secondary { @apply border border-orange-200/80 bg-white/90 text-slate-700 shadow-sm backdrop-blur-md hover:bg-orange-50 dark:border-white/10 dark:bg-[#121218]/90 dark:text-gray-100 dark:hover:bg-[#1a1a24]; }
-  .rms-control { @apply rounded-xl border border-orange-100/80 bg-white/90 px-3 py-2 text-sm text-slate-700 shadow-sm backdrop-blur-md outline-none transition hover:border-orange-200 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 dark:border-white/10 dark:bg-[#121218]/90 dark:text-gray-100 dark:focus:border-orange-500 dark:focus:ring-orange-500/15; }
-  .rms-icon-btn { @apply inline-flex items-center justify-center rounded-xl border border-orange-100/80 bg-white/90 p-2 text-slate-600 shadow-sm backdrop-blur-md transition hover:bg-orange-50 hover:text-orange-600 dark:border-white/10 dark:bg-[#121218]/90 dark:text-gray-300 dark:hover:bg-[#1a1a24]; }
+  .rms-btn-secondary { @apply border text-slate-700 shadow-sm hover:bg-orange-50 dark:text-gray-100 dark:hover:bg-white/10; background-color: var(--glass-well); border-color: var(--glass-edge); }
+  .rms-control { @apply rounded-xl border px-3 py-2 text-sm text-slate-700 shadow-sm outline-none transition hover:border-orange-200 focus:border-orange-400 focus:ring-4 focus:ring-orange-100 dark:text-gray-100 dark:focus:border-orange-500 dark:focus:ring-orange-500/15; background-color: var(--glass-well); border-color: var(--glass-edge); }
+  .rms-icon-btn { @apply inline-flex items-center justify-center rounded-xl border p-2 text-slate-600 shadow-sm transition hover:bg-orange-50 hover:text-orange-600 dark:text-gray-300 dark:hover:bg-white/10; background-color: var(--glass-well); border-color: var(--glass-edge); }
 }
+
+/* ---- Staff pages: existing hard-coded surfaces become glass ----
+   Pages were written with solid charcoal panels (dark:bg-[#111116] and
+   friends) and white cards. Inside the app shell (.rms-glass) those
+   surfaces turn into translucent glass, so every page follows the theme
+   without editing each one; new code using the same classes does too. */
+/* Weights are set just above the plain utility they replace (Tailwind emits
+   utilities after this file's rules) and below its hover/focus variants, so
+   state utilities on the same element still win: html + .rms-glass, the rest
+   in :where().
+   A colour written with its own opacity (e.g. dark:bg-[#111116]/40) is the
+   author's deliberate tint and is left alone. */
+html.dark .rms-glass :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):where(:not([class*="]/"], input, textarea, select)) {
+  background-color: var(--glass-panel);
+}
+html .rms-glass :where(html:not(.dark) [class~="bg-white"]):where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):where(:not([class*="]/"], input, textarea, select)) {
+  background-color: var(--glass-panel);
+}
+/* Anything of those that floats over content (menus, drawers, sticky headers) keeps it readable with real blur. */
+html.dark .rms-glass :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]):where(:not([class*="]/"])),
+html .rms-glass :where(html:not(.dark) [class~="bg-white"]):where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]):where(:not([class*="]/"])) {
+  background-color: var(--glass-raised);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+/* Page backgrounds step aside so the glow behind the glass shows. */
+.dark .rms-glass [class*="dark:bg-[#0b0b0f]"],
+html:not(.dark) .rms-glass [class*="bg-[#faf9f7]"][class*="min-h-"] {
+  background-color: transparent;
+}
+.dark .rms-glass :is([class*="dark:hover:bg-[#1a1a20]"], [class*="dark:hover:bg-[#1a1a24]"], [class*="dark:hover:bg-[#15151b]"], [class*="dark:hover:bg-[#16161c]"]):hover {
+  background-color: var(--glass-hover);
+}
+html.dark .rms-glass :where([class*="dark:border-gray-800"], [class*="dark:border-gray-700"], [class*="dark:border-gray-600"]) {
+  border-color: var(--glass-edge);
+}
+/* Primary actions: glowing orange gradient, like the inspiration's "Add to Cart". */
+.rms-glass :is(button, a):is([class~="bg-orange-500"], [class~="bg-orange-600"], [class~="bg-brand-600"]):not(:disabled) {
+  background-image: linear-gradient(135deg, #f97316 0%, #ea580c 55%, #c2410c 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 8px 22px -8px rgba(249, 115, 22, 0.7);
+}
+.rms-glass :is(button, a):is([class~="bg-orange-500"], [class~="bg-orange-600"], [class~="bg-brand-600"]):not(:disabled):hover {
+  filter: brightness(1.07);
+}
+/* Slim, warm scrollbars instead of the grey system bar. */
+.rms-glass * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(249, 115, 22, 0.35) transparent;
+}
+
 
 
 /* Melio dark-mode form controls: keep native dropdowns readable and consistent. */
@@ -107,6 +221,17 @@
   .dark select option:checked { background-color: #2a211d; color: #ffffff; }
   .dark select option:hover { background-color: #241c18; color: #ffffff; }
   .dark input, .dark textarea { background-color: #111116; color: #f3f4f6; }
+}
+
+/* Fields sit in the glass as soft wells. In the base layer and kept light,
+   so a field's own utilities (focus border, error border) always win. */
+@layer base {
+  html.dark .rms-glass :where(input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select):where(:not([class*="bg-transparent"])) {
+    background-color: var(--glass-well);
+  }
+  :where(.dark) .rms-glass :where(input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select) {
+    border-color: var(--glass-edge);
+  }
 }
 
 /* Native dropdowns inherit the same warm/charcoal control language on Windows and Edge. */
@@ -134,3 +259,8 @@ select option { background: #ffffff; color: #1f2937; }
   backdrop-filter: none !important;
 }
 .solid-surfaces .ambient-glow { display: none; }
+/* Without blur, floating panels need to be nearly solid to stay readable. */
+.solid-surfaces .glass-raised,
+.solid-surfaces :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]):where(:not([class*="]/"])) {
+  background-color: var(--glass-solid) !important;
+}
