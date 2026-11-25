@@ -106,7 +106,7 @@ export default function PayLink() {
   };
 
   return (
-    <main className="min-h-screen bg-stone-100 px-4 py-10 text-stone-900 dark:bg-zinc-950 dark:text-zinc-100">
+    <main className="site-glass glass-backdrop glass-backdrop-fixed relative min-h-screen px-4 py-10 text-stone-900 dark:text-zinc-100">
       <div className="mx-auto w-full max-w-md">
         {loadError ? (
           <div className="rounded-2xl bg-white p-6 text-center shadow-sm dark:bg-zinc-900" role="alert">

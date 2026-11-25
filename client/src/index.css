@@ -144,7 +144,8 @@
     filter: blur(2px) saturate(0.9) brightness(0.8);
     background: center / cover no-repeat;
   }
-  .dark .glass-backdrop::before {
+  .dark .glass-backdrop::before,
+  .glass-backdrop.glass-dark::before {
     /* Photo: Oliver Guhr, Unsplash (unsplash.com/photos/EjHiN2KxTO4), Unsplash licence. */
     background-image: url('/bg-restaurant.jpg');
   }
@@ -155,6 +156,12 @@
   }
   /* Dark glass in either theme, for bars with white text over the hero photo. */
   .glass-dark {
+    --glass-base: #070504;
+    --glass-glow-1: rgba(249, 115, 22, 0.1);
+    --glass-glow-2: rgba(217, 119, 6, 0.05);
+    --glass-glow-3: rgba(194, 65, 12, 0.07);
+    --glass-vignette: rgba(0, 0, 0, 0.6);
+    --glass-photo-opacity: 0.4;
     --lg-tint: rgba(16, 12, 10, 0.4);
     --lg-raised-tint: rgba(14, 11, 9, 0.66);
     --lg-sheen: radial-gradient(130% 85% at 0% 0%, rgba(255, 255, 255, 0.1), transparent 55%), linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01) 60%);
@@ -238,8 +245,8 @@
    utilities on the same element still win: html + .rms-glass, the rest in
    :where(). Light tints (/40-/60) and near-solid drawers (/95) are left as
    the author wrote them. */
-html.dark .rms-glass :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):where(:not([class*="]/40"], [class*="]/50"], [class*="]/60"], [class*="]/95"], input, textarea, select)),
-html .rms-glass :where(html:not(.dark) :is([class^="bg-white"], [class*=" bg-white"])):where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):where(:not([class*="]/40"], [class*="]/50"], [class*="]/60"], [class*="]/95"], input, textarea, select)) {
+html.dark :is(.rms-glass, .site-glass) :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"], [class*="dark:bg-zinc-900"], [class*="dark:bg-zinc-950"]):where(:not([class*="]/40"], [class*="]/50"], [class*="]/60"], [class*="]/95"], input, textarea, select)),
+html :is(.rms-glass, .site-glass) :where(html:not(.dark) :is([class^="bg-white"], [class*=" bg-white"])):where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"], [class*="dark:bg-zinc-900"], [class*="dark:bg-zinc-950"]):where(:not([class*="]/40"], [class*="]/50"], [class*="]/60"], [class*="]/95"], input, textarea, select)) {
   background-color: var(--lg-tint);
   background-image: var(--lg-sheen);
   border-color: var(--lg-rim);
@@ -248,14 +255,14 @@ html .rms-glass :where(html:not(.dark) :is([class^="bg-white"], [class*=" bg-whi
   backdrop-filter: var(--lg-filter);
 }
 /* What floats over content (menus, drawers, sticky headers): denser glass. */
-html.dark .rms-glass :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]):where(:not([class*="]/40"], [class*="]/50"], [class*="]/60"], [class*="]/95"], input, textarea, select)),
-html .rms-glass :where(html:not(.dark) :is([class^="bg-white"], [class*=" bg-white"])):where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]):where(:not([class*="]/40"], [class*="]/50"], [class*="]/60"], [class*="]/95"], input, textarea, select)) {
+html.dark :is(.rms-glass, .site-glass) :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"], [class*="dark:bg-zinc-900"], [class*="dark:bg-zinc-950"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]):where(:not([class*="]/40"], [class*="]/50"], [class*="]/60"], [class*="]/95"], input, textarea, select)),
+html :is(.rms-glass, .site-glass) :where(html:not(.dark) :is([class^="bg-white"], [class*=" bg-white"])):where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"], [class*="dark:bg-zinc-900"], [class*="dark:bg-zinc-950"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]):where(:not([class*="]/40"], [class*="]/50"], [class*="]/60"], [class*="]/95"], input, textarea, select)) {
   background-color: var(--lg-raised-tint);
   -webkit-backdrop-filter: var(--lg-raised-filter);
   backdrop-filter: var(--lg-raised-filter);
 }
 /* A panel inside a panel is already over frosted glass: no second blur. */
-.rms-glass :is(.glass-raised, .glass-panel, .rms-surface, .liquid-glass-panel, [class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]) :is(.glass-panel, .rms-surface, .liquid-glass-panel, [class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):not(:is([class*="fixed"], [class*="absolute"], [class*="sticky"])) {
+:is(.rms-glass, .site-glass) :is(.glass-raised, .glass-panel, .rms-surface, .liquid-glass-panel, [class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"], [class*="dark:bg-zinc-900"], [class*="dark:bg-zinc-950"]) :is(.glass-panel, .rms-surface, .liquid-glass-panel, [class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"], [class*="dark:bg-zinc-900"], [class*="dark:bg-zinc-950"]):not(:is([class*="fixed"], [class*="absolute"], [class*="sticky"])) {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -267,7 +274,7 @@ html:not(.dark) .rms-glass [class*="bg-[#faf9f7]"][class*="min-h-"] {
 .dark .rms-glass :is([class*="dark:hover:bg-[#1a1a20]"], [class*="dark:hover:bg-[#1a1a24]"], [class*="dark:hover:bg-[#15151b]"], [class*="dark:hover:bg-[#16161c]"]):hover {
   background-color: var(--glass-hover);
 }
-html.dark .rms-glass :where([class*="dark:border-gray-800"], [class*="dark:border-gray-700"], [class*="dark:border-gray-600"]) {
+html.dark :is(.rms-glass, .site-glass) :where([class*="dark:border-gray-800"], [class*="dark:border-gray-700"], [class*="dark:border-gray-600"]) {
   border-color: var(--glass-edge);
 }
 /* Primary actions: glowing orange gradient, like the inspiration's "Add to Cart". */
@@ -312,10 +319,10 @@ html.dark .rms-glass :where([class*="dark:border-gray-800"], [class*="dark:borde
 /* Fields sit in the glass as soft wells. In the base layer and kept light,
    so a field's own utilities (focus border, error border) always win. */
 @layer base {
-  html.dark .rms-glass :where(input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select):where(:not([class*="bg-transparent"])) {
+  html.dark :is(.rms-glass, .site-glass) :where(input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select):where(:not([class*="bg-transparent"])) {
     background-color: var(--glass-well);
   }
-  :where(.dark) .rms-glass :where(input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select) {
+  :where(.dark) :is(.rms-glass, .site-glass) :where(input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select) {
     border-color: var(--glass-edge);
   }
 }
@@ -350,6 +357,6 @@ select option { background: #ffffff; color: #1f2937; }
 .dark .solid-surfaces { --lg-tint: rgba(16, 12, 10, 0.84); --lg-raised-tint: rgba(14, 11, 9, 0.92); --glass-photo-opacity: 0.14; }
 /* Without blur, floating panels need to be nearly solid to stay readable. */
 .solid-surfaces .glass-raised,
-.solid-surfaces :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]) {
+.solid-surfaces :where([class*="dark:bg-[#111116]"], [class*="dark:bg-[#121218]"], [class*="dark:bg-[#0e0e13]"], [class*="dark:bg-[#0d0d11]"], [class*="dark:bg-[#15151b]"], [class*="dark:bg-[#15151c]"], [class*="dark:bg-[#16161c]"], [class*="dark:bg-[#0f0f14]"], [class*="dark:bg-zinc-900"], [class*="dark:bg-zinc-950"]):is([class*="fixed"], [class*="absolute"], [class*="sticky"]) {
   background-color: var(--glass-solid) !important;
 }
