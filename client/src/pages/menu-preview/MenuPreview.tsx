@@ -152,7 +152,7 @@ export default function MenuPreview() {
       {/* Item Detail Modal */}
       {selectedItem && (
         <DialogOverlay onClose={() => setSelectedItem(null)} label="Menu item details" className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-3xl border border-orange-500/20 bg-white dark:bg-[#121218] p-6 shadow-2xl space-y-4">
+          <div className="glass-raised w-full max-w-lg rounded-3xl p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900 dark:text-white">{selectedItem.name}</h2>
               <button aria-label="Close"

@@ -10,14 +10,14 @@ function DialogFrame({ title, onCancel, children }: { title: string; onCancel: (
   const titleId = useId();
   const ref = useDialogA11y<HTMLDivElement>(onCancel);
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 dark:bg-black/70 p-4">
       <div
         ref={ref}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="w-full max-w-md rounded-2xl border border-orange-500/20 bg-white p-6 text-gray-900 shadow-2xl outline-none dark:border-white/15 dark:bg-[#121218] dark:text-gray-100"
+        className="glass-raised w-full max-w-md rounded-3xl p-6 text-gray-900 outline-none dark:text-gray-100"
       >
         <h2 id={titleId} className="text-base font-bold">{title}</h2>
         {children}

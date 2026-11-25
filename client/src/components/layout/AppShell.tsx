@@ -91,14 +91,9 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
   };
 
   return (
-    <div className={`relative flex h-screen bg-[#faf9f7] dark:bg-[#0b0b0f] text-gray-900 dark:text-gray-100 overflow-hidden ${WORK_SCREENS.some((p) => location.pathname.startsWith(p)) ? 'solid-surfaces' : ''}`}>
-      {/* Liquid Glass Background Ambient Glows */}
-      <div className="ambient-glow pointer-events-none fixed -top-40 -right-40 h-96 w-96 rounded-full bg-orange-500/10 dark:bg-orange-500/5 blur-[140px] z-0" />
-      <div className="ambient-glow pointer-events-none fixed top-1/2 -left-40 h-96 w-96 rounded-full bg-amber-500/10 dark:bg-amber-500/5 blur-[140px] z-0" />
-      <div className="ambient-glow pointer-events-none fixed -bottom-40 right-1/4 h-96 w-96 rounded-full bg-orange-600/10 dark:bg-rose-500/5 blur-[140px] z-0" />
-
-      {/* Desktop Stationary Sidebar */}
-      <aside className="relative z-10 hidden lg:block w-64 bg-white/80 dark:bg-[#0e0e13]/85 backdrop-blur-2xl border-r border-orange-500/10 dark:border-white/10 flex-shrink-0 overflow-hidden shadow-sm">
+    <div className={`rms-glass glass-backdrop relative flex h-screen text-gray-900 dark:text-gray-100 overflow-hidden ${WORK_SCREENS.some((p) => location.pathname.startsWith(p)) ? 'solid-surfaces' : ''}`}>
+      {/* Desktop sidebar: a floating glass panel */}
+      <aside className="glass-raised relative z-10 hidden lg:block w-64 m-3 mr-0 rounded-3xl flex-shrink-0 overflow-hidden">
         <Sidebar />
       </aside>
 
@@ -111,7 +106,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
           onClick={() => setMobileSidebarOpen(false)}
         >
           <div
-            className="relative w-64 max-w-[80vw] h-full bg-white/95 dark:bg-[#111116]/95 backdrop-blur-2xl border-r border-orange-500/10 dark:border-white/10 shadow-2xl flex flex-col"
+            className="glass-raised relative w-64 max-w-[80vw] h-full rounded-r-3xl flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -129,9 +124,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
       )}
 
       <main className="relative z-10 flex-1 flex flex-col overflow-hidden">
-        <header className="relative z-30 min-h-[4.25rem] bg-white/75 dark:bg-[#0e0e13]/80 backdrop-blur-xl border-b border-orange-500/10 dark:border-white/10 flex items-center justify-between px-3.5 sm:px-5 flex-shrink-0 py-3 gap-2">
-          {/* Top edge sheen reflection */}
-          <div className="absolute inset-x-0 top-0 h-[1px] bg-gradient-to-r from-transparent via-orange-400/30 dark:via-white/15 to-transparent pointer-events-none" />
+        <header className="glass-raised relative z-30 m-3 mb-0 min-h-[3.75rem] rounded-2xl flex items-center justify-between px-3 sm:px-4 flex-shrink-0 py-2.5 gap-2">
 
           <div className="flex items-center gap-2 sm:gap-3">
             <button
@@ -142,7 +135,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
               <MenuIcon size={18} />
             </button>
             <div className="flex items-center gap-2.5">
-              <div className="grid h-8 w-8 place-items-center rounded-xl bg-orange-500 text-white shadow-md shadow-orange-500/25 shrink-0">
+              <div className="glass-btn-primary grid h-8 w-8 place-items-center rounded-xl text-white shrink-0">
                 <UtensilsCrossed size={16} />
               </div>
               <div className="min-w-0">
@@ -164,7 +157,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
               </span>
             )}
 
-            <a href="/" target="_blank" rel="noopener noreferrer" className="hidden md:inline-flex items-center gap-1.5 rounded-xl border border-orange-200/80 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 shadow-sm transition hover:border-orange-400 hover:bg-orange-50 hover:text-orange-700 dark:border-white/10 dark:bg-[#0d0d11] dark:text-gray-200" title="Open public live website">
+            <a href="/" target="_blank" rel="noopener noreferrer" className="glass-panel hidden md:inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-gray-700 transition hover:text-orange-700 dark:text-gray-200 dark:hover:text-white" title="Open public live website">
               <ExternalLink className="h-3.5 w-3.5 text-orange-500" /> Live Site
             </a>
 
@@ -173,7 +166,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
                 <button
                   type="button"
                   onClick={() => setBranchMenuOpen((open) => !open)}
-                  className="inline-flex min-w-[110px] sm:min-w-[190px] items-center justify-between gap-1.5 sm:gap-2.5 rounded-xl border border-orange-200/80 bg-white px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-gray-800 shadow-sm transition hover:border-orange-400 hover:bg-orange-50/60 dark:border-white/10 dark:bg-[#0d0d11] dark:text-gray-100"
+                  className="glass-panel inline-flex min-w-[110px] sm:min-w-[190px] items-center justify-between gap-1.5 sm:gap-2.5 rounded-xl px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-gray-800 transition hover:border-orange-400/60 dark:text-gray-100"
                   aria-haspopup="listbox"
                   aria-expanded={branchMenuOpen}
                   title="Active branch"
@@ -185,7 +178,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
                   <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform ${branchMenuOpen ? 'rotate-180' : ''}`} />
                 </button>
                 {branchMenuOpen && (
-                  <div className="absolute right-0 z-50 mt-2 w-[280px] sm:w-[310px] overflow-hidden rounded-2xl border border-orange-200/80 bg-white p-1.5 shadow-2xl dark:border-white/10 dark:bg-[#111116]" role="listbox">
+                  <div className="glass-raised absolute right-0 z-50 mt-2 w-[280px] sm:w-[310px] overflow-hidden rounded-2xl p-1.5" role="listbox">
                     <div className="border-b border-orange-100 px-3 py-2 dark:border-white/10">
                       <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-orange-500">Locations</div>
                     </div>
@@ -197,7 +190,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
                           key={branch.id}
                           type="button"
                           onClick={() => selectBranch(branch.id)}
-                          className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs sm:text-sm transition ${selected ? 'bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-300' : 'text-gray-700 hover:bg-orange-50/70 dark:text-gray-200 dark:hover:bg-[#1a1a20]'}`}
+                          className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs sm:text-sm transition ${selected ? 'glass-active text-orange-800 dark:text-orange-300' : 'border border-transparent text-gray-700 hover:bg-orange-50/70 dark:text-gray-200 dark:hover:bg-white/5'}`}
                           role="option"
                           aria-selected={selected}
                         >
@@ -212,12 +205,12 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
               </div>
             )}
 
-            <button onClick={() => navigate('/notifications')} className="relative rounded-xl border border-transparent p-1.5 sm:p-2 text-gray-500 dark:text-gray-400 hover:bg-orange-50 dark:hover:bg-[#1a1a20] transition" title="Notifications">
+            <button onClick={() => navigate('/notifications')} className="relative rounded-xl border border-transparent p-1.5 sm:p-2 text-gray-500 dark:text-gray-400 hover:bg-orange-50 dark:hover:bg-white/10 transition" title="Notifications">
               <Bell className="w-4 h-4" />
-              {hasNotifications&&<span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-orange-500 ring-2 ring-white dark:ring-[#111116]"/>}
+              {hasNotifications&&<span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.8)]"/>}
             </button>
 
-            <button onClick={() => setDarkMode(!darkMode)} className="rounded-xl border border-transparent p-1.5 sm:p-2 text-gray-500 dark:text-gray-400 hover:bg-orange-50 dark:hover:bg-[#1a1a20] transition" title="Toggle theme">
+            <button onClick={() => setDarkMode(!darkMode)} className="rounded-xl border border-transparent p-1.5 sm:p-2 text-gray-500 dark:text-gray-400 hover:bg-orange-50 dark:hover:bg-white/10 transition" title="Toggle theme">
               {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
 

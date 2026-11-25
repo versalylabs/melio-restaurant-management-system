@@ -114,10 +114,10 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 className={({ isActive }) =>
                   `flex items-center justify-between px-3 py-2 text-xs sm:text-sm rounded-xl transition-all duration-200 ${
                     isActive
-                      ? 'bg-gradient-to-r from-orange-500/15 to-amber-500/10 text-orange-600 dark:text-orange-400 font-semibold shadow-sm border border-orange-500/20 dark:border-orange-500/30'
+                      ? 'glass-active text-orange-800 dark:text-orange-300 font-semibold'
                       : child.disabled
                       ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
-                      : 'text-gray-600 dark:text-gray-400 hover:bg-orange-500/10 dark:hover:bg-white/5 hover:text-orange-600 dark:hover:text-gray-200'
+                      : 'border border-transparent text-gray-600 dark:text-gray-400 hover:bg-orange-500/10 dark:hover:bg-white/5 hover:text-orange-600 dark:hover:text-gray-200'
                   }`
                 }
               >
@@ -140,8 +140,8 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         className={({ isActive }) =>
           `flex items-center gap-3 px-3 py-2.5 text-xs sm:text-sm font-medium rounded-xl transition-all duration-200 ${
             isActive
-              ? 'bg-gradient-to-r from-orange-500/15 to-amber-500/10 text-orange-600 dark:text-orange-400 font-semibold shadow-sm border border-orange-500/20 dark:border-orange-500/30'
-              : 'text-gray-600 dark:text-gray-400 hover:bg-orange-500/10 dark:hover:bg-white/5 hover:text-orange-600 dark:hover:text-gray-200'
+              ? 'glass-active text-orange-800 dark:text-orange-300 font-semibold'
+              : 'border border-transparent text-gray-600 dark:text-gray-400 hover:bg-orange-500/10 dark:hover:bg-white/5 hover:text-orange-600 dark:hover:text-gray-200'
           }`
         }
       >
@@ -152,10 +152,10 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   };
 
   return (
-    <div className="flex h-full flex-col bg-white/40 dark:bg-black/20 backdrop-blur-xl">
+    <div className="flex h-full flex-col">
       {/* Logo / Brand */}
       <div className="relative flex items-center gap-3 px-5 py-4 border-b border-orange-500/10 dark:border-white/10">
-        <div className="w-8 h-8 bg-gradient-to-tr from-orange-600 to-amber-500 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm shadow-orange-500/20">
+        <div className="glass-btn-primary w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0">
           <UtensilsCrossed className="w-4 h-4 text-white" />
         </div>
         <div className="min-w-0">
@@ -169,7 +169,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
 
       {/* User footer */}
-      <div className="border-t border-orange-500/10 dark:border-white/10 p-3.5 m-2 rounded-2xl bg-white/60 dark:bg-white/[0.03] border backdrop-blur-md shadow-sm">
+      <div className="glass-panel p-3.5 m-2 rounded-2xl">
         <div className="flex items-center gap-3 mb-2.5">
           <div className="w-8 h-8 bg-gradient-to-br from-orange-500/20 to-amber-500/20 border border-orange-500/30 rounded-xl flex items-center justify-center flex-shrink-0">
             <span className="text-xs font-bold text-orange-600 dark:text-orange-400">

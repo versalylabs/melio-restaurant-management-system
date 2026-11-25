@@ -115,7 +115,7 @@ export default function Customers() {
         <DialogOverlay onClose={() => setShow(false)} label="Add customer" className="fixed inset-0 bg-black/50 dark:bg-black/70 flex items-center justify-center p-4 z-50">
           <form
             onSubmit={save}
-            className="bg-white dark:bg-[#111116] rounded-xl border border-orange-100 dark:border-gray-700 shadow-xl p-6 w-full max-w-lg space-y-4"
+            className="glass-raised rounded-3xl p-6 w-full max-w-lg space-y-4"
           >
             <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Add Customer</h2>
             {(['name', 'phone', 'email', 'address', 'notes'] as const).map(k => (
