@@ -360,9 +360,9 @@ export default function RestaurantWebsite() {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9f7] text-slate-800 antialiased dark:bg-[#0d0d11] dark:text-gray-100 selection:bg-orange-500 selection:text-white">
+    <div className="site-glass glass-backdrop glass-backdrop-fixed relative min-h-screen text-slate-800 antialiased dark:text-gray-100 selection:bg-orange-500 selection:text-white">
       {/* ======================= NAVIGATION HEADER ======================= */}
-      <header className="fixed inset-x-0 top-0 z-40 border-b border-white/10 bg-black/40 backdrop-blur-xl transition-all duration-300">
+      <header className="glass-raised glass-dark fixed inset-x-2 top-2 sm:inset-x-4 sm:top-3 z-40 rounded-2xl transition-all duration-300">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           {/* Logo & Brand */}
           <a
@@ -685,7 +685,7 @@ export default function RestaurantWebsite() {
           {/* Floating Featured Dish Card with React Bits SpotlightCard */}
           {heroItem && (
             <div className="absolute bottom-10 right-8 hidden w-80 lg:block">
-              <SpotlightCard className="p-5 text-white border-white/15 bg-black/50 shadow-2xl">
+              <SpotlightCard className="glass-raised glass-dark p-5 text-white">
                 <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.2em] text-orange-400">
                   <span>Featured dish</span>
                   <Sparkles size={14} />
@@ -706,7 +706,7 @@ export default function RestaurantWebsite() {
         </section>
 
         {/* ======================= FULL MENU SECTION ======================= */}
-        <section id="menu" className="relative border-y border-orange-500/10 bg-[#faf9f7] py-24 dark:bg-[#111116] transition-colors duration-300">
+        <section id="menu" className="relative py-24">
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="flex flex-col justify-between gap-6 md:flex-row md:items-end">
               <div>
@@ -727,7 +727,7 @@ export default function RestaurantWebsite() {
                   <select
                     value={branchId}
                     onChange={(e) => setBranchId(e.target.value)}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-800 shadow-sm focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900 dark:text-gray-200"
+                    className="glass-panel rounded-xl px-3 py-2.5 text-sm font-medium text-slate-800 focus:border-orange-500 focus:outline-none dark:text-gray-200"
                   >
                     {restaurant.branches.map((b) => (
                       <option key={b.id} value={b.id}>
@@ -743,7 +743,7 @@ export default function RestaurantWebsite() {
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search dishes..."
-                    className="w-48 sm:w-64 rounded-xl border border-slate-200 bg-white pl-10 pr-4 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 shadow-sm focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900 dark:text-gray-200"
+                    className="glass-panel w-48 sm:w-64 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:text-gray-200"
                   />
                 </div>
               </div>
@@ -755,8 +755,8 @@ export default function RestaurantWebsite() {
                 onClick={() => setActiveCategory('ALL')}
                 className={`whitespace-nowrap rounded-2xl px-5 py-2.5 text-xs font-bold uppercase tracking-wider transition ${
                   activeCategory === 'ALL'
-                    ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25'
-                    : 'bg-white text-slate-600 hover:bg-orange-50 dark:bg-zinc-900 dark:text-gray-300 dark:hover:bg-zinc-800'
+                    ? 'glass-btn-primary text-white'
+                    : 'glass-panel text-slate-600 hover:bg-orange-50 dark:text-gray-300 dark:hover:bg-white/10'
                 }`}
               >
                 {menuLoading ? 'All' : `All (${items.length})`}
@@ -767,8 +767,8 @@ export default function RestaurantWebsite() {
                   onClick={() => setActiveCategory(c.id)}
                   className={`whitespace-nowrap rounded-2xl px-5 py-2.5 text-xs font-bold uppercase tracking-wider transition ${
                     activeCategory === c.id
-                      ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/25'
-                      : 'bg-white text-slate-600 hover:bg-orange-50 dark:bg-zinc-900 dark:text-gray-300 dark:hover:bg-zinc-800'
+                      ? 'glass-btn-primary text-white'
+                      : 'glass-panel text-slate-600 hover:bg-orange-50 dark:text-gray-300 dark:hover:bg-white/10'
                   }`}
                 >
                   {c.name}
@@ -789,7 +789,7 @@ export default function RestaurantWebsite() {
               {!menuLoading && filteredItems.slice(0, 9).map((item) => (
                 <SpotlightCard
                   key={item.id}
-                  className="group flex flex-col justify-between overflow-hidden rounded-3xl border border-orange-500/10 bg-white shadow-sm transition duration-300 hover:-translate-y-1 hover:shadow-xl dark:bg-zinc-900/80 dark:border-white/5"
+                  className="glass-panel group flex flex-col justify-between overflow-hidden rounded-3xl transition duration-300 hover:-translate-y-1"
                 >
                   <div>
                     {/* Item Image */}
@@ -852,11 +852,11 @@ export default function RestaurantWebsite() {
         </section>
 
         {/* ======================= ABOUT US & STORY SECTION ======================= */}
-        <section id="about" className="relative overflow-hidden bg-white py-24 dark:bg-[#0d0d11]">
+        <section id="about" className="relative overflow-hidden py-24">
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
               {/* Left Column: Visual Highlight Box */}
-              <div className="relative overflow-hidden rounded-3xl bg-zinc-950 border border-orange-500/20 p-8 sm:p-12 text-white shadow-2xl">
+              <div className="glass-raised glass-dark relative overflow-hidden rounded-3xl p-8 sm:p-12 text-white">
                 <div className="absolute -right-10 -bottom-10 h-64 w-64 rounded-full bg-orange-500/10 blur-3xl pointer-events-none" />
                 <div className="relative">
                   <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-orange-400">
@@ -937,7 +937,7 @@ export default function RestaurantWebsite() {
         </section>
 
         {/* ======================= GALLERY SECTION ======================= */}
-        <section id="gallery" className="relative border-t border-orange-500/10 bg-[#faf9f7] py-24 dark:bg-[#111116]">
+        <section id="gallery" className="relative py-24">
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
               <div>
@@ -960,8 +960,8 @@ export default function RestaurantWebsite() {
                     onClick={() => setGalleryFilter(tab.id as any)}
                     className={`rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-wider transition ${
                       galleryFilter === tab.id
-                        ? 'bg-orange-500 text-white'
-                        : 'bg-white text-slate-600 hover:bg-orange-50 dark:bg-zinc-900 dark:text-gray-300 dark:hover:bg-zinc-800'
+                        ? 'glass-btn-primary text-white'
+                        : 'glass-panel text-slate-600 hover:bg-orange-50 dark:text-gray-300 dark:hover:bg-white/10'
                     }`}
                   >
                     {tab.label}
@@ -1001,7 +1001,7 @@ export default function RestaurantWebsite() {
         </section>
 
         {/* ======================= LOCATIONS & OPENING HOURS ======================= */}
-        <section id="locations" className="relative border-t border-orange-500/10 bg-white py-24 dark:bg-[#0d0d11]">
+        <section id="locations" className="relative py-24">
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="text-center max-w-2xl mx-auto">
               <div className="text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
@@ -1019,7 +1019,7 @@ export default function RestaurantWebsite() {
               {(restaurant?.branches || []).map((b) => (
                 <div
                   key={b.id}
-                  className="rounded-3xl border border-orange-500/10 bg-[#faf9f7] p-8 dark:bg-zinc-900/90 dark:border-white/5 shadow-sm transition hover:shadow-xl flex flex-col justify-between"
+                  className="glass-panel rounded-3xl p-8 transition flex flex-col justify-between"
                 >
                   <div>
                     <div className="flex items-center justify-between">
@@ -1093,7 +1093,7 @@ export default function RestaurantWebsite() {
         </section>
 
         {/* ======================= TESTIMONIALS & REVIEWS SECTION ======================= */}
-        {hasReviews && <section id="testimonials" className="relative border-t border-orange-500/10 bg-[#faf9f7] py-24 dark:bg-[#111116]">
+        {hasReviews && <section id="testimonials" className="relative py-24">
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="text-center max-w-2xl mx-auto">
               <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.25em] text-orange-600 dark:text-orange-400">
@@ -1120,7 +1120,7 @@ export default function RestaurantWebsite() {
               })).map((review: { name: string; role: string; rating: number; text: string; date: string }, i: number) => (
                 <div
                   key={i}
-                  className="relative rounded-3xl border border-orange-500/10 bg-white p-8 shadow-sm transition hover:shadow-xl dark:bg-zinc-900/90 dark:border-white/5 flex flex-col justify-between"
+                  className="glass-panel relative rounded-3xl p-8 transition flex flex-col justify-between"
                 >
                   <div>
                     <div className="flex text-orange-400 mb-4">
@@ -1150,7 +1150,7 @@ export default function RestaurantWebsite() {
         </section>}
 
         {/* ======================= CONTACT & ENQUIRY FORM ======================= */}
-        <section id="contact" className="relative border-t border-orange-500/10 bg-white py-24 dark:bg-[#0d0d11]">
+        <section id="contact" className="relative py-24">
           <div className="mx-auto max-w-7xl px-5 sm:px-8">
             <div className="grid gap-12 lg:grid-cols-2">
               {/* Left Details */}
@@ -1205,7 +1205,7 @@ export default function RestaurantWebsite() {
               </div>
 
               {/* Right: Contact / Enquiry Form */}
-              <div className="rounded-3xl border border-orange-500/10 bg-[#faf9f7] p-8 dark:bg-zinc-900/90 dark:border-white/5 shadow-xl">
+              <div className="glass-panel rounded-3xl p-8">
                 {contactSubmitted ? (
                   <div role="status" tabIndex={-1} ref={contactSuccessRef} className="text-center py-12 outline-none">
                     <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-500/20 text-orange-500">
@@ -1241,7 +1241,7 @@ export default function RestaurantWebsite() {
                           value={contactForm.name}
                           onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
                           placeholder="e.g. Wanjiku Kamau"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
+                          className="glass-panel w-full rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:text-gray-200"
                         />
                       </div>
                       <div>
@@ -1255,7 +1255,7 @@ export default function RestaurantWebsite() {
                           value={contactForm.phone}
                           onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })}
                           placeholder="+254 700 000 000"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
+                          className="glass-panel w-full rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:text-gray-200"
                         />
                       </div>
                     </div>
@@ -1271,7 +1271,7 @@ export default function RestaurantWebsite() {
                           value={contactForm.email}
                           onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
                           placeholder="you@company.co.ke"
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
+                          className="glass-panel w-full rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:text-gray-200"
                         />
                       </div>
                       <div>
@@ -1282,7 +1282,7 @@ export default function RestaurantWebsite() {
                           id="enquiry-subject"
                           value={contactForm.subject}
                           onChange={(e) => setContactForm({ ...contactForm, subject: e.target.value })}
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
+                          className="glass-panel w-full rounded-xl px-3.5 py-2.5 text-sm text-slate-800 focus:border-orange-500 focus:outline-none dark:text-gray-200"
                         >
                           <option value="General Enquiry">General enquiry</option>
                           <option value="Office Lunch & Catering">Office lunch & catering</option>
@@ -1303,7 +1303,7 @@ export default function RestaurantWebsite() {
                           value={contactForm.message}
                         onChange={(e) => setContactForm({ ...contactForm, message: e.target.value })}
                         placeholder="How many people, which day and time, and which branch or office?"
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:border-zinc-800 dark:bg-zinc-950 dark:text-gray-200"
+                        className="glass-panel w-full rounded-xl px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-orange-500 focus:outline-none dark:text-gray-200"
                       />
                     </div>
 
@@ -1338,7 +1338,7 @@ export default function RestaurantWebsite() {
       </main>
 
       {/* ======================= LUXURY FOOTER ======================= */}
-      <footer className="border-t border-orange-500/10 bg-[#0d0d11] text-gray-300 py-16">
+      <footer className="glass-raised glass-dark mx-2 mb-2 sm:mx-4 sm:mb-4 rounded-3xl text-gray-300 py-16">
         <div className="mx-auto max-w-7xl px-5 sm:px-8">
           <div className="grid gap-10 md:grid-cols-2 lg:grid-cols-4 pb-12 border-b border-white/10">
             {/* Col 1: Brand Info */}
@@ -1537,7 +1537,7 @@ export default function RestaurantWebsite() {
         </a>
       )}
 
-      <nav aria-label="Mobile Navigation" className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-xl border-t border-orange-500/20 px-2 py-2 flex items-center justify-around text-center shadow-2xl safe-area-pb">
+      <nav aria-label="Mobile Navigation" className="glass-raised glass-dark md:hidden fixed bottom-2 left-2 right-2 z-40 rounded-2xl px-2 py-2 flex items-center justify-around text-center shadow-2xl safe-area-pb">
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           className="flex flex-col items-center gap-1 p-1.5 text-gray-400 hover:text-orange-400 active:text-orange-500 transition"
