@@ -19,19 +19,12 @@ const glowVariants = {
   neutral: 'from-white/10 via-white/5 to-transparent hover:border-white/30',
 };
 
-const blurClasses = {
-  sm: 'backdrop-blur-sm',
-  md: 'backdrop-blur-md',
-  lg: 'backdrop-blur-lg',
-  xl: 'backdrop-blur-xl',
-  '2xl': 'backdrop-blur-2xl',
-};
 
 export default function LiquidGlass({
   children,
   className,
   glowColor = 'orange',
-  blur = 'xl',
+  blur: _blur, // kept for callers; the blur now comes from the shared glass recipe
   intensity = 'medium',
   interactive = true,
   ...props
@@ -56,25 +49,13 @@ export default function LiquidGlass({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={cn(
-        'group relative overflow-hidden rounded-2xl sm:rounded-3xl border transition-all duration-300',
-        // Glass Background & Blur
-        blurClasses[blur],
-        'bg-white/70 dark:bg-[#121218]/80 text-gray-900 dark:text-gray-100',
-        'border-orange-500/15 dark:border-white/10',
-        'shadow-[0_8px_32px_0_rgba(0,0,0,0.08)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.35)]',
-        // Hover State
+        // Shared liquid-glass recipe (index.css): frosted tint, light-catching rim, sheen, shadow.
+        'glass-panel group relative overflow-hidden rounded-2xl sm:rounded-3xl transition-all duration-300 text-gray-900 dark:text-gray-100',
         glowVariants[glowColor],
         className
       )}
-      style={{
-        boxShadow:
-          'inset 0 1px 1px 0 rgba(255, 255, 255, 0.35), 0 8px 32px 0 rgba(0, 0, 0, 0.15)',
-      }}
       {...props}
     >
-      {/* Top Specular Glare Reflection Bar */}
-      <div className="absolute inset-x-0 top-0 h-[35%] bg-gradient-to-b from-white/30 dark:from-white/10 to-transparent pointer-events-none rounded-t-2xl sm:rounded-t-3xl" />
-
       {/* Interactive Mouse Spotlight Sheen */}
       {interactive && isHovered && (
         <div
