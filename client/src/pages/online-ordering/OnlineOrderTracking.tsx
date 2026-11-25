@@ -296,7 +296,7 @@ export default function OnlineOrderTracking() {
 
   if (error || !data) {
     return (
-      <div className="min-h-screen bg-[#0d0d11] flex items-center justify-center p-6 text-white">
+      <div className="site-glass glass-backdrop glass-backdrop-fixed relative glass-dark min-h-screen flex items-center justify-center p-6 text-white">
         <div className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl p-8 max-w-md text-center shadow-2xl">
           <div className="h-14 w-14 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto mb-4">
             <AlertCircle size={28} />
@@ -322,9 +322,9 @@ export default function OnlineOrderTracking() {
   const isPaid = data.paymentState === 'PAID' || data.paymentStatus === 'PAID';
 
   return (
-    <div className="min-h-screen bg-[#0d0d11] text-gray-100 antialiased selection:bg-orange-500 selection:text-white pb-16">
+    <div className="site-glass glass-backdrop glass-backdrop-fixed relative glass-dark min-h-screen text-gray-100 antialiased selection:bg-orange-500 selection:text-white pb-16">
       {/* Top Navigation */}
-      <header className="border-b border-white/10 bg-black/40 backdrop-blur-xl sticky top-0 z-30">
+      <header className="glass-raised glass-dark border-x-0 border-t-0 sticky top-0 z-30">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-4">
           <Link to="/" className="flex items-center gap-2 text-white hover:text-orange-400 transition">
             <div className="grid h-8 w-8 place-items-center rounded-lg bg-orange-500 text-white shadow-lg shadow-orange-500/20">

@@ -158,7 +158,7 @@ export default function CustomerAccount() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-[#0b0b0f] text-gray-100 flex flex-col justify-between p-4 selection:bg-orange-500 selection:text-white relative overflow-hidden">
+      <div className="site-glass glass-backdrop glass-backdrop-fixed relative glass-dark min-h-screen text-gray-100 flex flex-col justify-between p-4 selection:bg-orange-500 selection:text-white overflow-hidden">
         <div className="pointer-events-none fixed -top-40 -right-40 h-96 w-96 rounded-full bg-orange-500/15 blur-[140px]" />
         <div className="pointer-events-none fixed top-1/2 -left-40 h-96 w-96 rounded-full bg-amber-500/10 blur-[140px]" />
 
@@ -221,9 +221,9 @@ export default function CustomerAccount() {
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9f7] text-slate-800 dark:bg-[#0d0d11] dark:text-gray-100 antialiased">
+    <div className="site-glass glass-backdrop glass-backdrop-fixed relative min-h-screen text-slate-800 dark:text-gray-100 antialiased">
       {/* Top Header */}
-      <header className="sticky top-0 z-30 border-b border-orange-500/10 bg-black/60 backdrop-blur-xl text-white">
+      <header className="glass-raised glass-dark border-x-0 border-t-0 sticky top-0 z-30 text-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <Link to="/" className="flex items-center gap-3 group">
             <div className="grid h-10 w-10 place-items-center rounded-xl bg-orange-500 text-white shadow-lg shadow-orange-500/25">

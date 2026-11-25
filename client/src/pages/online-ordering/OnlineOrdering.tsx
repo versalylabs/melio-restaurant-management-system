@@ -444,9 +444,9 @@ export default function OnlineOrdering() {
   }
 
   return (
-    <div className="min-h-screen w-full max-w-full overflow-x-clip bg-[#faf9f7] text-slate-800 dark:bg-[#0d0d11] dark:text-gray-100 antialiased pb-28 md:pb-24 selection:bg-orange-500 selection:text-white">
+    <div className="site-glass glass-backdrop glass-backdrop-fixed relative min-h-screen w-full max-w-full overflow-x-clip text-slate-800 dark:text-gray-100 antialiased pb-28 md:pb-24 selection:bg-orange-500 selection:text-white">
       {/* Top Header */}
-      <header ref={headerRef} className="sticky top-0 z-30 w-full max-w-full border-b border-orange-500/15 bg-black/75 backdrop-blur-xl text-white shadow-md">
+      <header ref={headerRef} className="glass-raised glass-dark sticky top-0 z-30 w-full max-w-full border-x-0 border-t-0 text-white">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-3.5 py-3 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5 sm:gap-3 group shrink-0">
             <div className="grid h-9 w-9 sm:h-10 sm:w-10 place-items-center rounded-xl bg-orange-500 text-white shadow-lg shadow-orange-500/25 group-hover:scale-105 transition">
@@ -645,7 +645,7 @@ export default function OnlineOrdering() {
           </SpotlightCard>
 
           {/* Category tabs stay pinned under the header while scrolling the menu */}
-          <nav aria-label="Menu categories" style={{ top: headerHeight }} className="sticky z-20 -mx-3.5 px-3.5 py-2.5 sm:mx-0 sm:px-0 bg-[#faf9f7]/95 dark:bg-[#0d0d11]/95 backdrop-blur-md">
+          <nav aria-label="Menu categories" style={{ top: headerHeight }} className="glass-raised sticky z-20 -mx-3.5 px-3.5 py-2.5 sm:mx-0 sm:px-3 rounded-none sm:rounded-2xl">
             <div className="w-full max-w-full min-w-0 flex gap-2 overflow-x-auto scrollbar-none">
               <button
                 type="button"
