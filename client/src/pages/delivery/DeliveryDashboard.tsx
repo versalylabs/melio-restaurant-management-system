@@ -101,7 +101,7 @@ export default function DeliveryDashboard() {
 
   useEffect(() => {
     fetchDeliveries();
-    const interval = setInterval(() => fetchDeliveries(), 20000);
+    const interval = setInterval(() => { if (document.visibilityState === 'visible') fetchDeliveries(); }, 20000);
     const unsub = listenForBranchChanges(() => fetchDeliveries());
     return () => {
       clearInterval(interval);

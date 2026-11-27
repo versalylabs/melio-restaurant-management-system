@@ -66,7 +66,7 @@ export default function AppShell({ children }: { children?: React.ReactNode }) {
       return;
     }
     const check=()=>notificationApi.getAll(true).then((r:any)=>setHasNotifications(Boolean((r.data.data?.notifications||[]).length))).catch(()=>{});
-    check(); const t=setInterval(check,30000); return()=>clearInterval(t);
+    check(); const t=setInterval(()=>{ if (document.visibilityState==='visible') check(); },60000); return()=>clearInterval(t);
   }, [user?.id]);
 
   useEffect(() => {
