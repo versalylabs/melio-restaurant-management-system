@@ -8,6 +8,16 @@ import { generateStreamTicket, sendResponse } from '../utils/response';
 import { safeRouter } from '../utils/safeRouter';
 const router = safeRouter();
 
+// On serverless hosting (Vercel) a held-open stream keeps a function running,
+// and billed, for as long as the screen is open, and an event published on one
+// instance never reaches streams held by another. So there, every stream answers
+// "unavailable" at once and the screens rely on their regular refresh instead.
+router.use((req, res, next) => {
+  if (req.method !== 'GET' || !process.env.VERCEL) return next();
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+  res.end('retry: 86400000\nevent: unavailable\ndata: {}\n\n');
+});
+
 // Issue a 60-second ticket for opening the staff stream (EventSource cannot send headers).
 router.post('/ticket', authenticate, async (req: AuthRequest, res: Response) => {
   const user = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { tokenVersion: true } });

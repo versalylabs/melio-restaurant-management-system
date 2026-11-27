@@ -20,6 +20,9 @@ interface UseRealtimeOptions {
  * dispatched through one handler per event name on the current EventSource,
  * so a reconnect keeps every subscription and no event is delivered twice.
  */
+// Set once the server says it has no live updates (serverless hosting); shared by every screen this session.
+let liveUnavailable = false;
+
 export function useRealtimeEvents({
   url = '/api/realtime/stream',
   channels = [],
@@ -120,6 +123,7 @@ export function useRealtimeEvents({
     // EventSource cannot set Authorization headers. Staff streams exchange the
     // login token (sent in a header) for a 60-second stream-only ticket, so the
     // long-lived token never appears in a URL or server log.
+    if (liveUnavailable) return;
     if (!isPublicStream) {
       const token = localStorage.getItem('rms_token') || localStorage.getItem('token');
       if (!token) return;
@@ -152,8 +156,15 @@ export function useRealtimeEvents({
         onConnectedRef.current?.();
       };
 
+      // The server has no live updates here (serverless hosting): stop for this session.
+      es.addEventListener('unavailable', () => {
+        liveUnavailable = true;
+        closeCurrent();
+        setIsConnected(false);
+      });
+
       es.onerror = () => {
-        if (attempt !== connectAttemptRef.current) return;
+        if (attempt !== connectAttemptRef.current || liveUnavailable) return;
         setIsConnected(false);
         onDisconnectedRef.current?.();
         closeCurrent();

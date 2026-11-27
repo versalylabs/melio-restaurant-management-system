@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { escapeHtml } from '../../lib/utils';
-import { Clock, Play, CheckCircle, AlertTriangle, Printer, Flag, WifiOff, RefreshCw, Volume2, VolumeX } from 'lucide-react';
+import { Clock, Play, CheckCircle, AlertTriangle, Printer, Flag, RefreshCw, Volume2, VolumeX } from 'lucide-react';
 import { kitchenApi, branchApi } from '../../services/api';
 import { getActiveBranchId, listenForBranchChanges } from '../../utils/branch';
 import type { KitchenTicket, KitchenStation } from '../../types';
@@ -200,7 +200,7 @@ export default function KitchenDisplay() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 20000);
+    const interval = setInterval(() => { if (document.visibilityState === 'visible') fetchData(); }, 20000);
     const unsubBranch = listenForBranchChanges(() => fetchData());
     return () => {
       clearInterval(interval);
@@ -302,7 +302,7 @@ export default function KitchenDisplay() {
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 px-2.5 py-0.5 text-[11px] font-semibold text-amber-400">
-              <WifiOff size={11} /> Polling Mode
+              Auto-refresh every 20s
             </span>
           )}
         </div>

@@ -304,6 +304,21 @@ async function run() {
     const r = await prisma.reservation.findUnique({ where: { id: res.body.data.reservationId } });
     assert.strictEqual(r.startAt.toISOString(), `${date}T16:00:00.000Z`);
   });
+  await test('on serverless hosting, live streams answer "unavailable" at once instead of staying open', async () => {
+    process.env.VERCEL = '1';
+    try {
+      const res = await fetch(`${base}/api/realtime/public/track/anything`);
+      const body = await res.text(); // resolves only because the server ends the response
+      assert.ok(body.includes('event: unavailable'), body);
+      assert.ok(body.includes('retry: 86400000'), body);
+    } finally {
+      delete process.env.VERCEL;
+    }
+    const ctrl = new AbortController();
+    const live = await fetch(`${base}/api/realtime/public/track/anything`, { signal: ctrl.signal }).catch(() => null);
+    assert.notStrictEqual(live?.headers.get('content-type'), null, 'stream route still answers off Vercel');
+    ctrl.abort();
+  });
   await test('website enquiries reach owners and managers, not cashiers', async () => {
     const note = `Lunch for 25 people, ${uid()}`;
     const res = await call('POST', '/public/enquiries', null, { restaurantId, name: 'Office Buyer', phone: '0712 345 678', subject: 'Office Lunch & Catering', message: note });

@@ -341,7 +341,7 @@ export default function OnlineOrderTracking() {
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 px-3 py-1 text-xs font-semibold text-amber-400">
-                Connecting...
+                Updates automatically
               </span>
             )}
             <button
